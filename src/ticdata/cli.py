@@ -80,6 +80,12 @@ def main(argv=None) -> int:
     p.add_argument("--publish", action="store_true", help="upload to datasets/<org>/<payer>")
     p.add_argument("--out")
 
+    p = sub.add_parser("fetch", help="download one payer file (first name containing --match) to a path")
+    p.add_argument("--payer", required=True)
+    p.add_argument("--match", required=True)
+    p.add_argument("--kind", default="in_network")
+    p.add_argument("path")
+
     p = sub.add_parser("fingerprint", help="tail fingerprint of one URL")
     p.add_argument("url")
 
@@ -154,6 +160,15 @@ def main(argv=None) -> int:
             res["published"] = identity.upload_folder(repo, outdir, f"release={a.release}",
                                                       f"{a.payer} {a.release}: reduce {a.part}")
         _write(res, a.out)
+    elif a.cmd == "fetch":
+        from .identity import _fetch
+        from .net import new_session
+        from .pipeline import PAYERS
+
+        s = new_session()
+        _, entries = PAYERS[a.payer](s)
+        e = next(e for e in entries if e["kind"] == a.kind and a.match in e["name"])
+        _write({"name": e["name"], **_fetch(e["url"], a.path, s)}, None)
     elif a.cmd == "fingerprint":
         from .net import resolve, tail_fingerprint
 

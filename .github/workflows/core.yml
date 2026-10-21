@@ -1,0 +1,41 @@
+name: core
+# Build the Rust core and benchmark it on one real file (experiment E7: does parsing keep up
+# with decompression?). Trigger: edit ops/core-request.txt; last non-comment line is
+# "<payer> <name substring>", for example "cigna national-oap".
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["ops/core-request.txt", "core/**"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e .
+      - name: build
+        run: cd core && cargo build --release && cargo test --release
+      - name: bench
+        run: |
+          set -o pipefail
+          read payer match <<< "$(grep -v '^#' ops/core-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
+          mkdir -p reports
+          ticdata fetch --payer "$payer" --match "$match" /tmp/f.gz | tee reports/fetch.json
+          B=core/target/release/ticcore
+          { echo '{'
+            echo '"machine": '"$(python -c 'from ticdata.smoke import machine; import json; print(json.dumps(machine()))')"','
+            echo '"inflate": '"$($B inflate /tmp/f.gz)"','
+            echo '"split": '"$($B scan /tmp/f.gz 3 split)"','
+            echo '"parse_serde_value_3_threads": '"$($B scan /tmp/f.gz 3 parse)"
+            echo '}'; } > reports/core-bench.json
+          cat reports/core-bench.json
+      - if: always()
+        run: ticdata put-report reports/* --prefix "runs/$(date -u +%F)-gha-core-${GITHUB_RUN_ID}" || true
