@@ -1,0 +1,11 @@
+work/
+reports/
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+kaggle/smoke/script.py
+kaggle/smoke/kernel-metadata.json
+build/
+dist/
+*.egg-info/

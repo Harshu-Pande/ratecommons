@@ -1,0 +1,31 @@
+name: archive-manifests
+# Every day, save each payer's raw indexes (as served) to the raw-manifests dataset,
+# committing only sources whose bytes changed. This is the provenance for all history.
+on:
+  schedule:
+    - cron: "17 9 * * *"   # 09:17 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: archive-manifests
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -q -e .
+      - name: Collect and upload
+        run: ticdata archive --upload | tee archive.json
+      - if: always()
+        run: |
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"; cat archive.json >> "$GITHUB_STEP_SUMMARY" || true; echo '```' >> "$GITHUB_STEP_SUMMARY"

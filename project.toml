@@ -1,0 +1,13 @@
+# One place for every name, so renaming the project is a one-file change.
+[project]
+name = "ratecommons"
+design_doc = "https://claude.ai/artifact/7d81McCZzQwiNqL6i28pNK"
+
+[hf]
+org = "ratecommons"
+# Raw payer indexes (UHC blob list, Aetna brand manifests, Cigna table of contents), archived as served.
+manifests_repo = "ratecommons/raw-manifests"
+# Run reports from GitHub Actions, Kaggle and other workers.
+ops_repo = "ratecommons/ops"
+# Mutable scratch space for the map/shuffle/reduce stages.
+work_bucket = "ratecommons/work"

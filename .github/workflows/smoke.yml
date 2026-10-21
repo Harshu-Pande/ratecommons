@@ -1,0 +1,92 @@
+name: smoke
+# Proves each platform can reach the payers, write to Hugging Face, and how fast it works.
+# Trigger: Actions tab -> smoke -> Run workflow, or edit ops/smoke-request.txt.
+on:
+  workflow_dispatch:
+    inputs:
+      uhc_gb:
+        description: "GB of UHC JSON to decompress in the benchmark"
+        default: "20"
+  push:
+    branches: [main]
+    paths: ["ops/smoke-request.txt", ".github/workflows/smoke.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke
+  cancel-in-progress: false
+
+env:
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  hf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -q -e .
+      - name: Hugging Face repos, bucket and round trip
+        run: |
+          if [ -z "$HF_TOKEN" ]; then echo "::error::HF_TOKEN secret is missing"; exit 1; fi
+          ticdata smoke-hf --out reports/gha-hf.json
+      - if: always()
+        run: |
+          echo '### Hugging Face' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"; cat reports/gha-hf.json >> "$GITHUB_STEP_SUMMARY" || true; echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ticdata put-report reports/*.json --prefix "runs/$(date -u +%F)-gha-${GITHUB_RUN_ID}" || true
+
+  net:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -q -e .
+      - name: Reach payers, probe ranges, measure download speed
+        run: ticdata smoke-net --mb 512 --out reports/gha-net.json
+      - name: Download + rapidgzip benchmark (experiment E2)
+        run: ticdata bench --uhc-gb "${{ github.event.inputs.uhc_gb || '20' }}" --out reports/gha-bench.json
+      - if: always()
+        run: |
+          for f in reports/*.json; do echo "### $f" >> "$GITHUB_STEP_SUMMARY"; echo '```json' >> "$GITHUB_STEP_SUMMARY"; cat "$f" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"; done
+          ticdata put-report reports/*.json --prefix "runs/$(date -u +%F)-gha-${GITHUB_RUN_ID}" || true
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: net-reports, path: reports/ }
+
+  kaggle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -q -e . kaggle==2.2.4
+      - name: Run the smoke test on Kaggle
+        run: |
+          if [ -z "$KAGGLE_API_TOKEN" ] || [ -z "$KAGGLE_USERNAME" ]; then echo "::error::Kaggle secrets missing"; exit 1; fi
+          python kaggle/smoke/prepare.py "$KAGGLE_USERNAME" "$GITHUB_REPOSITORY"
+          kaggle kernels push -p kaggle/smoke
+          slug="$KAGGLE_USERNAME/ratecommons-smoke"
+          for i in $(seq 1 160); do
+            s="$(kaggle kernels status "$slug" 2>&1 || true)"; echo "$(date -u +%T) $s"
+            case "$s" in *[Cc][Oo][Mm][Pp][Ll][Ee][Tt][Ee]*|*[Ee][Rr][Rr][Oo][Rr]*|*[Cc][Aa][Nn][Cc][Ee][Ll]*) break;; esac
+            sleep 30
+          done
+          mkdir -p reports/kaggle
+          kaggle kernels output "$slug" -p reports/kaggle || true
+          ls -la reports/kaggle
+      - if: always()
+        run: |
+          for f in reports/kaggle/*.json reports/kaggle/*.log; do [ -f "$f" ] || continue; echo "### $f" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"; tail -c 20000 "$f" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"; done
+          ticdata put-report reports/kaggle/*.json --prefix "runs/$(date -u +%F)-kaggle-${GITHUB_RUN_ID}" || true
