@@ -88,6 +88,11 @@ def main(argv=None) -> int:
     p.add_argument("--kind", default="in_network")
     p.add_argument("path")
 
+    p = sub.add_parser("pair", help="map two files in one shard with the Rust core (dedup experiment)")
+    p.add_argument("--payer", required=True)
+    p.add_argument("--match", action="append", required=True)
+    p.add_argument("--out")
+
     p = sub.add_parser("fingerprint", help="tail fingerprint of one URL")
     p.add_argument("url")
 
@@ -172,6 +177,20 @@ def main(argv=None) -> int:
         _, entries = PAYERS[a.payer](s)
         e = next(e for e in entries if e["kind"] == a.kind and a.match in e["name"])
         _write({"name": e["name"], **_fetch(e["url"], a.path, s)}, None)
+    elif a.cmd == "pair":
+        from .net import new_session
+        from .pipeline import PAYERS, run_shard
+
+        s = new_session()
+        _, entries = PAYERS[a.payer](s)
+        files = []
+        for m in a.match:
+            e = next(e for e in entries if e["kind"] == "in_network" and m in e["name"])
+            files.append({"name": e["name"], "url": e["url"], "size": e.get("size")})
+        res = run_shard({"payer": a.payer, "shards": [{"shard": 0, "files": files}]}, 0)
+        for r in res["results"]:
+            r.pop("traceback", None)
+        _write(res, a.out)
     elif a.cmd == "fingerprint":
         from .net import resolve, tail_fingerprint
 

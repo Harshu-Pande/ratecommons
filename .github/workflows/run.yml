@@ -28,6 +28,16 @@ jobs:
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - run: pip install -q -e .
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            core/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('core/Cargo.lock') }}-${{ hashFiles('core/src/**') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - name: build the Rust core
+        run: cd core && cargo build --release && echo "TIC_CORE=$PWD/target/release/ticcore" >> "$GITHUB_ENV"
       - name: ticdata
         run: |
           args="${{ github.event.inputs.args }}"

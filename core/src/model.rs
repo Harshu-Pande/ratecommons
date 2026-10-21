@@ -166,21 +166,144 @@ impl<'de: 'a, 'a> Deserialize<'de> for RawArray<'a> {
     }
 }
 
-pub fn obj<'a>(r: &'a RawValue) -> Option<RawObject<'a>> {
-    if r.get().starts_with('{') {
-        serde_json::from_str(r.get()).ok()
-    } else {
-        None
+// ------------------------------------------------------------------ fast structural scanning
+//
+// Records come from the splitter, which only cuts valid JSON, so these scanners trust the input
+// and do no validation: they find value boundaries (strings via memchr, nesting by depth) and
+// hand out slices. This replaces serde_json for walking objects and arrays, the hot path.
+
+/// `&str` holding exactly one JSON value, viewed as `&RawValue` without copying.
+pub fn raw(s: &str) -> &RawValue {
+    // SAFETY: RawValue is #[repr(transparent)] over `str`; `s` is one complete JSON value.
+    unsafe { &*(s as *const str as *const RawValue) }
+}
+
+#[inline]
+fn skip_ws(b: &[u8], mut i: usize) -> usize {
+    while i < b.len() && matches!(b[i], b' ' | b'\n' | b'\r' | b'\t') {
+        i += 1;
+    }
+    i
+}
+
+/// End (exclusive) of the string starting at b[i] == '"'.
+#[inline]
+fn skip_str(b: &[u8], i: usize) -> usize {
+    let mut j = i + 1;
+    loop {
+        match memchr::memchr2(b'"', b'\\', &b[j..]) {
+            None => return b.len(),
+            Some(k) => {
+                if b[j + k] == b'\\' {
+                    j += k + 2;
+                } else {
+                    return j + k + 1;
+                }
+            }
+        }
     }
 }
 
-pub fn arr<'a>(r: Option<&'a RawValue>) -> Option<RawArray<'a>> {
-    let r = r?;
-    if r.get().starts_with('[') {
-        serde_json::from_str(r.get()).ok()
-    } else {
-        None
+/// End (exclusive) of the JSON value starting at b[i].
+pub fn skip_value(b: &[u8], i: usize) -> usize {
+    match b.get(i) {
+        Some(b'"') => skip_str(b, i),
+        Some(b'{') | Some(b'[') => {
+            let mut depth = 0i32;
+            let mut j = i;
+            while j < b.len() {
+                match b[j] {
+                    b'"' => {
+                        j = skip_str(b, j);
+                        continue;
+                    }
+                    b'{' | b'[' => depth += 1,
+                    b'}' | b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return j + 1;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            b.len()
+        }
+        _ => {
+            let mut j = i;
+            while j < b.len() && !matches!(b[j], b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t') {
+                j += 1;
+            }
+            j
+        }
     }
+}
+
+pub fn obj<'a>(r: &'a RawValue) -> Option<RawObject<'a>> {
+    let s = r.get();
+    let b = s.as_bytes();
+    let mut i = skip_ws(b, 0);
+    if b.get(i) != Some(&b'{') {
+        return None;
+    }
+    i += 1;
+    let mut out = Vec::with_capacity(8);
+    loop {
+        i = skip_ws(b, i);
+        match b.get(i) {
+            Some(b'}') | None => break,
+            Some(b',') => {
+                i += 1;
+                continue;
+            }
+            Some(b'"') => {
+                let ke = skip_str(b, i);
+                let kraw = &s[i + 1..ke - 1];
+                let key: Cow<'a, str> = if kraw.contains('\\') {
+                    Cow::Owned(serde_json::from_str::<String>(&s[i..ke]).ok()?)
+                } else {
+                    Cow::Borrowed(kraw)
+                };
+                i = skip_ws(b, ke);
+                if b.get(i) != Some(&b':') {
+                    return None;
+                }
+                i = skip_ws(b, i + 1);
+                let ve = skip_value(b, i);
+                out.push((key, raw(&s[i..ve])));
+                i = ve;
+            }
+            _ => return None,
+        }
+    }
+    Some(RawObject(out))
+}
+
+pub fn arr<'a>(r: Option<&'a RawValue>) -> Option<RawArray<'a>> {
+    let s = r?.get();
+    let b = s.as_bytes();
+    let mut i = skip_ws(b, 0);
+    if b.get(i) != Some(&b'[') {
+        return None;
+    }
+    i += 1;
+    let mut out = Vec::new();
+    loop {
+        i = skip_ws(b, i);
+        match b.get(i) {
+            Some(b']') | None => break,
+            Some(b',') => {
+                i += 1;
+            }
+            Some(_) => {
+                let ve = skip_value(b, i);
+                out.push(raw(&s[i..ve]));
+                i = ve;
+            }
+        }
+    }
+    Some(RawArray(out))
 }
 
 pub fn is_null(r: Option<&RawValue>) -> bool {

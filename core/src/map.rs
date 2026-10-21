@@ -161,6 +161,7 @@ impl<'s> Worker<'s> {
         if let Some(id) = self.c_price.get(&key) {
             return *id;
         }
+        *self.counts.entry("pt_cache_miss").or_insert(0) += 1;
         let p = obj(praw).expect("price is an object");
         let f = &mut self.flags;
         let rate = p.get("negotiated_rate");
@@ -240,7 +241,10 @@ impl<'s> Worker<'s> {
         }
         let items: Vec<&RawValue> = arr(prices).map(|a| a.0).unwrap_or_default()
             .into_iter().filter(|p| p.get().starts_with('{')).collect();
+        *self.counts.entry("pl_cache_miss").or_insert(0) += 1;
+        let tpt = Instant::now();
         let mut ids: Vec<Id> = items.iter().map(|p| self.price_term(p)).collect();
+        *self.counts.entry("t_price_term_us").or_insert(0) += tpt.elapsed().as_micros() as u64;
         let lid = h_ids(b"pl", &mut ids);
         if self.sh.pl_seen.insert(&lid) {
             // several amounts under otherwise identical terms: kept as a set, flagged
@@ -328,7 +332,7 @@ impl<'s> Worker<'s> {
 
     fn item(&mut self, rec: &[u8]) {
         let text = std::str::from_utf8(rec).expect("record is UTF-8");
-        let it: RawObject = serde_json::from_str(text).expect("in_network item is a JSON object");
+        let it: RawObject = obj(raw(text)).expect("in_network item is a JSON object");
         let f = &mut self.flags;
         let ctype = raw_str(it.get("billing_code_type")).map(|s| s.into_owned());
         let code_raw = raw_str(it.get("billing_code")).map(|s| s.into_owned());
@@ -368,6 +372,7 @@ impl<'s> Worker<'s> {
                 }
             };
             let refs_v = o.get("provider_references");
+            let tps = Instant::now();
             let sid = if truthy(refs_v) && !truthy(o.get("provider_groups")) {
                 self.layout.insert("provider_references");
                 let key = xxh128(refs_v.unwrap().get().as_bytes());
@@ -385,7 +390,10 @@ impl<'s> Worker<'s> {
             } else {
                 self.resolve_set(&o)
             };
+            *self.counts.entry("t_provider_set_us").or_insert(0) += tps.elapsed().as_micros() as u64;
+            let tpl = Instant::now();
             let lid = self.price_list(o.get("negotiated_prices"));
+            *self.counts.entry("t_price_list_us").or_insert(0) += tpl.elapsed().as_micros() as u64;
             *self.counts.entry("negotiated_rates").or_insert(0) += 1;
             let mut pr = [0u8; 32];
             pr[..16].copy_from_slice(&sid);
@@ -649,7 +657,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                     return;
                 }
                 let text = std::str::from_utf8(rec).expect("UTF-8");
-                let r: RawObject = serde_json::from_str(text).expect("provider reference object");
+                let r: RawObject = obj(raw(text)).expect("provider reference object");
                 let rid = raw_str(r.get("provider_group_id")).map(|s| s.into_owned());
                 let mut ids: Vec<Id> = Vec::new();
                 for g in arr(r.get("provider_groups")).map(|a| a.0).unwrap_or_default() {
