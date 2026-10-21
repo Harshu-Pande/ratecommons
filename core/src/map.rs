@@ -119,10 +119,17 @@ fn provider_group(sh: &Shared, g: &RawValue, f: &mut Flags, counts: &mut HashMap
     Some(pid)
 }
 
+#[derive(Clone)]
+struct Outs {
+    fact: Sender<Msg>,
+    pt: Sender<Msg>,
+    other: Sender<Msg>,
+}
+
 struct Worker<'s> {
     sh: &'s Shared,
     refs: &'s HashMap<Option<String>, Vec<Id>>,
-    out: Sender<Msg>,
+    out: Outs,
     flags: Flags,
     counts: HashMap<&'static str, u64>,
     layout: HashSet<&'static str>,
@@ -138,11 +145,11 @@ struct Worker<'s> {
 
 impl<'s> Worker<'s> {
     fn flush(&mut self, force: bool) {
-        if force || self.pt.len() >= 50_000 { let v = std::mem::take(&mut self.pt); if !v.is_empty() { self.out.send(Msg::Pt(v)).unwrap(); } }
-        if force || self.pl.len() >= 50_000 { let v = std::mem::take(&mut self.pl); if !v.is_empty() { self.out.send(Msg::Pl(v)).unwrap(); } }
-        if force || self.ps.len() >= 20_000 { let v = std::mem::take(&mut self.ps); if !v.is_empty() { self.out.send(Msg::Ps(v)).unwrap(); } }
-        if force || self.codes.len() >= 50_000 { let v = std::mem::take(&mut self.codes); if !v.is_empty() { self.out.send(Msg::Code(v)).unwrap(); } }
-        if force || self.facts.len() >= 200_000 { let v = std::mem::take(&mut self.facts); if !v.is_empty() { self.out.send(Msg::Fact(v)).unwrap(); } }
+        if force || self.pt.len() >= 50_000 { let v = std::mem::take(&mut self.pt); if !v.is_empty() { self.out.pt.send(Msg::Pt(v)).unwrap(); } }
+        if force || self.pl.len() >= 50_000 { let v = std::mem::take(&mut self.pl); if !v.is_empty() { self.out.other.send(Msg::Pl(v)).unwrap(); } }
+        if force || self.ps.len() >= 20_000 { let v = std::mem::take(&mut self.ps); if !v.is_empty() { self.out.other.send(Msg::Ps(v)).unwrap(); } }
+        if force || self.codes.len() >= 50_000 { let v = std::mem::take(&mut self.codes); if !v.is_empty() { self.out.other.send(Msg::Code(v)).unwrap(); } }
+        if force || self.facts.len() >= 200_000 { let v = std::mem::take(&mut self.facts); if !v.is_empty() { self.out.fact.send(Msg::Fact(v)).unwrap(); } }
     }
 
     fn price_term(&mut self, praw: &RawValue) -> Id {
@@ -233,33 +240,42 @@ impl<'s> Worker<'s> {
         let lid = h_ids(b"pl", &mut ids);
         if self.sh.pl_seen.insert(&lid) {
             // several amounts under otherwise identical terms: kept as a set, flagged
-            let mut amounts: HashMap<(String, String, String, String, String), HashSet<String>> = HashMap::new();
-            for p in &items {
-                let o = obj(p).unwrap();
-                let rk = |k: &str| o.get(k).map(|r| r.get().to_string()).unwrap_or_else(|| "null".into());
-                let lst = |k: &str, pad: bool| -> String {
-                    match o.get(k) {
-                        Some(r) if r.get().starts_with('[') => {
-                            let mut v: Vec<String> = arr(Some(r)).unwrap().0.iter()
-                                .map(|x| {
-                                    let s = raw_str(Some(x)).map(|s| s.trim().to_string()).unwrap_or("None".into());
-                                    if pad && s.chars().count() < 2 { format!("{:0>2}", s) } else { s }
-                                })
-                                .collect();
-                            v.sort();
-                            v.join("\u{1e}")
-                        }
-                        Some(r) if r.get() != "null" => format!("S:{}", r.get()),
-                        _ => String::new(),
+            if items.len() >= 2 {
+                let mut amounts: HashMap<u64, HashSet<u64>> = HashMap::new();
+                for p in &items {
+                    let o = obj(p).unwrap();
+                    let mut key: Vec<u8> = Vec::with_capacity(96);
+                    for k in ["negotiated_type", "billing_class", "setting"] {
+                        key.extend_from_slice(o.get(k).map(|r| r.get()).unwrap_or("null").as_bytes());
+                        key.push(SEP);
                     }
-                };
-                let k = (rk("negotiated_type"), rk("billing_class"), rk("setting"), lst("service_code", true),
-                         lst("billing_code_modifier", false));
-                let amt = raw_str(o.get("negotiated_rate")).map(|s| s.into_owned()).unwrap_or("None".into());
-                amounts.entry(k).or_default().insert(amt);
-            }
-            if amounts.values().any(|v| v.len() > 1) {
-                self.flags.add("price_list_multiple_amounts");
+                    for (k, pad) in [("service_code", true), ("billing_code_modifier", false)] {
+                        match o.get(k) {
+                            Some(r) if r.get().starts_with('[') => {
+                                let mut v: Vec<String> = arr(Some(r)).unwrap().0.iter()
+                                    .map(|x| {
+                                        let s = raw_str(Some(x)).map(|s| s.trim().to_string()).unwrap_or("None".into());
+                                        if pad && s.chars().count() < 2 { format!("{:0>2}", s) } else { s }
+                                    })
+                                    .collect();
+                                v.sort();
+                                key.extend_from_slice(v.join("\u{1e}").as_bytes());
+                            }
+                            Some(r) if r.get() != "null" => {
+                                key.extend_from_slice(b"S:");
+                                key.extend_from_slice(r.get().as_bytes());
+                            }
+                            _ => {}
+                        }
+                        key.push(SEP);
+                    }
+                    let amt = raw_str(o.get("negotiated_rate")).map(|s| s.into_owned()).unwrap_or("None".into());
+                    amounts.entry(xxhash_rust::xxh3::xxh3_64(&key)).or_default()
+                        .insert(xxhash_rust::xxh3::xxh3_64(amt.as_bytes()));
+                }
+                if amounts.values().any(|v| v.len() > 1) {
+                    self.flags.add("price_list_multiple_amounts");
+                }
             }
             self.pl.push((lid, ids));
         }
@@ -313,6 +329,8 @@ impl<'s> Worker<'s> {
         let ctype = raw_str(it.get("billing_code_type")).map(|s| s.into_owned());
         let code_raw = raw_str(it.get("billing_code")).map(|s| s.into_owned());
         let code = norm_billing_code(ctype.as_deref(), it.get("billing_code"), f);
+        let ctype_a: Option<Arc<str>> = ctype.as_deref().map(Arc::from);
+        let code_a: Option<Arc<str>> = code.as_deref().map(Arc::from);
         let bundle = {
             let mut m = serde_json::Map::new();
             for k in ["bundled_codes", "covered_services"] {
@@ -366,27 +384,29 @@ impl<'s> Worker<'s> {
             let fid = fact_id(&cid, &sid, &lid);
             *self.counts.entry("negotiated_rates").or_insert(0) += 1;
             self.facts.push(FactRow { fact_id: fid, code_id: cid, ps_id: sid, pl_id: lid,
-                                      billing_code_type: ctype.clone(), billing_code: code.clone() });
+                                      billing_code_type: ctype_a.clone(), billing_code: code_a.clone() });
         }
         self.flush(false);
     }
 }
 
-fn writer_thread(rx: Receiver<Msg>, outdir: String) -> serde_json::Value {
+fn writer_thread(rx: Receiver<Msg>, outdir: String) -> serde_json::Map<String, serde_json::Value> {
     let fact_dir = format!("{outdir}/rate_fact");
-    std::fs::create_dir_all(&fact_dir).unwrap();
-    let mut pt = Pq::create(&format!("{outdir}/price_term.parquet"), "price_term");
-    let mut pl = Pq::create(&format!("{outdir}/price_list.parquet"), "price_list");
-    let mut ps = Pq::create(&format!("{outdir}/provider_set.parquet"), "provider_set");
-    let mut code = Pq::create(&format!("{outdir}/code.parquet"), "code");
+    let mut w: HashMap<&'static str, Pq> = HashMap::new();
     let mut parts: Vec<Option<Pq>> = (0..FACT_PARTS).map(|_| None).collect();
+    let mut busy = std::collections::BTreeMap::<&str, f64>::new();
+    fn wr<'a>(w: &'a mut HashMap<&'static str, Pq>, outdir: &str, name: &'static str) -> &'a mut Pq {
+        w.entry(name).or_insert_with(|| Pq::create(&format!("{outdir}/{name}.parquet"), name))
+    }
     for m in rx {
-        match m {
-            Msg::Pt(v) => pt.write(pt_cols(&v), "price_term"),
-            Msg::Pl(v) => pl.write(pl_cols(&v), "price_list"),
-            Msg::Ps(v) => ps.write(ps_cols(&v), "provider_set"),
-            Msg::Code(v) => code.write(code_cols(&v), "code"),
+        let t = Instant::now();
+        let kind = match m {
+            Msg::Pt(v) => { wr(&mut w, &outdir, "price_term").write(pt_cols(&v), "price_term"); "price_term" }
+            Msg::Pl(v) => { wr(&mut w, &outdir, "price_list").write(pl_cols(&v), "price_list"); "price_list" }
+            Msg::Ps(v) => { wr(&mut w, &outdir, "provider_set").write(ps_cols(&v), "provider_set"); "provider_set" }
+            Msg::Code(v) => { wr(&mut w, &outdir, "code").write(code_cols(&v), "code"); "code" }
             Msg::Fact(v) => {
+                std::fs::create_dir_all(&fact_dir).unwrap();
                 let mut by: Vec<Vec<FactRow>> = (0..FACT_PARTS).map(|_| Vec::new()).collect();
                 for r in v {
                     let k = fact_part(r.billing_code_type.as_deref(), r.billing_code.as_deref());
@@ -396,26 +416,31 @@ fn writer_thread(rx: Receiver<Msg>, outdir: String) -> serde_json::Value {
                     if rows.is_empty() {
                         continue;
                     }
-                    let w = parts[k].get_or_insert_with(|| Pq::create(&format!("{fact_dir}/part-{k:02}.parquet"), "rate_fact"));
-                    w.write(fact_cols(&rows), "rate_fact");
+                    let pw = parts[k].get_or_insert_with(|| Pq::create(&format!("{fact_dir}/part-{k:02}.parquet"), "rate_fact"));
+                    pw.write(fact_cols(&rows), "rate_fact");
                 }
+                "rate_fact"
             }
-        }
+        };
+        *busy.entry(kind).or_insert(0.0) += t.elapsed().as_secs_f64();
     }
-    let mut t = serde_json::Map::new();
-    for (name, w) in [("price_term", pt), ("price_list", pl), ("provider_set", ps), ("code", code)] {
-        let (rows, bytes) = w.close();
-        t.insert(name.into(), serde_json::json!({"rows": rows, "bytes": bytes}));
+    let mut out = serde_json::Map::new();
+    for (name, pw) in w {
+        let (rows, bytes) = pw.close();
+        out.insert(name.into(), serde_json::json!({"rows": rows, "bytes": bytes}));
     }
     let (mut frows, mut fbytes, mut nparts) = (0u64, 0u64, 0u64);
-    for w in parts.into_iter().flatten() {
-        let (r, b) = w.close();
+    for pw in parts.into_iter().flatten() {
+        let (r, b) = pw.close();
         frows += r;
         fbytes += b;
         nparts += 1;
     }
-    t.insert("rate_fact".into(), serde_json::json!({"rows": frows, "bytes": fbytes, "parts": nparts}));
-    serde_json::Value::Object(t)
+    if nparts > 0 {
+        out.insert("rate_fact".into(), serde_json::json!({"rows": frows, "bytes": fbytes, "parts": nparts}));
+    }
+    out.insert("_writer_busy_seconds".into(), serde_json::json!(busy));
+    out
 }
 
 fn open(path: &str) -> Box<dyn Read + Send> {
@@ -511,9 +536,17 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
         ps_seen: Seen::new(50_000_000),
         code_seen: Seen::new(50_000_000),
     });
-    let (wtx, wrx) = bounded::<Msg>(64);
-    let od = outdir.to_string();
-    let wh = std::thread::spawn(move || writer_thread(wrx, od));
+    // three writer threads: rate facts, price terms, everything else
+    let mut whs = Vec::new();
+    let mut senders = Vec::new();
+    for _ in 0..3 {
+        let (tx, rx) = bounded::<Msg>(32);
+        let od = outdir.to_string();
+        whs.push(std::thread::spawn(move || writer_thread(rx, od)));
+        senders.push(tx);
+    }
+    let wtx = Outs { fact: senders[0].clone(), pt: senders[1].clone(), other: senders[2].clone() };
+    drop(senders);
 
     let mut main_flags = Flags::default();
     let mut main_counts: HashMap<&'static str, u64> = HashMap::new();
@@ -604,9 +637,13 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                                 layout: HashSet::new(), c_refs: HashMap::new(), c_prices: HashMap::new(),
                                 c_price: HashMap::new(), pt: vec![], pl: vec![], ps: vec![], codes: vec![], facts: vec![],
                             };
+                            let mut busy = 0.0f64;
                             for rec in rx {
+                                let t = Instant::now();
                                 w.item(&rec);
+                                busy += t.elapsed().as_secs_f64();
                             }
+                            *w.counts.entry("worker_busy_ms").or_insert(0) += (busy * 1000.0) as u64;
                             w.flush(true);
                             (w.flags, w.counts, w.layout)
                         }));
@@ -633,7 +670,24 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     }
     let t_items = t0.elapsed().as_secs_f64();
     drop(wtx);
-    let mut tables = wh.join().unwrap();
+    let mut tables = serde_json::Map::new();
+    let mut wbusy = serde_json::Map::new();
+    for h in whs {
+        let mut m = h.join().unwrap();
+        if let Some(serde_json::Value::Object(b)) = m.remove("_writer_busy_seconds") {
+            wbusy.extend(b);
+        }
+        tables.extend(m);
+    }
+    for name in ["price_term", "price_list", "provider_set", "code"] {
+        if !tables.contains_key(name) {
+            let pw = Pq::create(&format!("{outdir}/{name}.parquet"), name);
+            let (r, b) = pw.close();
+            tables.insert(name.into(), serde_json::json!({"rows": r, "bytes": b}));
+        }
+    }
+    tables.insert("_writer_busy_seconds".into(), serde_json::Value::Object(wbusy));
+    let mut tables = serde_json::Value::Object(tables);
     let _ = refs_arc;
 
     // provider groups and references are written last (names accumulate until the end)

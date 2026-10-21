@@ -45,6 +45,10 @@ jobs:
           ticdata put-report plan.json --prefix "runs/$(date -u +%F)-map-$payer-${GITHUB_RUN_ID}" || true
       - uses: actions/upload-artifact@v5
         with: { name: plan, path: plan.json }
+      - name: build the Rust core once for all shards
+        run: cd core && cargo build --release && cp target/release/ticcore ../ticcore
+      - uses: actions/upload-artifact@v5
+        with: { name: ticcore, path: ticcore }
 
   parse:
     needs: plan
@@ -64,6 +68,9 @@ jobs:
       - run: pip install -q -e .
       - uses: actions/download-artifact@v5
         with: { name: plan }
+      - uses: actions/download-artifact@v5
+        with: { name: ticcore }
+      - run: chmod +x ticcore && echo "TIC_CORE=$PWD/ticcore" >> "$GITHUB_ENV"
       - name: parse shard ${{ matrix.shard }}
         run: |
           mkdir -p reports
@@ -75,6 +82,6 @@ jobs:
           for f in glob.glob("reports/*.json"):
               d = json.load(open(f))
               for r in d["results"]:
-                  print(f"- {'ok' if r['ok'] else 'FAILED'} {r['name']} {r.get('wall_seconds')}s rss {r.get('max_rss_mb')} MB {r.get('error','')[:200]}")
+                  print(f"- {'ok' if r['ok'] else 'FAILED'} {r.get('parser')} {r['name']} {r.get('wall_seconds')}s rss {r.get('max_rss_mb')} MB {r.get('error','')[:200]}")
           PY
           ticdata put-report reports/* --prefix "runs/$(date -u +%F)-map-${{ needs.plan.outputs.payer }}-${GITHUB_RUN_ID}" || true

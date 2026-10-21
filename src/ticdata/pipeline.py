@@ -85,8 +85,24 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
         t0 = time.time()
         try:
             rec["download"] = fetch_to_file(e["url"], local, s)
-            meta = parse_file(local, outdir, source={"payer": payer, "name": e["name"],
-                                                     "url": e["url"].split("?", 1)[0], "size": e.get("size")})
+            source = {"payer": payer, "name": e["name"], "url": e["url"].split("?", 1)[0], "size": e.get("size")}
+            meta = None
+            core = os.environ.get("TIC_CORE")
+            if core and os.path.exists(core):
+                import subprocess
+
+                threads = os.environ.get("TIC_CORE_THREADS", str(max(1, (os.cpu_count() or 2) - 2)))
+                cp = subprocess.run([core, "map", local, outdir, threads, json.dumps(source)],
+                                    capture_output=True, text=True)
+                if cp.returncode == 0:
+                    meta = json.loads(cp.stdout)
+                    rec["parser"] = "rust"
+                else:  # zip input (exit 3) or a failure: fall back to the Python parser
+                    rec["rust_error"] = (cp.stderr or "")[-1500:]
+                    shutil.rmtree(outdir, ignore_errors=True)
+            if meta is None:
+                meta = parse_file(local, outdir, source=source)
+                rec["parser"] = "python"
             rec.update({k: meta[k] for k in ("counts", "flags", "tables", "seconds", "layout",
                                              "tail_crc32", "tail_isize", "header")})
             if upload_bucket:
@@ -106,7 +122,8 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
             rec["wall_seconds"] = round(time.time() - t0, 1)
             import resource
 
-            rec["max_rss_mb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)
+            rec["max_rss_mb"] = round(max(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                                          resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss) / 1024)
             if os.path.exists(local):
                 os.remove(local)
             shutil.rmtree(outdir, ignore_errors=True)

@@ -65,7 +65,7 @@ pub struct Pq {
 impl Pq {
     pub fn create(path: &str, table: &str) -> Pq {
         let props = WriterProperties::builder()
-            .set_compression(Compression::ZSTD(ZstdLevel::try_new(6).unwrap()))
+            .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap()))
             .set_max_row_group_size(1_000_000)
             .build();
         let file = File::create(path).expect("create parquet");
@@ -134,8 +134,8 @@ pub struct FactRow {
     pub code_id: Id,
     pub ps_id: Id,
     pub pl_id: Id,
-    pub billing_code_type: Option<String>,
-    pub billing_code: Option<String>,
+    pub billing_code_type: Option<Arc<str>>,
+    pub billing_code: Option<Arc<str>>,
 }
 
 // ------------------------------------------------------------------ column builders
