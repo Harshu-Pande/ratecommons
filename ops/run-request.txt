@@ -3,3 +3,4 @@ bench-local --payers cigna,uhc --out reports/bench-local.json
 nppes --upload --out reports/nppes.json
 nppes --upload --out reports/nppes.json
 identity dac --upload --out reports/dac.json
+identity irs_eo --upload --out reports/irs_eo.json
