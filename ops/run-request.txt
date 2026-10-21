@@ -1,2 +1,3 @@
 # Edit on main to run one ticdata command on GitHub; the last non-comment line is the argument list.
 bench-local --payers cigna,uhc --out reports/bench-local.json
+nppes --upload --out reports/nppes.json

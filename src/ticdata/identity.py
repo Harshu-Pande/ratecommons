@@ -1,0 +1,174 @@
+"""Public provider identity sources -> Parquet on Hugging Face (track C).
+
+NPPES first: the monthly full replacement file (every NPI, about 9 GB of CSV) plus its
+practice-location, other-name and endpoint files, and the monthly deactivation report.
+Every value is kept as published (strings); column names are snake_cased and the original
+names are stored in the Parquet metadata and in a manifest.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+import zipfile
+from pathlib import Path
+
+import requests
+
+from .net import USER_AGENT, download, new_session, resolve
+
+NPPES_PAGE = "https://download.cms.gov/nppes/NPI_Files.html"
+NPPES_BASE = "https://download.cms.gov/nppes/"
+MONTHS = {m: i for i, m in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July", "August",
+     "September", "October", "November", "December"], 1)}
+
+TABLES = {  # zip member prefix -> table name
+    "npidata_pfile": "npi",
+    "pl_pfile": "practice_locations",
+    "othername_pfile": "other_names",
+    "endpoint_pfile": "endpoints",
+}
+
+
+def snake(name: str) -> str:
+    s = re.sub(r"[^0-9a-zA-Z]+", "_", name.strip()).strip("_").lower()
+    return s or "col"
+
+
+def nppes_links(s: requests.Session | None = None) -> dict:
+    s = s or new_session()
+    html = s.get(NPPES_PAGE, timeout=60, headers={"User-Agent": USER_AGENT}).text
+    hrefs = sorted(set(re.findall(r'href="([^"]+\.zip)"', html, flags=re.I)))
+    full = [h for h in hrefs if re.search(r"NPPES_Data_Dissemination_[A-Za-z]+_\d{4}(_V\d)?\.zip$", h)]
+    deact = [h for h in hrefs if "Deactivated" in h]
+    weekly = [h for h in hrefs if "Weekly" in h]
+    absu = lambda h: h if h.startswith("http") else NPPES_BASE + h.lstrip("./")  # noqa: E731
+    if not full:
+        raise RuntimeError(f"no monthly NPPES file found among {hrefs}")
+    m = re.search(r"_([A-Za-z]+)_(\d{4})", full[-1])
+    release = f"{m.group(2)}-{MONTHS.get(m.group(1).capitalize(), 0):02d}" if m else time.strftime("%Y-%m")
+    return {"release": release, "full": absu(full[-1]), "deactivated": [absu(h) for h in deact],
+            "weekly": [absu(h) for h in weekly], "all": [absu(h) for h in hrefs]}
+
+
+def _fetch(url: str, path: str, s: requests.Session) -> dict:
+    """Parallel ranged download when the server allows it, else one streaming GET."""
+    try:
+        r = resolve(url, s)
+        if r.size and r.size > 64 << 20:
+            return {"url": url, **download(r.url, path, r.size, threads=8, s=s)}
+    except Exception as ex:  # fall through to a plain GET
+        note = repr(ex)[:200]
+    else:
+        note = None
+    t0 = time.time()
+    n = 0
+    with s.get(url, stream=True, timeout=(10, 300), headers={"User-Agent": USER_AGENT}) as resp:
+        resp.raise_for_status()
+        with open(path, "wb") as f:
+            for chunk in resp.iter_content(8 << 20):
+                f.write(chunk)
+                n += len(chunk)
+    dt = time.time() - t0
+    return {"url": url, "bytes": n, "seconds": round(dt, 1), "mb_per_s": round(n / dt / 1e6, 1),
+            "mode": "single GET", **({"range_note": note} if note else {})}
+
+
+def csv_to_parquet(open_src, dest: str, meta: dict) -> dict:
+    """Stream one CSV into ZSTD Parquet with every column read as a string.
+
+    `open_src()` returns a fresh binary file object; it is called twice, once for the
+    header (so no type is ever inferred: ZIP codes and IDs keep leading zeros).
+    """
+    import csv
+    import io
+
+    import pyarrow as pa
+    import pyarrow.csv as pacsv
+    import pyarrow.parquet as pq
+
+    t0 = time.time()
+    with open_src() as f:
+        names = next(csv.reader(io.TextIOWrapper(f, encoding="utf-8", errors="replace")))
+    src = open_src()
+    reader = pacsv.open_csv(
+        src,
+        read_options=pacsv.ReadOptions(block_size=64 << 20),
+        convert_options=pacsv.ConvertOptions(column_types={n: pa.string() for n in names},
+                                             strings_can_be_null=True),
+        parse_options=pacsv.ParseOptions(newlines_in_values=True),
+    )
+    new = [snake(n) for n in names]
+    seen: dict[str, int] = {}
+    for i, n in enumerate(new):  # keep names unique after snake-casing
+        if n in seen:
+            seen[n] += 1
+            new[i] = f"{n}_{seen[n]}"
+        else:
+            seen[n] = 0
+    schema = pa.schema([pa.field(n, pa.string()) for n in new],
+                       metadata={"source_columns": json.dumps(names), **{k: str(v) for k, v in meta.items()}})
+    rows = 0
+    with pq.ParquetWriter(dest, schema, compression="zstd", compression_level=6,
+                          use_dictionary=True, write_statistics=True) as w:
+        for batch in reader:
+            cols = [c.cast(pa.string()) for c in batch.columns]
+            w.write_batch(pa.RecordBatch.from_arrays(cols, schema=schema), row_group_size=500_000)
+            rows += batch.num_rows
+    src.close()
+    return {"rows": rows, "columns": len(new), "seconds": round(time.time() - t0, 1),
+            "parquet_mb": round(os.path.getsize(dest) / 1e6, 1)}
+
+
+def nppes(workdir: str = "/tmp/nppes", upload_repo: str | None = None) -> dict:
+    """Download the monthly NPPES files, convert every CSV to Parquet, optionally upload."""
+    s = new_session()
+    wd = Path(workdir)
+    wd.mkdir(parents=True, exist_ok=True)
+    links = nppes_links(s)
+    rel = links["release"]
+    out: dict = {"release": rel, "links": links, "tables": {}}
+    zpath = str(wd / "full.zip")
+    out["download"] = _fetch(links["full"], zpath, s)
+    outdir = wd / "parquet"
+    outdir.mkdir(exist_ok=True)
+    with zipfile.ZipFile(zpath) as z:
+        out["zip_members"] = [{"name": i.filename, "bytes": i.file_size} for i in z.infolist()]
+        for info in z.infolist():
+            low = info.filename.lower()
+            if not low.endswith(".csv") or "fileheader" in low:
+                continue
+            table = next((t for p, t in TABLES.items() if low.startswith(p)), None) or snake(Path(low).stem)
+            dest = str(outdir / f"{table}.parquet")
+            out["tables"][table] = {"member": info.filename, "csv_bytes": info.file_size,
+                                    **csv_to_parquet(lambda: z.open(info), dest,
+                                                     {"release": rel, "source": links["full"],
+                                                      "member": info.filename})}
+    os.remove(zpath)
+    for i, url in enumerate(links["deactivated"][:1]):
+        p = str(wd / "deact.zip")
+        out["deactivated_download"] = _fetch(url, p, s)
+        with zipfile.ZipFile(p) as z:
+            for info in z.infolist():
+                raw = outdir / f"deactivated_{snake(Path(info.filename).stem)}{Path(info.filename).suffix.lower()}"
+                raw.write_bytes(z.read(info))  # kept as published (xlsx or csv)
+                out["tables"][raw.name] = {"member": info.filename, "bytes": info.file_size}
+        os.remove(p)
+    (outdir / "manifest.json").write_text(json.dumps(out, indent=2, default=str))
+    if upload_repo:
+        out["uploaded"] = upload_folder(upload_repo, str(outdir), f"nppes/release={rel}",
+                                        f"NPPES {rel}: {', '.join(out['tables'])}")
+    return out
+
+
+def upload_folder(repo_id: str, folder: str, path_in_repo: str, message: str) -> str:
+    from huggingface_hub import HfApi
+
+    from .hfio import _retry, dataset, token_for
+
+    api = HfApi(token=token_for(dataset(repo_id)))
+    _retry(lambda: api.upload_folder(repo_id=repo_id, repo_type="dataset", folder_path=folder,
+                                     path_in_repo=path_in_repo, commit_message=message))
+    return f"https://huggingface.co/datasets/{repo_id}/tree/main/{path_in_repo}"

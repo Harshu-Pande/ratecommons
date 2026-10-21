@@ -11,6 +11,8 @@ manifests_repo = "ratecommons/raw-manifests"
 ops_repo = "ratecommons/ops"
 # Mutable scratch space for the map/shuffle/reduce stages.
 work_bucket = "ratecommons/work"
+# Public provider identity sources (NPPES, Doctors and Clinicians, reassignment, IRS exempt orgs) as Parquet.
+identity_repo = "ratecommons/identity"
 
 [kaggle]
 # Kaggle sessions exit in Europe or the US; from Europe only UHC/UMR is reachable.

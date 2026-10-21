@@ -2,7 +2,7 @@
 
 Environment variables override everything (useful on Kaggle and Lightning, where
 the package is installed from GitHub without the repo checkout):
-  RC_HF_ORG, RC_MANIFESTS_REPO, RC_OPS_REPO, RC_WORK_BUCKET
+  RC_HF_ORG, RC_MANIFESTS_REPO, RC_OPS_REPO, RC_WORK_BUCKET, RC_IDENTITY_REPO
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ _DEFAULTS = {
     "manifests_repo": "ratecommons/raw-manifests",
     "ops_repo": "ratecommons/ops",
     "work_bucket": "ratecommons/work",
+    "identity_repo": "ratecommons/identity",
 }
 
 
@@ -25,6 +26,7 @@ class Config:
     manifests_repo: str
     ops_repo: str
     work_bucket: str
+    identity_repo: str
 
 
 def _find_toml() -> Path | None:
@@ -42,7 +44,8 @@ def load() -> Config:
         hf = tomllib.loads(p.read_text()).get("hf", {})
         vals.update({k: v for k, v in hf.items() if k in vals})
     env = {"org": "RC_HF_ORG", "manifests_repo": "RC_MANIFESTS_REPO",
-           "ops_repo": "RC_OPS_REPO", "work_bucket": "RC_WORK_BUCKET"}
+           "ops_repo": "RC_OPS_REPO", "work_bucket": "RC_WORK_BUCKET",
+           "identity_repo": "RC_IDENTITY_REPO"}
     for k, e in env.items():
         if os.environ.get(e):
             vals[k] = os.environ[e]
