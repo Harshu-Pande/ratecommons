@@ -160,3 +160,20 @@ def test_reduce_network_sets_blocks_and_files_modes_agree(tmp_path):
     # 99213 group 1 (one price list): one fact only in a, one only in b, since the changed price changes
     # the price list; the other 3 facts (99213 group 2, URC, RC 918) are in both networks
     assert sizes == [1, 1, 2, 2, 2]
+
+
+def test_codebook_on_a_reduced_release(tmp_path):
+    from ticdata import codebook
+    from ticdata.reduce import reduce_dims_local, reduce_part_local
+
+    _write_two_member_gzip(tmp_path / "a.json.gz")
+    parse_file(str(tmp_path / "a.json.gz"), str(tmp_path / "map/a"), {"name": "a"})
+    for k in range(16):
+        reduce_part_local(str(tmp_path / "map"), "test", "2026-10", k, str(tmp_path / "out"))
+    reduce_dims_local(str(tmp_path / "map"), "test", str(tmp_path / "out"))
+    res = codebook.build(str(tmp_path / "out"), str(tmp_path / "cb.parquet"), "test")
+    rows = pq.read_table(tmp_path / "cb.parquet").to_pylist()
+    assert res["codes"] == 1 and rows[0]["billing_code"] == "URC" and rows[0]["rate_max"] == 255
+    assert (tmp_path / "out.restricted/code_text.parquet").exists()  # the CPT name went private
+    code = {r["billing_code"]: r for r in pq.read_table(tmp_path / "out/code.parquet").to_pylist()}
+    assert code["99213"]["name"] is None and code["99213"]["text_withheld"] and code["URC"]["name"] == "URGENT CARE"

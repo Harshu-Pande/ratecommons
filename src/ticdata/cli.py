@@ -93,6 +93,13 @@ def main(argv=None) -> int:
     p.add_argument("--match", action="append", required=True)
     p.add_argument("--out")
 
+    p = sub.add_parser("codebook", help="Track D: payer-defined codes with counts and rate stats, from a release")
+    p.add_argument("--payer", required=True)
+    p.add_argument("--release", required=True)
+    p.add_argument("--all-codes", action="store_true")
+    p.add_argument("--publish", action="store_true", help="write code_dictionary.parquet into the payer dataset")
+    p.add_argument("--out")
+
     p = sub.add_parser("verify", help="re-parse one source file and check it against the published release")
     p.add_argument("--payer", required=True)
     p.add_argument("--release", required=True)
@@ -212,6 +219,22 @@ def main(argv=None) -> int:
         res = run_shard({"payer": a.payer, "shards": [{"shard": 0, "files": files}]}, 0)
         for r in res["results"]:
             r.pop("traceback", None)
+        _write(res, a.out)
+    elif a.cmd == "codebook":
+        from huggingface_hub import HfApi, snapshot_download
+
+        from . import codebook, hfio
+
+        repo = f"{cfg.org}/{a.payer}"
+        pats = [f"release={a.release}/{t}*" for t in ("code", "rate_fact", "price_list", "price_term")]
+        pub = snapshot_download(repo, repo_type="dataset", local_dir="/tmp/codebook/pub", allow_patterns=pats)
+        dest = "/tmp/codebook/code_dictionary.parquet"
+        res = codebook.build(f"{pub}/release={a.release}", dest, a.payer, all_codes=a.all_codes)
+        if a.publish:
+            HfApi(token=hfio.token_for(hfio.dataset(repo))).upload_file(
+                path_or_fileobj=dest, path_in_repo=f"release={a.release}/code_dictionary.parquet", repo_id=repo,
+                repo_type="dataset", commit_message=f"{a.payer} {a.release}: code dictionary (payer-defined codes)")
+            res["published"] = f"https://huggingface.co/datasets/{repo}/blob/main/release={a.release}/code_dictionary.parquet"
         _write(res, a.out)
     elif a.cmd == "verify":
         from .verify import verify_file
