@@ -5,6 +5,17 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **Byte-identical records are not parsed twice in a shard.** Near-duplicate files repeat
+  most in_network records byte for byte. When two files carry the same provider_references
+  (hashed in order as `refs_hash`), an identical record resolves identically, so the Rust
+  core keys each record by xxh3-128(refs_hash + record bytes) and keeps, per shard, what a
+  full parse produced (block, code, partition, counts, layout). A repeat costs one hash: only
+  its `file_block` row is written. Records that raised any flag are never cached, so flag
+  counts stay exact; a cached block whose facts were not written in this shard is parsed in
+  full. Mid Cigna file mapped twice: second pass 3.1 s against 16.8 s, identical file_block.
+- **Rust core speedups from a callgrind profile:** mimalloc, Fx hashing for maps keyed by
+  hashes, no allocation per flag event, and the "several amounts" check reusing per-price
+  hashes. Worker instructions down 24% on a small Cigna file.
 - **GitHub Actions concurrency capped at 12 jobs (was 20) for map and reduce.** The design
   asks to keep it well below the 20-job cap to stay clear of the terms' gray zone. Measured
   cost: Aetna at about 0.25 GB/s of JSON per runner and 12 runners is roughly a day of wall

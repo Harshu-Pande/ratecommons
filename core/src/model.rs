@@ -427,11 +427,13 @@ pub fn py_int(r: &RawValue, flags: &mut Flags) -> Option<i64> {
 
 // ------------------------------------------------------------------ flags
 
+/// Flag name -> count, plus the total number of flag events (to tell whether a record raised any).
 #[derive(Default, Clone)]
-pub struct Flags(pub BTreeMap<String, u64>);
+pub struct Flags(pub BTreeMap<String, u64>, pub u64);
 
 impl Flags {
     pub fn add(&mut self, k: &str) {
+        self.1 += 1;
         match self.0.get_mut(k) {
             Some(v) => *v += 1,
             None => {
@@ -440,6 +442,7 @@ impl Flags {
         }
     }
     pub fn merge(&mut self, o: &Flags) {
+        self.1 += o.1;
         for (k, v) in &o.0 {
             *self.0.entry(k.clone()).or_insert(0) += v;
         }

@@ -35,6 +35,9 @@ impl Seen {
     pub fn new(cap: usize) -> Seen {
         Seen { shards: (0..64).map(|_| Mutex::new(HashSet::default())).collect(), cap: cap / 64 }
     }
+    pub fn contains(&self, id: &Id) -> bool {
+        self.shards[(id[0] & 63) as usize].lock().unwrap().contains(&u128::from_be_bytes(*id))
+    }
     /// true when `id` was not seen before (the caller then emits its row)
     pub fn insert(&self, id: &Id) -> bool {
         let mut s = self.shards[(id[0] & 63) as usize].lock().unwrap();
@@ -42,6 +45,71 @@ impl Seen {
             s.clear();
         }
         s.insert(u128::from_be_bytes(*id))
+    }
+}
+
+/// What a fully parsed in_network record produced, for skipping byte-identical records later in
+/// the shard. Only records that raised no flag are kept, so a skip loses nothing but work.
+#[derive(Clone, Copy)]
+pub struct RecInfo {
+    pub block_id: Id,
+    pub code_id: Id,
+    pub part: i32,
+    pub n_pairs: i32,
+    pub n_rates: u32,
+    pub layout: u8, // 1 = provider_references, 2 = inline_provider_groups
+}
+const REC_BYTES: usize = 16 + 16 + 16 + 4 + 4 + 4 + 1;
+
+pub struct RecordCache {
+    shards: Vec<Mutex<HashMap<u128, RecInfo>>>,
+    cap: usize,
+}
+impl RecordCache {
+    fn new(cap: usize) -> RecordCache {
+        RecordCache { shards: (0..64).map(|_| Mutex::new(HashMap::default())).collect(), cap: cap / 64 }
+    }
+    fn get(&self, k: u128) -> Option<RecInfo> {
+        self.shards[(k & 63) as usize].lock().unwrap().get(&k).copied()
+    }
+    fn put(&self, k: u128, v: RecInfo) {
+        let mut s = self.shards[(k & 63) as usize].lock().unwrap();
+        if s.len() < self.cap {
+            s.insert(k, v);
+        }
+    }
+    fn load(&self, path: &str) -> u64 {
+        let b = std::fs::read(path).unwrap_or_default();
+        let mut n = 0;
+        for c in b.chunks_exact(REC_BYTES) {
+            let k = u128::from_be_bytes(c[0..16].try_into().unwrap());
+            self.put(k, RecInfo {
+                block_id: c[16..32].try_into().unwrap(), code_id: c[32..48].try_into().unwrap(),
+                part: i32::from_le_bytes(c[48..52].try_into().unwrap()),
+                n_pairs: i32::from_le_bytes(c[52..56].try_into().unwrap()),
+                n_rates: u32::from_le_bytes(c[56..60].try_into().unwrap()), layout: c[60],
+            });
+            n += 1;
+        }
+        n
+    }
+    fn save(&self, path: &str) -> u64 {
+        let mut out = Vec::new();
+        let mut n = 0;
+        for sh in &self.shards {
+            for (k, v) in sh.lock().unwrap().iter() {
+                out.extend_from_slice(&k.to_be_bytes());
+                out.extend_from_slice(&v.block_id);
+                out.extend_from_slice(&v.code_id);
+                out.extend_from_slice(&v.part.to_le_bytes());
+                out.extend_from_slice(&v.n_pairs.to_le_bytes());
+                out.extend_from_slice(&v.n_rates.to_le_bytes());
+                out.push(v.layout);
+                n += 1;
+            }
+        }
+        std::fs::write(path, out).expect("write record cache");
+        n
     }
 }
 
@@ -162,6 +230,7 @@ struct Outs {
 
 struct Worker<'s> {
     sh: &'s Shared,
+    rc: Option<&'s RecordCache>,
     refs: &'s HashMap<Option<String>, Vec<Id>>,
     out: Outs,
     flags: Flags,
@@ -345,7 +414,8 @@ impl<'s> Worker<'s> {
         sid
     }
 
-    fn item(&mut self, rec: &[u8]) {
+    fn item(&mut self, key: u128, rec: &[u8]) {
+        let flags_before = self.flags.1;
         let text = std::str::from_utf8(rec).expect("record is UTF-8");
         let it: RawObject = obj(raw(text)).expect("in_network item is a JSON object");
         let f = &mut self.flags;
@@ -378,6 +448,8 @@ impl<'s> Worker<'s> {
         }
         *self.counts.entry("in_network_items").or_insert(0) += 1;
         let mut pairs: Vec<[u8; 32]> = Vec::new();
+        let mut layout_bits = 0u8;
+        let mut n_rates = 0u32;
         for nr in arr(it.get("negotiated_rates")).map(|a| a.0).unwrap_or_default() {
             let o = match obj(nr) {
                 Some(o) => o,
@@ -410,6 +482,13 @@ impl<'s> Worker<'s> {
             let lid = self.price_list(o.get("negotiated_prices"));
             *self.counts.entry("t_price_list_us").or_insert(0) += tpl.elapsed().as_micros() as u64;
             *self.counts.entry("negotiated_rates").or_insert(0) += 1;
+            n_rates += 1;
+            if truthy(o.get("provider_references")) {
+                layout_bits |= 1;
+            }
+            if truthy(o.get("provider_groups")) {
+                layout_bits |= 2;
+            }
             let mut pr = [0u8; 32];
             pr[..16].copy_from_slice(&sid);
             pr[16..].copy_from_slice(&lid);
@@ -426,6 +505,12 @@ impl<'s> Worker<'s> {
         let bid = xxh128(&bb);
         let part = fact_part(ctype.as_deref(), code.as_deref()) as i32;
         self.fb.push(FbRow { block_id: bid, code_id: cid, part, n_rates: pairs.len() as i32 });
+        if let Some(rc) = self.rc {
+            if self.flags.1 == flags_before {
+                rc.put(key, RecInfo { block_id: bid, code_id: cid, part, n_pairs: pairs.len() as i32, n_rates,
+                                      layout: layout_bits });
+            }
+        }
         if !self.sh.blocks.insert(&bid) {
             *self.counts.entry("blocks_repeated").or_insert(0) += 1;
         } else {
@@ -595,7 +680,7 @@ fn save_blocks(path: &str, s: &Seen) -> u64 {
 }
 
 pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Value,
-                seen_blocks: Option<&str>) -> serde_json::Value {
+                seen_blocks: Option<&str>, record_cache: Option<&str>) -> serde_json::Value {
     let t0 = Instant::now();
     std::fs::create_dir_all(outdir).unwrap();
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
@@ -619,6 +704,16 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
         code_seen: Seen::new(50_000_000),
     });
     let blocks_loaded = seen_blocks.map(|p| load_blocks(p, &sh.blocks)).unwrap_or(0);
+    let rcache: Option<Arc<RecordCache>> = record_cache.map(|_| Arc::new(RecordCache::new(20_000_000)));
+    let recs_loaded = match (&rcache, record_cache) {
+        (Some(c), Some(p)) => c.load(p),
+        _ => 0,
+    };
+    let mut refs_digest: u128 = 0;
+    let mut skip_fb: Vec<FbRow> = Vec::new();
+    let mut skipped: u64 = 0;
+    let mut skipped_rates: u64 = 0;
+    let mut skip_layout = 0u8;
     // three writer threads: rate facts, price terms, everything else
     let mut whs = Vec::new();
     let mut senders = Vec::new();
@@ -646,7 +741,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     let mut refs_hasher = xxhash_rust::xxh3::Xxh3::new();
 
     // workers start lazily, when the first in_network record arrives (references are complete then)
-    let mut item_tx: Option<Sender<Vec<u8>>> = None;
+    let mut item_tx: Option<Sender<(u128, Vec<u8>)>> = None;
     let mut handles: Vec<std::thread::JoinHandle<(Flags, HashMap<&'static str, u64>, HashSet<&'static str>)>> = Vec::new();
     let mut refs_arc: Option<Arc<HashMap<Option<String>, Vec<Id>>>> = None;
 
@@ -713,23 +808,26 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                     t_refs.set(t0.elapsed().as_secs_f64());
                     let arc = Arc::new(std::mem::take(&mut refs));
                     refs_arc = Some(arc.clone());
-                    let (tx, rx) = bounded::<Vec<u8>>(256);
+                    refs_digest = refs_hasher.digest128();
+                    let (tx, rx) = bounded::<(u128, Vec<u8>)>(256);
                     for _ in 0..threads.max(1) {
                         let rx = rx.clone();
                         let sh = sh.clone();
                         let refs = arc.clone();
                         let out = wtx.clone();
+                        let rc = rcache.clone();
                         handles.push(std::thread::spawn(move || {
                             let mut w = Worker {
-                                sh: &sh, refs: &refs, out, flags: Flags::default(), counts: HashMap::default(),
+                                sh: &sh, rc: rc.as_deref(), refs: &refs, out, flags: Flags::default(),
+                                counts: HashMap::default(),
                                 layout: HashSet::default(), c_refs: HashMap::default(), c_prices: HashMap::default(),
                                 c_price: HashMap::default(), pt: vec![], pl: vec![], ps: vec![], codes: vec![], facts: vec![],
                                 fb: vec![],
                             };
                             let mut busy = 0.0f64;
-                            for rec in rx {
+                            for (key, rec) in rx {
                                 let t = Instant::now();
-                                w.item(&rec);
+                                w.item(key, &rec);
                                 busy += t.elapsed().as_secs_f64();
                             }
                             *w.counts.entry("worker_busy_ms").or_insert(0) += (busy * 1000.0) as u64;
@@ -739,7 +837,30 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                     }
                     item_tx = Some(tx);
                 }
-                item_tx.as_ref().unwrap().send(rec.to_vec()).unwrap();
+                let key = if rcache.is_some() {
+                    let mut h = xxhash_rust::xxh3::Xxh3::new();
+                    h.update(&refs_digest.to_be_bytes());
+                    h.update(rec);
+                    h.digest128()
+                } else {
+                    0
+                };
+                if let Some(info) = rcache.as_ref().and_then(|c| c.get(key)) {
+                    // byte-identical record under identical references, already parsed in this shard:
+                    // only its membership row is new, unless its facts were never written here
+                    if sh.blocks.contains(&info.block_id) {
+                        skipped += 1;
+                        skipped_rates += info.n_rates as u64;
+                        skip_layout |= info.layout;
+                        skip_fb.push(FbRow { block_id: info.block_id, code_id: info.code_id, part: info.part,
+                                             n_rates: info.n_pairs });
+                        if skip_fb.len() >= 50_000 {
+                            wtx.other.send(Msg::Fb(std::mem::take(&mut skip_fb))).unwrap();
+                        }
+                        return;
+                    }
+                }
+                item_tx.as_ref().unwrap().send((key, rec.to_vec())).unwrap();
             }
         }
     })
@@ -756,6 +877,21 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
             *counts.entry(k).or_insert(0) += v;
         }
         layout.extend(l);
+    }
+    if !skip_fb.is_empty() {
+        wtx.other.send(Msg::Fb(std::mem::take(&mut skip_fb))).unwrap();
+    }
+    if rcache.is_some() {
+        *counts.entry("records_skipped").or_insert(0) += skipped;
+        *counts.entry("in_network_items").or_insert(0) += skipped;
+        *counts.entry("negotiated_rates").or_insert(0) += skipped_rates;
+        *counts.entry("blocks_repeated").or_insert(0) += skipped;
+        if skip_layout & 1 != 0 {
+            layout.insert("provider_references");
+        }
+        if skip_layout & 2 != 0 {
+            layout.insert("inline_provider_groups");
+        }
     }
     let t_items = t0.elapsed().as_secs_f64();
     drop(wtx);
@@ -799,6 +935,10 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     }
 
     let blocks_saved = seen_blocks.map(|p| save_blocks(p, &sh.blocks)).unwrap_or(0);
+    if let (Some(c), Some(p)) = (&rcache, record_cache) {
+        counts.insert("record_cache_loaded", recs_loaded);
+        counts.insert("record_cache_saved", c.save(p));
+    }
     counts.insert("seen_blocks_loaded", blocks_loaded);
     counts.insert("seen_blocks_saved", blocks_saved);
     let mut lay: Vec<&str> = layout.into_iter().collect();

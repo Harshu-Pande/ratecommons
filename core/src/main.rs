@@ -58,7 +58,8 @@ fn main() {
         let source: serde_json::Value = args.get(5).filter(|s| !s.starts_with("--")).and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or(serde_json::json!({}));
         let seen = args.iter().position(|a| a == "--seen-blocks").and_then(|i| args.get(i + 1)).cloned();
-        let meta = map::map_file(&args[2], &args[3], threads, source, seen.as_deref());
+        let rcache = args.iter().position(|a| a == "--record-cache").and_then(|i| args.get(i + 1)).cloned();
+        let meta = map::map_file(&args[2], &args[3], threads, source, seen.as_deref(), rcache.as_deref());
         println!("{}", serde_json::to_string(&meta).unwrap());
         return;
     }

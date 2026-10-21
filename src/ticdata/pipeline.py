@@ -90,8 +90,10 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
     s = new_session()
     os.makedirs(workdir, exist_ok=True)
     seen_path = os.path.join(workdir, "seen_blocks.bin")  # blocks already written by this shard
-    if os.path.exists(seen_path):
-        os.remove(seen_path)
+    rcache_path = os.path.join(workdir, "record_cache.bin")  # records already parsed by this shard
+    for p in (seen_path, rcache_path):
+        if os.path.exists(p):
+            os.remove(p)
     results = []
     for e in files:
         key, rel = file_key(e["name"]), release_of(e["name"])
@@ -109,7 +111,8 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
 
                 threads = os.environ.get("TIC_CORE_THREADS", str(max(1, (os.cpu_count() or 2) - 2)))
                 cp = subprocess.run([core, "map", local, outdir, threads, json.dumps(source),
-                                     "--seen-blocks", seen_path], capture_output=True, text=True)
+                                     "--seen-blocks", seen_path, "--record-cache", rcache_path],
+                                    capture_output=True, text=True)
                 if cp.returncode == 0 and "provider_references_after_in_network_unsupported_in_rust" in \
                         json.loads(cp.stdout).get("flags", {}):
                     rec["rust_error"] = "provider_references after in_network: parsed with Python instead"
