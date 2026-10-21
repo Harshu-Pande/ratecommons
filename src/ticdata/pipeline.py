@@ -93,7 +93,8 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
                 from huggingface_hub import batch_bucket_files
 
                 prefix = f"map/{rel}/{payer}/{key}"
-                adds = [(os.path.join(outdir, f), f"{prefix}/{f}") for f in sorted(os.listdir(outdir))]
+                adds = [(os.path.join(root, f), f"{prefix}/{os.path.relpath(os.path.join(root, f), outdir)}")
+                        for root, _, fs in os.walk(outdir) for f in sorted(fs)]
                 batch_bucket_files(upload_bucket, add=adds, token=token() if callable(token) else token)
                 rec["uploaded"] = prefix
             rec["ok"] = True

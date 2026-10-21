@@ -414,33 +414,48 @@ class FileParser:
 
 # ---------------------------------------------------------------- writing
 
-FACT_COLS = ("fact_id", "code_id", "ps_id", "pl_id", "billing_code_type", "billing_code")
+FACT_PARTS = 16  # shuffle partitions: by billing code, so one reducer sees every fact of its codes
+
+
+def fact_part(ctype: str | None, code: str | None) -> int:
+    return xxhash.xxh3_64_intdigest(f"{ctype or ''}{SEP}{code or ''}".encode()) % FACT_PARTS
 
 
 class FactWriter:
-    """Streams rate_fact rows to Parquet in file order (grouped by billing code)."""
+    """Streams rate_fact rows to Parquet, one file per shuffle partition, in file order."""
 
-    def __init__(self, path: str):
+    def __init__(self, folder: str):
         import pyarrow as pa
         import pyarrow.parquet as pq
 
         b16 = pa.binary(16)
-        self.pa = pa
+        self.pa, self.pq = pa, pq
         self.schema = pa.schema([("fact_id", b16), ("code_id", b16), ("ps_id", b16), ("pl_id", b16),
                                  ("billing_code_type", pa.string()), ("billing_code", pa.string())])
-        self.w = pq.ParquetWriter(path, self.schema, compression="zstd", compression_level=6)
+        self.folder = folder
+        os.makedirs(folder, exist_ok=True)
+        self.writers: dict[int, object] = {}
         self.rows = 0
-        self.path = path
 
     def __call__(self, buf: list[tuple]):
-        cols = list(zip(*buf)) if buf else [[] for _ in FACT_COLS]
-        self.w.write_table(self.pa.table([self.pa.array(c, type=t) for c, t in zip(cols, self.schema.types)],
-                                         schema=self.schema), row_group_size=1_000_000)
+        parts: dict[int, list[tuple]] = {}
+        for r in buf:
+            parts.setdefault(fact_part(r[4], r[5]), []).append(r)
+        for k, rows in parts.items():
+            w = self.writers.get(k)
+            if w is None:
+                w = self.writers[k] = self.pq.ParquetWriter(os.path.join(self.folder, f"part-{k:02d}.parquet"),
+                                                            self.schema, compression="zstd", compression_level=6)
+            cols = list(zip(*rows))
+            w.write_table(self.pa.table([self.pa.array(c, type=t) for c, t in zip(cols, self.schema.types)],
+                                        schema=self.schema), row_group_size=1_000_000)
         self.rows += len(buf)
 
     def close(self) -> dict:
-        self.w.close()
-        return {"rows": self.rows, "bytes": os.path.getsize(self.path)}
+        for w in self.writers.values():
+            w.close()
+        size = sum(os.path.getsize(os.path.join(self.folder, f)) for f in os.listdir(self.folder))
+        return {"rows": self.rows, "bytes": size, "parts": len(self.writers)}
 
 
 def _write_tables(fp: FileParser, outdir: str) -> dict:
@@ -495,7 +510,7 @@ def parse_file(path: str, outdir: str, source: dict | None = None) -> dict:
         fp.pass_header_and_refs(s1)
     t1 = time.time()
     os.makedirs(outdir, exist_ok=True)
-    fw = FactWriter(os.path.join(outdir, "rate_fact.parquet"))
+    fw = FactWriter(os.path.join(outdir, "rate_fact"))
     fp.fact_sink = fw
     with open_json_stream(path) as s2:
         fp.pass_items(s2)

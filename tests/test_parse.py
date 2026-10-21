@@ -92,7 +92,7 @@ def test_parse_file_normalizes_and_flags(tmp_path):
     codes = {c["billing_code"]: c for c in pq.read_table(tmp_path / "out/code.parquet").to_pylist()}
     assert "0918" in codes and codes["0918"]["billing_code_raw"] == "918   "
 
-    facts = pq.read_table(tmp_path / "out/rate_fact.parquet").to_pylist()
+    facts = pq.read_table(tmp_path / "out/rate_fact").to_pylist()
     assert len(facts) == 4 and meta["counts"]["negotiated_rates"] == 4
     assert set(meta["layout"]) == {"provider_references", "inline_provider_groups"}
     assert meta["header"]["version"] == "V2.0.0" and meta["header"]["reporting_entity_name"] == "Test Insurer"
