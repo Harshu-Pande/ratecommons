@@ -71,7 +71,8 @@ def nppes_links(s: requests.Session | None = None) -> dict:
         if not guessed:
             guessed = _nber_latest(s)
         if not guessed:
-            raise RuntimeError(f"no monthly NPPES file: page {page_note}; first 300 chars {html[:300]!r}")
+            raise RuntimeError(f"no monthly NPPES file: page {page_note}; first 300 chars {html[:300]!r}; "
+                               f"NBER mirror: {NBER_NOTES}")
         full = [guessed]
     m = re.search(r"_([A-Za-z]+)_(\d{4})", full[-1])
     release = f"{m.group(2)}-{MONTHS.get(m.group(1).capitalize(), 0):02d}" if m else time.strftime("%Y-%m")
@@ -80,25 +81,32 @@ def nppes_links(s: requests.Session | None = None) -> dict:
             "weekly": [absu(h) for h in hrefs if "Weekly" in h], "page": page_note, "guessed": bool(guessed)}
 
 
-NBER_ZIPS = "https://data.nber.org/npi/zip/"
+NBER_ZIPS = ("https://data.nber.org/npi/zip/", "https://data.nber.org/npi/zip", "https://nber.org/npi/zip/")
+NBER_NOTES: list[str] = []
 
 
 def _nber_latest(s: requests.Session) -> str | None:
     """Newest monthly CMS zip on the NBER mirror (byte copies of the CMS source zips), used while
-    the CMS download page is down."""
-    try:
-        html = s.get(NBER_ZIPS, timeout=60, headers={"User-Agent": USER_AGENT}).text
-    except Exception:
-        return None
-    best = None
-    for h in set(re.findall(r"""href\s*=\s*["']?([^"' >]*NPPES_Data_Dissemination_([A-Za-z]+)_(\d{4})(_V\d)?\.zip)""",
-                            html, flags=re.I)):
-        key = (int(h[2]), MONTHS.get(h[1].capitalize(), 0), h[3])
-        if best is None or key > best[0]:
-            best = (key, h[0])
-    if not best:
-        return None
-    return best[1] if best[1].startswith("http") else NBER_ZIPS + best[1].split("/")[-1]
+    the CMS download page is down. Notes on what each listing returned go to NBER_NOTES."""
+    pat = re.compile(r"""href\s*=\s*["']?([^"' >]*?NPPES_Data_Dissemination_([A-Za-z]+)_(\d{4})(_V\d)?\.zip)""", re.I)
+    for base in NBER_ZIPS:
+        try:
+            r = s.get(base, timeout=60, headers={"User-Agent": USER_AGENT})
+            html = r.text
+        except Exception as ex:
+            NBER_NOTES.append(f"{base}: {repr(ex)[:200]}")
+            continue
+        found = pat.findall(html)
+        NBER_NOTES.append(f"{base}: HTTP {r.status_code} -> {r.url}, {len(html)} chars, {len(found)} monthly zips; "
+                          f"head {html[:200]!r}")
+        if not found:
+            continue
+        best = max(found, key=lambda h: (int(h[2]), MONTHS.get(h[1].capitalize(), 0), h[3]))
+        href = best[0]
+        if href.startswith("http"):
+            return href
+        return requests.compat.urljoin(r.url if r.url.endswith("/") else r.url + "/", href)
+    return None
 
 
 def _fetch(url: str, path: str, s: requests.Session) -> dict:
