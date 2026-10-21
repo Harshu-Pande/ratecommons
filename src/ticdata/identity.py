@@ -75,7 +75,9 @@ def nppes_links(s: requests.Session | None = None) -> dict:
                                f"NBER mirror: {NBER_NOTES}")
         full = [guessed]
     m = re.search(r"_([A-Za-z]+)_(\d{4})", full[-1])
-    release = f"{m.group(2)}-{MONTHS.get(m.group(1).capitalize(), 0):02d}" if m else time.strftime("%Y-%m")
+    n = re.search(r"npi_(?:raw_)?(\d{4})(\d{2})\.zip$", full[-1])
+    release = (f"{n.group(1)}-{n.group(2)}" if n else
+               f"{m.group(2)}-{MONTHS.get(m.group(1).capitalize(), 0):02d}" if m else time.strftime("%Y-%m"))
     return {"release": release, "full": absu(full[-1]),
             "deactivated": [absu(h) for h in hrefs if "Deactivated" in h],
             "weekly": [absu(h) for h in hrefs if "Weekly" in h], "page": page_note, "guessed": bool(guessed)}
@@ -114,9 +116,15 @@ def _nber_latest(s: requests.Session) -> str | None:
             if r2 is not None:
                 pages.append((r2.url, html2))
         found = [(page_url, m) for page_url, page in pages for m in pat.findall(page)]
-        if not found:
+        # NBER also stores the CMS zips renamed: npi_raw_YYYYMM.zip (2026 on), npi_YYYYMM.zip before
+        nb = re.compile(r"""href\s*=\s*["']?([^"' >]*?npi_(raw_)?(\d{4})(\d{2})\.zip)""", re.I)
+        named = [(page_url, m) for page_url, page in pages for m in nb.findall(page)]
+        if not found and not named:
             continue
-        page_url, best = max(found, key=lambda x: (int(x[1][2]), MONTHS.get(x[1][1].capitalize(), 0), x[1][3]))
+        if named:
+            page_url, best = max(named, key=lambda x: (int(x[1][2]), int(x[1][3]), bool(x[1][1])))
+        else:
+            page_url, best = max(found, key=lambda x: (int(x[1][2]), MONTHS.get(x[1][1].capitalize(), 0), x[1][3]))
         href = best[0]
         if href.startswith("http"):
             return href
