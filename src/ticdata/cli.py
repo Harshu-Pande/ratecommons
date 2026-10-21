@@ -93,6 +93,12 @@ def main(argv=None) -> int:
     p.add_argument("--match", action="append", required=True)
     p.add_argument("--out")
 
+    p = sub.add_parser("card", help="write the dataset card (README.md) of a payer dataset from what is published")
+    p.add_argument("--payer", required=True)
+    p.add_argument("--release", required=True)
+    p.add_argument("--name", required=True, help="payer name as shown, e.g. Cigna")
+    p.add_argument("--rows-in", type=int)
+
     p = sub.add_parser("fingerprint", help="tail fingerprint of one URL")
     p.add_argument("url")
 
@@ -201,6 +207,12 @@ def main(argv=None) -> int:
         for r in res["results"]:
             r.pop("traceback", None)
         _write(res, a.out)
+    elif a.cmd == "card":
+        from . import card, hfio
+
+        repo = f"{cfg.org}/{a.payer}"
+        text = card.publish(a.payer, a.release, repo, a.name, a.rows_in, token=hfio.token_for(hfio.dataset(repo)))
+        _write({"repo": repo, "chars": len(text)}, None)
     elif a.cmd == "fingerprint":
         from .net import resolve, tail_fingerprint
 
