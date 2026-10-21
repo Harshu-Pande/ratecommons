@@ -6,13 +6,15 @@ TABLES = [
                   "the set of networks it appears in (`ns_id`). Sorted by code. 16 parts by billing code."),
     ("network_set", "`ns_id` -> the sorted list of `network_id`s sharing those facts. One file per "
                     "`rate_fact` part, so a set can repeat across files."),
+    ("block", "One row per billing-code record (code plus its sorted provider-set/price-list pairs): "
+              "rate count, how many files carry it, and its network set (`ns_id`)."),
     ("network", "One row per derived network: distinct file content (size and gzip trailer)."),
     ("source_file", "One row per source file: name, URL, size, gzip fingerprint, header, counts, "
                     "parser flags, and its `network_id`."),
     ("code", "Billing codes as published (type, version, code, arrangement), keyed by `code_id`. "
              "Descriptor text is withheld where it is licensed (see below)."),
     ("provider_set", "`ps_id` -> the provider lists (`pli_ids`) a rate applies to. Its ID is the hash of "
-                     "the flattened, sorted group list."),
+                     "its sorted provider lists."),
     ("provider_list", "`pli_id` -> the provider groups (`pg_ids`) of one provider reference as published."),
     ("provider_group", "`pg_id` -> TIN (type, normalized value, raw values) and sorted NPI list; "
                        "`tin_wide` when the file lists NPI 0 (the whole TIN). Business names are hints only."),
