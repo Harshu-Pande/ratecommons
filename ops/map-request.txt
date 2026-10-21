@@ -7,3 +7,4 @@ aetna 2 6
 aetna 2 6
 aetna 2 6
 cigna 12
+aetna 252 0 0-7
