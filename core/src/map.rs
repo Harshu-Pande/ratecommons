@@ -246,13 +246,16 @@ struct Worker<'s> {
     codes: Vec<CodeRow>,
     facts: Vec<FactRow>,
     fb: Vec<FbRow>,
+    pl_ids: usize,
+    ps_ids: usize,
 }
 
 impl<'s> Worker<'s> {
     fn flush(&mut self, force: bool) {
         if force || self.pt.len() >= 50_000 { let v = std::mem::take(&mut self.pt); if !v.is_empty() { self.out.pt.send(Msg::Pt(v)).unwrap(); } }
-        if force || self.pl.len() >= 50_000 { let v = std::mem::take(&mut self.pl); if !v.is_empty() { self.out.other.send(Msg::Pl(v)).unwrap(); } }
-        if force || self.ps.len() >= 20_000 { let v = std::mem::take(&mut self.ps); if !v.is_empty() { self.out.other.send(Msg::Ps(v)).unwrap(); } }
+        // list tables flush by size too: one Aetna provider set can name thousands of groups
+        if force || self.pl.len() >= 50_000 || self.pl_ids >= 2_000_000 { self.pl_ids = 0; let v = std::mem::take(&mut self.pl); if !v.is_empty() { self.out.other.send(Msg::Pl(v)).unwrap(); } }
+        if force || self.ps.len() >= 20_000 || self.ps_ids >= 2_000_000 { self.ps_ids = 0; let v = std::mem::take(&mut self.ps); if !v.is_empty() { self.out.other.send(Msg::Ps(v)).unwrap(); } }
         if force || self.codes.len() >= 50_000 { let v = std::mem::take(&mut self.codes); if !v.is_empty() { self.out.other.send(Msg::Code(v)).unwrap(); } }
         if force || self.fb.len() >= 50_000 { let v = std::mem::take(&mut self.fb); if !v.is_empty() { self.out.other.send(Msg::Fb(v)).unwrap(); } }
         if force || self.facts.len() >= 200_000 { let v = std::mem::take(&mut self.facts); if !v.is_empty() { self.out.fact.send(Msg::Fact(v)).unwrap(); } }
@@ -370,6 +373,7 @@ impl<'s> Worker<'s> {
                     self.flags.add("price_list_multiple_amounts");
                 }
             }
+            self.pl_ids += ids.len();
             self.pl.push((lid, ids));
         }
         if self.c_prices.len() >= CACHE_CAP {
@@ -410,6 +414,7 @@ impl<'s> Worker<'s> {
         };
         let sid = h_ids(b"ps", &mut ids);
         if self.sh.ps_seen.insert(&sid) {
+            self.ps_ids += ids.len();
             self.ps.push((sid, ids));
         }
         sid
@@ -720,7 +725,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     let mut whs = Vec::new();
     let mut senders = Vec::new();
     for _ in 0..3 {
-        let (tx, rx) = bounded::<Msg>(32);
+        let (tx, rx) = bounded::<Msg>(8);
         let od = outdir.to_string();
         whs.push(std::thread::spawn(move || writer_thread(rx, od)));
         senders.push(tx);
@@ -859,7 +864,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                                 counts: HashMap::default(),
                                 layout: HashSet::default(), c_refs: HashMap::default(), c_prices: HashMap::default(),
                                 c_price: HashMap::default(), pt: vec![], pl: vec![], ps: vec![], codes: vec![], facts: vec![],
-                                fb: vec![],
+                                fb: vec![], pl_ids: 0, ps_ids: 0,
                             };
                             let mut busy = 0.0f64;
                             for (key, rec) in rx {

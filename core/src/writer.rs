@@ -76,6 +76,10 @@ impl Pq {
         let b = RecordBatch::try_new(schema(table), cols).expect("batch");
         self.rows += b.num_rows() as u64;
         self.w.write(&b).expect("write");
+        // a row group of a list table can hold gigabytes before it reaches the row limit
+        if self.w.in_progress_size() > 256 << 20 {
+            self.w.flush().expect("flush row group");
+        }
     }
     pub fn close(self) -> (u64, u64) {
         let rows = self.rows;
