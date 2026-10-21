@@ -93,6 +93,12 @@ def main(argv=None) -> int:
     p.add_argument("--match", action="append", required=True)
     p.add_argument("--out")
 
+    p = sub.add_parser("verify", help="re-parse one source file and check it against the published release")
+    p.add_argument("--payer", required=True)
+    p.add_argument("--release", required=True)
+    p.add_argument("--match", required=True)
+    p.add_argument("--out")
+
     p = sub.add_parser("card", help="write the dataset card (README.md) of a payer dataset from what is published")
     p.add_argument("--payer", required=True)
     p.add_argument("--release", required=True)
@@ -207,6 +213,10 @@ def main(argv=None) -> int:
         for r in res["results"]:
             r.pop("traceback", None)
         _write(res, a.out)
+    elif a.cmd == "verify":
+        from .verify import verify_file
+
+        _write(verify_file(a.payer, a.release, f"{cfg.org}/{a.payer}", a.match), a.out)
     elif a.cmd == "card":
         from . import card, hfio
 
