@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
-      max-parallel: 20
+      max-parallel: 12   # design: keep GitHub Actions concurrency well below the 20-job cap
       matrix:
         part: ${{ fromJson(needs.args.outputs.parts) }}
     env:

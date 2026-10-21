@@ -5,6 +5,11 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **GitHub Actions concurrency capped at 12 jobs (was 20) for map and reduce.** The design
+  asks to keep it well below the 20-job cap to stay clear of the terms' gray zone. Measured
+  cost: Aetna at about 0.25 GB/s of JSON per runner and 12 runners is roughly a day of wall
+  time, so per-runner speed (and skipping byte-identical records across near-duplicate files)
+  matters more than more runners.
 - **Licensed code text was published by mistake, and is now split off before upload.**
   Cigna puts CPT short descriptors (AMA copyright) in `name` and `description` for
   94,234 of 116,566 codes; the first code table on `ratecommons/cigna` and the per-file
