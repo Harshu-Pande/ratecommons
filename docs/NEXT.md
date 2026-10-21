@@ -10,16 +10,19 @@ code for another track until it reports to `datasets/ratecommons/ops`.
 - How to start runs and read results without the Actions API: see DECISIONS
   (edit `ops/smoke-request.txt`, `ops/archive-request.txt`, `ops/kaggle-request.txt`).
 
-## Status, day 1 (2026-10-21, afternoon)
+## Status, day 1 (2026-10-21, evening)
 
 | Track | Done | Next |
 | --- | --- | --- |
-| A. Map | Cigna 124/124 files mapped (Python v0). Rust core is the default parser: parity with `parse.py`, 0.36 GB/s of JSON per GitHub runner (3 workers), shard-level seen-blocks and record cache | Aetna: 6-file test run, then all 6,229 files (252 shards, 12 at a time) |
-| Reduce | Cigna 2026-10 published: 304,709,442 distinct facts from 1,928,514,784 rate rows, 124 networks, 11.6 GB, with a dataset card. Facts reduce uses fixed-size set keys (no list aggregates) | `verify` on Cigna national OAP (running); Aetna reduce in blocks mode |
-| B. Rust core | Typed parse with the same IDs as Python; mimalloc + Fx hashing (2x on GitHub); record cache for byte-identical records | Profile the remaining scan passes (`skip_value`, `obj`); measure the record cache on Aetna |
-| C. Identity | Doctors and Clinicians, IRS exempt orgs. NPPES: CMS page down all day; loader falls back to NBER's copies of the CMS zips (`npi_raw_YYYYMM.zip`) | Check the NPPES run; reassignment (PPEF) |
-| D. Code dictionary | `codebook.py` written | Run on Cigna 2026-10 |
-| Licensing | CPT/CDT/RC/proprietary-DRG text withheld from public tables; raw text in the private `ratecommons/restricted` bucket | Squash the Cigna dataset history (old code table) once Harshu agrees |
+| A. Map | Rust core default: 0.36 GB/s (Cigna) and 0.21 GB/s (Aetna) of JSON per runner, RSS 4.5 GB on Aetna. Provider sets stored as provider lists. Chunked uploads. Cigna re-mapped (124/124). Aetna wave 1 running: shards 0-7 of 252 (143 largest files, 261 GB gzip) | Measure wave 1 after reduce; plan the remaining waves against the 7.8 TB storage limit |
+| Reduce | Fixed-size set keys; blocks mode; reads chunk layout | Cigna 2026-10 re-reduce running; then `verify` + `card`. Aetna: per-wave reduce, then a cross-wave merge (network sets of different waves are disjoint, so set keys combine by XOR) |
+| B. Rust core | Parity with `parse.py`; mimalloc/Fx; record cache; byte-bounded queues; live progress | Price-term path (Aetna prices are ~76% unique) and record scanning |
+| C. Identity | NPPES 2026-10 (via NBER), Doctors and Clinicians, IRS exempt orgs | NPPES weekly/deactivations when the CMS page returns |
+| D. Code dictionary | `codebook` command | Run on Aetna (LOCAL codes) after its reduce |
+| Licensing | Licensed descriptor text withheld; raw text private | Harshu to OK squashing the Cigna dataset history |
+
+Scale note: an Aetna file holds about 33 million rates (20 GB of JSON); all 6,229 files are about
+200 billion rate rows before cross-file dedup, and about 10 TB of map output.
 
 How to run things (no Actions API needed): edit the last line of `ops/run-request.txt`
 (any `ticdata` command), `ops/map-request.txt` (`<payer> <shards> [limit]`),
