@@ -79,17 +79,27 @@ def networks(local_root: str, payer: str) -> list[dict]:
     return rows
 
 
+def in_shards(path: str, shards: tuple[int, int] | None) -> bool:
+    """True when `shards` is None or the path is in a chunk folder shard-NNN-CC with a <= NNN <= b."""
+    if shards is None:
+        return True
+    import re
+
+    m = re.search(r"/shard-(\d+)-\d+/", path)
+    return bool(m) and shards[0] <= int(m.group(1)) <= shards[1]
+
+
 def reduce_part(payer: str, release: str, part: int, bucket: str, out: str, token=None,
-                workdir: str = "/tmp/reduce") -> dict:
-    """Merge rate_fact part `part` across every file of the release."""
+                workdir: str = "/tmp/reduce", shards: tuple[int, int] | None = None, keys: bool = False) -> dict:
+    """Merge rate_fact part `part` across every file of the release (or of a wave of shards)."""
     t0 = time.time()
     prefix = f"map/{release}/{payer}/"
-    allp = _list(bucket, prefix, token)
+    allp = [p for p in _list(bucket, prefix, token) if in_shards(p, shards)]
     want = [p for p in allp if p.endswith("/meta.json") or p.endswith("/metas.json")
             or p.endswith("/file_block.parquet") or p.endswith(f"/rate_fact/part-{part:02d}.parquet")]
     local = os.path.join(workdir, f"p{part:02d}")
     _fetch(bucket, want, local, prefix, token)
-    res = reduce_part_local(local, payer, release, part, out)
+    res = reduce_part_local(local, payer, release, part, out, keys=keys)
     res["download_seconds"] = round(time.time() - t0, 1) - res["seconds"]
     return res
 
@@ -154,7 +164,7 @@ def _ns_map(con, keyed: str, members: str, name: str) -> int:
     return con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
 
 
-def reduce_part_local(local: str, payer: str, release: str, part: int, out: str) -> dict:
+def reduce_part_local(local: str, payer: str, release: str, part: int, out: str, keys: bool = False) -> dict:
     """Distinct facts of one partition, each with the set of networks (derived from files) it appears in.
 
     Memory stays flat: no list aggregates over the big input, only fixed-size group states.
@@ -251,15 +261,64 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str)
     res["network_sets"] = _ns_map(con, "SELECT x1, x2, n_net, fact_id rep FROM reps", members, "fns")
     con.execute(f"""
         COPY (SELECT f.{FACT_COLS.replace(', ', ', f.')}, s.ns_id, '{release}' AS valid_from
+                     {", f.x1, f.x2, f.n_net" if keys else ""}
               FROM {t} f JOIN fns s USING (x1, x2, n_net)
               ORDER BY f.billing_code_type, f.billing_code, f.ps_id)
         TO '{out}/rate_fact/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)""")
-    extra = "UNION SELECT ns_id, network_ids FROM bns" if fbs else ""
-    con.execute(f"""COPY (SELECT ns_id, network_ids FROM fns {extra})
+    kc = ", x1, x2, n_net" if keys else ""  # wave outputs keep set keys for the cross-wave merge
+    extra = f"UNION SELECT ns_id, network_ids{kc} FROM bns" if fbs else ""
+    con.execute(f"""COPY (SELECT ns_id, network_ids{kc} FROM fns {extra})
                     TO '{out}/network_set/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
     res["facts"] = con.execute(f"SELECT count(*) FROM read_parquet('{out}/rate_fact/part-{part:02d}.parquet')").fetchone()[0]
     if res["facts"] != con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]:
         raise RuntimeError("facts lost joining to their network sets")
+    os.remove(tmp)
+    res["seconds"] = round(time.time() - t0, 1)
+    return res
+
+
+def merge_part_local(local: str, release: str, part: int, out: str) -> dict:
+    """Merge the wave outputs of one fact part (local/<wave>/rate_fact|network_set/part-XX).
+
+    Waves hold disjoint sets of files, hence disjoint networks, so a fact's full set key is the
+    XOR of its per-wave keys and the member count is their sum; members of each final set are
+    the union of the wave sets of one representative fact."""
+    t0 = time.time()
+    facts = sorted(str(p) for p in Path(local).glob(f"*/rate_fact/part-{part:02d}.parquet"))
+    sets = sorted(str(p) for p in Path(local).glob(f"*/network_set/part-{part:02d}.parquet"))
+    os.makedirs(f"{out}/rate_fact", exist_ok=True)
+    os.makedirs(f"{out}/network_set", exist_ok=True)
+    res = {"part": part, "waves": len(facts), "seconds": 0.0}
+    if not facts:
+        return res
+    con = _duck(local)
+    tmp = f"{local}/merged_tmp.parquet"
+    res["rows_in"] = con.execute(f"SELECT count(*) FROM read_parquet({facts!r})").fetchone()[0]
+    con.execute(f"""COPY (SELECT fact_id, {ANY_COLS}, bit_xor(x1) x1, bit_xor(x2) x2, sum(n_net)::INTEGER n_net
+                          FROM read_parquet({facts!r}) GROUP BY fact_id) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)""")
+    t = f"read_parquet('{tmp}')"
+    con.execute(f"CREATE TABLE wsets AS SELECT DISTINCT x1, x2, n_net, network_ids FROM read_parquet({sets!r})")
+    con.execute(f"CREATE TABLE reps AS SELECT x1, x2, n_net, any_value(fact_id) fact_id FROM {t} GROUP BY ALL")
+    con.execute(f"""
+        CREATE TABLE fns AS
+        WITH m AS (SELECT r.x1, r.x2, r.n_net, list_sort(list_distinct(flatten(list(w.network_ids)))) network_ids
+                   FROM reps r JOIN read_parquet({facts!r}) f ON f.fact_id = r.fact_id
+                   JOIN wsets w ON w.x1 = f.x1 AND w.x2 = f.x2 AND w.n_net = f.n_net
+                   GROUP BY r.x1, r.x2, r.n_net)
+        SELECT x1, x2, n_net, {NS_SQL} AS ns_id, network_ids FROM m""")
+    bad = con.execute("SELECT count(*) FROM fns WHERE len(network_ids) <> n_net").fetchone()[0]
+    if bad or con.execute("SELECT count(*) FROM fns").fetchone()[0] != con.execute("SELECT count(*) FROM reps").fetchone()[0]:
+        raise RuntimeError(f"{bad} merged network sets disagree with their keys")
+    con.execute(f"""
+        COPY (SELECT f.{FACT_COLS.replace(', ', ', f.')}, s.ns_id, '{release}' AS valid_from
+              FROM {t} f JOIN fns s USING (x1, x2, n_net)
+              ORDER BY f.billing_code_type, f.billing_code, f.ps_id)
+        TO '{out}/rate_fact/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)""")
+    con.execute(f"""COPY (SELECT ns_id, network_ids FROM fns UNION
+                          SELECT DISTINCT ns_id, network_ids FROM read_parquet({sets!r}))
+                    TO '{out}/network_set/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+    res["facts"] = con.execute(f"SELECT count(*) FROM read_parquet('{out}/rate_fact/part-{part:02d}.parquet')").fetchone()[0]
+    res["network_sets"] = con.execute("SELECT count(*) FROM fns").fetchone()[0]
     os.remove(tmp)
     res["seconds"] = round(time.time() - t0, 1)
     return res
@@ -274,11 +333,11 @@ def restricted_dir(out: str) -> str:
 
 
 def reduce_dims(payer: str, release: str, bucket: str, out: str, token=None, workdir: str = "/tmp/reduce",
-                table: str = "all") -> dict:
+                table: str = "all", shards: tuple[int, int] | None = None) -> dict:
     """Distinct dimension rows across all files (one table, or 'meta' for source_file/network)."""
     t0 = time.time()
     prefix = f"map/{release}/{payer}/"
-    allp = _list(bucket, prefix, token)
+    allp = [p for p in _list(bucket, prefix, token) if in_shards(p, shards)]
     is_meta = lambda p: p.endswith("/meta.json") or p.endswith("/metas.json")  # noqa: E731
     if table == "meta":
         want = [p for p in allp if is_meta(p)]
@@ -317,14 +376,18 @@ def reduce_dims_local(local: str, payer: str, out: str, table: str = "all") -> d
         return res
     con = _duck(local)
     for name, key in tables.items():
-        files = sorted(str(p) for p in Path(local).glob(f"*/{name}.parquet"))
+        files = sorted(str(p) for p in Path(local).glob(f"*/{name}.parquet")) + \
+            sorted(str(p) for p in Path(local).glob(f"*/{name}/*.parquet"))  # wave outputs are sliced
         if not files:
             continue
         src = f"read_parquet({files!r}, union_by_name = true)"
+        cols = {d[0] for d in con.execute(f"SELECT * FROM {src} LIMIT 0").description}
         n_in = con.execute(f"SELECT count(*) FROM {src}").fetchone()[0]
         if name == "provider_group":
             sel = f"""SELECT pg_id, any_value(tin_type) tin_type, any_value(tin_value) tin_value,
-                             list(DISTINCT tin_raw) tin_raws, any_value(npis) npis, any_value(npi_count) npi_count,
+                             {"list_distinct(flatten(list(coalesce(tin_raws, [tin_raw]))))" if "tin_raws" in cols and "tin_raw" in cols
+                              else "list_distinct(flatten(list(tin_raws)))" if "tin_raws" in cols
+                              else "list(DISTINCT tin_raw)"} tin_raws, any_value(npis) npis, any_value(npi_count) npi_count,
                              any_value(tin_wide) tin_wide, list_distinct(flatten(list(business_names))) business_names
                       FROM {src} GROUP BY pg_id"""
             con.execute(f"COPY ({sel}) TO '{out}/{name}.parquet' (FORMAT parquet, COMPRESSION zstd)")

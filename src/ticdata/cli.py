@@ -80,6 +80,9 @@ def main(argv=None) -> int:
                    help="0-15 for rate_fact parts, dims-<table> (provider_group, provider_set, price_term, "
                         "price_list, code, meta), or dims for all")
     p.add_argument("--publish", action="store_true", help="upload to datasets/<org>/<payer>")
+    p.add_argument("--wave", help="reduce only one wave of shards into reduced/<release>/<payer>/wave-<W>/ (work bucket)")
+    p.add_argument("--shards", help="the wave's shard range a-b")
+    p.add_argument("--merge", action="store_true", help="merge every wave in reduced/ and publish")
     p.add_argument("--out")
 
     p = sub.add_parser("fetch", help="download one payer file (first name containing --match) to a path")
@@ -179,11 +182,45 @@ def main(argv=None) -> int:
 
         tok = hfio.token_for(hfio.bucket(cfg.work_bucket))
         outdir = f"/tmp/reduce-out/{a.payer}/{a.release}"
-        if a.part.startswith("dims"):
-            table = a.part.split("-", 1)[1] if "-" in a.part else "all"
-            res = reduce.reduce_dims(a.payer, a.release, cfg.work_bucket, outdir, token=tok, table=table)
+        shards = tuple(int(x) for x in a.shards.split("-")) if a.shards else None
+        is_dims = a.part.startswith("dims")
+        table = (a.part.split("-", 1)[1] if "-" in a.part else "all") if is_dims else None
+        if a.merge:  # inputs are the wave outputs, not the map outputs
+            prefix = f"reduced/{a.release}/{a.payer}/"
+            allp = reduce._list(cfg.work_bucket, prefix, tok)
+            if is_dims:
+                want = [p for p in allp if p.endswith("/metas.json") or (table != "meta" and (
+                    f"/{table}/" in p or p.endswith(f"/{table}.parquet")))]
+            else:
+                k = int(a.part)
+                want = [p for p in allp if p.endswith(f"/rate_fact/part-{k:02d}.parquet")
+                        or p.endswith(f"/network_set/part-{k:02d}.parquet")]
+            local = f"/tmp/reduce/merge-{a.part}"
+            reduce._fetch(cfg.work_bucket, want, local, prefix, tok)
+            res = (reduce.reduce_dims_local(local, a.payer, outdir, table) if is_dims
+                   else reduce.merge_part_local(local, a.release, int(a.part), outdir))
+        elif is_dims:
+            res = reduce.reduce_dims(a.payer, a.release, cfg.work_bucket, outdir, token=tok, table=table, shards=shards)
+            if a.wave and table == "meta":  # keep the wave's file metadata for the merge
+                metas = [m for _, m in reduce._metas(f"/tmp/reduce/dims-{table}")]
+                Path(outdir).mkdir(parents=True, exist_ok=True)
+                (Path(outdir) / "metas.json").write_text(json.dumps(metas))
         else:
-            res = reduce.reduce_part(a.payer, a.release, int(a.part), cfg.work_bucket, outdir, token=tok)
+            res = reduce.reduce_part(a.payer, a.release, int(a.part), cfg.work_bucket, outdir, token=tok,
+                                     shards=shards, keys=bool(a.wave))
+        if a.wave:
+            from huggingface_hub import batch_bucket_files
+
+            private = Path(reduce.restricted_dir(outdir)) / "code_text.parquet"
+            if private.exists():
+                batch_bucket_files(cfg.restricted_bucket,
+                                   add=[(str(private), f"release/{a.payer}/{a.release}/wave-{a.wave}/code_text.parquet")],
+                                   token=hfio.token_for(hfio.bucket(cfg.restricted_bucket)))
+            prefix = f"reduced/{a.release}/{a.payer}/wave-{a.wave}"
+            adds = [(str(f), f"{prefix}/{f.relative_to(outdir)}") for f in Path(outdir).rglob("*") if f.is_file()]
+            batch_bucket_files(cfg.work_bucket, add=adds, token=tok)
+            res["wave_output"] = prefix
+            a.publish = False
         if a.publish:
             private = Path(reduce.restricted_dir(outdir)) / "code_text.parquet"
             if private.exists():  # private copy first, then the public tables

@@ -54,3 +54,48 @@ def test_shard_chunks_reduce_like_per_file_outputs(tmp_path, rust, monkeypatch):
     assert sum(b["n_files"] for b in blocks) == 9  # 3 records in each of 3 files
     code = pq.read_table(tmp_path / "out/code.parquet").to_pylist()
     assert all(c["name"] is None for c in code if c["billing_code_type"] in ("CPT", "RC"))
+
+
+def test_wave_reduce_then_merge_equals_one_reduce(tmp_path):
+    """Two waves reduced separately and merged give the same facts and network sets as one reduce."""
+    import shutil
+
+    from ticdata.pipeline import run_shard
+    from ticdata.reduce import merge_part_local, reduce_dims_local, reduce_part_local
+
+    web = tmp_path / "web"
+    web.mkdir()
+    doc_b = copy.deepcopy(DOC)
+    doc_b["in_network"][0]["negotiated_rates"][0]["negotiated_prices"][0]["negotiated_rate"] = 80.0
+    docs = {"2026-10-01_a.json.gz": DOC, "2026-10-01_b.json.gz": doc_b, "2026-10-01_c.json.gz": doc_b}
+    docs["2026-10-01_c.json.gz"] = copy.deepcopy(doc_b)
+    docs["2026-10-01_c.json.gz"]["in_network"][1]["negotiated_rates"][0]["negotiated_prices"][0]["negotiated_rate"] = 99
+    for n, d in docs.items():
+        (web / n).write_bytes(gzip.compress(json.dumps(d).encode()))
+    srv = _serve(web)
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    f = lambda n: {"name": n, "url": f"{base}/{n}"}  # noqa: E731
+    plan = {"payer": "test", "shards": [{"shard": 0, "files": [f("2026-10-01_a.json.gz"), f("2026-10-01_b.json.gz")]},
+                                        {"shard": 1, "files": [f("2026-10-01_c.json.gz")]}]}
+    for sh in (0, 1):
+        run_shard(plan, sh, workdir=str(tmp_path / "work"), chunk_out=str(tmp_path / "map"))
+    srv.shutdown()
+    for k in range(16):
+        reduce_part_local(str(tmp_path / "map"), "test", "2026-10", k, str(tmp_path / "one"))
+    for w, sh in ((1, "shard-000-00"), (2, "shard-001-00")):
+        (tmp_path / f"w{w}").mkdir()
+        shutil.copytree(tmp_path / "map" / sh, tmp_path / f"w{w}" / sh)
+        for k in range(16):
+            reduce_part_local(str(tmp_path / f"w{w}"), "test", "2026-10", k, str(tmp_path / "waves" / f"wave-{w}"),
+                              keys=True)
+        reduce_dims_local(str(tmp_path / f"w{w}"), "test", str(tmp_path / "waves" / f"wave-{w}"), "provider_group")
+    for k in range(16):
+        merge_part_local(str(tmp_path / "waves"), "2026-10", k, str(tmp_path / "merged"))
+    one, merged = _fact_sets(tmp_path / "one"), _fact_sets(tmp_path / "merged")
+    assert one == merged and sorted(len(s) for s in one.values()).count(3) >= 1
+    dims = reduce_dims_local(str(tmp_path / "waves"), "test", str(tmp_path / "mdims"), "provider_group")
+    single = reduce_dims_local(str(tmp_path / "map"), "test", str(tmp_path / "sdims"), "provider_group")
+    assert dims["tables"]["provider_group"]["rows_out"] == single["tables"]["provider_group"]["rows_out"] == 4
+    a = pq.read_table(tmp_path / "mdims/provider_group.parquet").sort_by("pg_id").to_pylist()
+    b = pq.read_table(tmp_path / "sdims/provider_group.parquet").sort_by("pg_id").to_pylist()
+    assert [sorted(r["tin_raws"]) for r in a] == [sorted(r["tin_raws"]) for r in b]
