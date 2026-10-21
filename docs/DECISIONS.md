@@ -5,6 +5,19 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **NPPES: the CMS download page stayed "down for maintenance until further notice".**
+  The NBER mirror (data.nber.org/npi/zip/) keeps byte copies of the CMS monthly and
+  weekly source zips (newest processed month listed: August 2026). The loader now falls
+  back to the newest monthly zip there and records the mirror URL as the source.
+- **Reduce: list aggregates over 120 million rows ran out of temp disk (81 GB free).**
+  `list(DISTINCT network_id ORDER BY network_id)` per fact makes DuckDB buffer every
+  input row for the ordered aggregate. Network sets are now grouped by fixed-size,
+  order-free keys: `bit_xor` of the two 64-bit halves of each member network ID plus
+  the member count, over distinct (fact, network) pairs. The published `ns_id` is
+  unchanged (md5 over the sorted network IDs), computed once per set from one
+  representative fact, and every set is checked to have as many members as its key
+  says. In blocks mode a fact found in one block takes the block's set directly; only
+  facts found in several blocks are exploded to (fact, network) pairs.
 - **First full map run: Cigna October 2026, 124 of 124 files parsed, 0 failures.**
   1,928,514,784 negotiated rates in 30,297,670 billing-code records, from 1,237,558
   provider references. 17.6 runner-hours on 40 shards (about 78 minutes wall time at
