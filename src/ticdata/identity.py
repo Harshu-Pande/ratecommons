@@ -87,25 +87,40 @@ NBER_NOTES: list[str] = []
 
 def _nber_latest(s: requests.Session) -> str | None:
     """Newest monthly CMS zip on the NBER mirror (byte copies of the CMS source zips), used while
-    the CMS download page is down. Notes on what each listing returned go to NBER_NOTES."""
+    the CMS download page is down. The listing may hold the zips or year folders holding them.
+    Notes on what each listing returned go to NBER_NOTES."""
     pat = re.compile(r"""href\s*=\s*["']?([^"' >]*?NPPES_Data_Dissemination_([A-Za-z]+)_(\d{4})(_V\d)?\.zip)""", re.I)
-    for base in NBER_ZIPS:
+    year_pat = re.compile(r"""href\s*=\s*["']?((?:[^"' >]*/)?(20\d\d)/?)["' >]""", re.I)
+
+    def listing(url: str):
         try:
-            r = s.get(base, timeout=60, headers={"User-Agent": USER_AGENT})
-            html = r.text
+            r = s.get(url, timeout=60, headers={"User-Agent": USER_AGENT})
         except Exception as ex:
-            NBER_NOTES.append(f"{base}: {repr(ex)[:200]}")
+            NBER_NOTES.append(f"{url}: {repr(ex)[:200]}")
+            return None, ""
+        hrefs = re.findall(r"""href\s*=\s*["']?([^"' >]+)""", r.text, flags=re.I)
+        NBER_NOTES.append(f"{url}: HTTP {r.status_code} -> {r.url}, {len(r.text)} chars, hrefs {hrefs[:40]}")
+        return r, r.text
+
+    for base in NBER_ZIPS:
+        r, html = listing(base)
+        if r is None:
             continue
-        found = pat.findall(html)
-        NBER_NOTES.append(f"{base}: HTTP {r.status_code} -> {r.url}, {len(html)} chars, {len(found)} monthly zips; "
-                          f"head {html[:200]!r}")
+        pages = [(r.url, html)]
+        years = sorted({(int(y), h) for h, y in year_pat.findall(html)}, reverse=True)[:2]
+        for _, h in years:
+            u = requests.compat.urljoin(r.url if r.url.endswith("/") else r.url + "/", h)
+            r2, html2 = listing(u if u.endswith("/") else u + "/")
+            if r2 is not None:
+                pages.append((r2.url, html2))
+        found = [(page_url, m) for page_url, page in pages for m in pat.findall(page)]
         if not found:
             continue
-        best = max(found, key=lambda h: (int(h[2]), MONTHS.get(h[1].capitalize(), 0), h[3]))
+        page_url, best = max(found, key=lambda x: (int(x[1][2]), MONTHS.get(x[1][1].capitalize(), 0), x[1][3]))
         href = best[0]
         if href.startswith("http"):
             return href
-        return requests.compat.urljoin(r.url if r.url.endswith("/") else r.url + "/", href)
+        return requests.compat.urljoin(page_url if page_url.endswith("/") else page_url + "/", href)
     return None
 
 

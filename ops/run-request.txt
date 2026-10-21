@@ -8,3 +8,4 @@ pair --payer aetna --match pl-49i-tr25 --match pl-4x2-tr25 --match pl-oe-tr25 --
 nppes --upload --out reports/nppes.json
 pair --payer aetna --match pl-49i-tr25 --match pl-4x2-tr25 --match pl-oe-tr25 --out reports/pair-aetna.json
 nppes --upload --out reports/nppes.json
+nppes --upload --out reports/nppes.json
