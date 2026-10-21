@@ -5,6 +5,22 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **Experiment E2b: download whole files, and use cores for files, not inside a file.**
+  On a GitHub runner, 8 parallel 64 MB range windows downloaded at 255 MB/s (Cigna
+  national OAP, 1.59 GB in 6 s) and 281 MB/s (UHC P3, 15.5 GB in 55 s), about 2.5x
+  one stream. rapidgzip on the local file gave 0.83 GB/s of JSON with 1 thread and
+  0.67 GB/s with 4 (UHC P3: 306 GB of JSON in 6.4 min). Parallel decompression does
+  not pay on these files, so the plan is: whole-file download, one decompression
+  thread per file, several files per machine. UHC P3 is 306 GB of JSON (19.7:1).
+- **Parser v0 (Python) runs at about 10-13 MB/s of JSON** after caching and is for
+  Cigna only (about 0.5 TB of JSON). Aetna (about 72 TB of JSON) and UHC need the
+  Rust core; its target is to parse at decompression speed, about 0.8 GB/s per file.
+- **Parse memory.** rapidgzip's chunk cache cost about 2 GB per open file, so the
+  Python parser reads gzip with zlib (the parser, not inflate, is the bottleneck).
+  Price terms and price lists stream to disk with bounded "recently seen" sets;
+  a 62 MB Cigna file now peaks at 2.3 GB (was 4.6 GB).
+- **Identity sources loaded** to `datasets/ratecommons/identity`: Doctors and Clinicians
+  (3,630,233 rows, release 2026-10) and IRS exempt organizations (1,975,975 rows).
 - **NPPES bulk download was down for maintenance (07:14 UTC).** `NPI_Files.html`
   said "This site will be down for maintenance until further notice" and the October
   zip returned 404 (a cached copy of the page still listed it). Track C started with

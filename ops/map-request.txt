@@ -1,2 +1,3 @@
 # Edit on main to run the map stage; last non-comment line: <payer> <shards> [limit]
 cigna 4 8
+cigna 40

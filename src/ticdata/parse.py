@@ -60,6 +60,18 @@ def h_ids(tag: str, ids) -> bytes:
     return xxhash.xxh3_128_digest(tag.encode() + b"".join(sorted(set(ids))))
 
 
+def pack(ids) -> bytes:
+    """Sorted, distinct 16-byte IDs packed into one bytes object (16 bytes per ID in memory)."""
+    return b"".join(sorted(set(i for i in ids if i)))
+
+
+def unpack(blob: bytes) -> list[bytes]:
+    return [blob[i:i + 16] for i in range(0, len(blob), 16)]
+
+
+SEEN_CAP = 2_000_000   # bounded in-file dedup sets (IDs only)
+RAW_CACHE = 250_000    # bounded raw-value caches
+
 PRICE_KEYS = frozenset(("negotiated_type", "negotiated_rate", "expiration_date", "service_code",
                         "billing_class", "setting", "billing_code_modifier", "additional_information"))
 
@@ -67,13 +79,22 @@ PRICE_KEYS = frozenset(("negotiated_type", "negotiated_rate", "expiration_date",
 # ---------------------------------------------------------------- opening files
 
 def open_json_stream(path: str, threads: int | None = None):
-    """Binary stream of the JSON inside a local file: gzip (any number of members), zip or plain."""
+    """Binary stream of the JSON inside a local file: gzip (any number of members), zip or plain.
+
+    Plain zlib by default: the Python parser runs at about 10 MB/s of JSON, far below one
+    core's inflate speed, and rapidgzip's chunk cache costs about 2 GB of memory. Pass
+    `threads` > 1 to use rapidgzip where decompression is the bottleneck (the Rust core).
+    """
     with open(path, "rb") as f:
         magic = f.read(4)
     if magic[:2] == b"\x1f\x8b":
-        import rapidgzip
+        if threads and threads > 1:
+            import rapidgzip
 
-        return rapidgzip.open(path, parallelization=threads or os.cpu_count() or 1)
+            return rapidgzip.open(path, parallelization=threads)
+        import gzip
+
+        return gzip.open(path, "rb")
     if magic[:2] == b"PK":
         import zipfile
 
@@ -199,15 +220,19 @@ class FileParser:
         self.pg: dict[bytes, dict] = {}
         self.ps: dict[bytes, list[bytes]] = {}
         self.refs: dict[str, dict] = {}
-        self.pt: dict[bytes, dict] = {}
-        self.pl: dict[bytes, list[bytes]] = {}
+        # price terms and lists can number 10^7-10^8 in national files: rows stream to writers,
+        # and only bounded "recently seen" sets stay in memory. A repeat after a reset is written
+        # again; the reduce stage removes such duplicates.
+        self.pt_out = None
+        self.pl_out = None
+        self._pt_seen: dict[bytes, None] = {}
+        self._pl_seen: dict[bytes, None] = {}
         self.codes: dict[bytes, dict] = {}
         self.fact_buf: list[tuple] = []   # flushed to Parquet in batches (files can hold 10^8 facts)
         self.fact_sink = None
         self.counts: Counter = Counter()
         self._refset: dict[tuple, bytes] = {}   # raw provider_references list -> ps_id
         self._ptraw: dict[tuple, bytes] = {}    # raw price fields -> pt_id
-        self._plraw: dict[tuple, bytes] = {}    # sorted pt_ids -> pl_id
 
     # provider groups ------------------------------------------------------
     def provider_group(self, g: dict) -> bytes | None:
@@ -231,10 +256,10 @@ class FileParser:
         return pid
 
     def provider_set(self, pg_ids) -> bytes:
-        ids = sorted(set(p for p in pg_ids if p is not None))
-        sid = h_ids("ps", ids)
+        packed = pg_ids if isinstance(pg_ids, bytes) else pack(pg_ids)
+        sid = xxhash.xxh3_128_digest(b"ps" + packed)  # same as h_ids("ps", ids)
         if sid not in self.ps:
-            self.ps[sid] = ids
+            self.ps[sid] = packed
         return sid
 
     def reference(self, ref: dict):
@@ -244,7 +269,7 @@ class FileParser:
             self.flags["remote_provider_reference"] += 1
         if rid in self.refs:
             self.flags["provider_reference_id_repeated"] += 1
-        self.refs[rid] = {"provider_group_id": rid, "pg_ids": sorted(set(i for i in ids if i)),
+        self.refs[rid] = {"provider_group_id": rid, "pg_ids": pack(ids),
                           "network_name": [str(n) for n in (ref.get("network_name") or [])],
                           "location": raw_str(ref.get("location"))}
         self.counts["provider_references"] += 1
@@ -260,6 +285,8 @@ class FileParser:
             pid = self._ptraw.get(rk)
             if pid is None:
                 pid = self._price_term(p)
+                if len(self._ptraw) >= RAW_CACHE:
+                    self._ptraw.clear()
                 self._ptraw[rk] = pid
             return pid
         return self._price_term(p)
@@ -277,7 +304,11 @@ class FileParser:
         key = (ntype, e4, raw_str(p.get("billing_class")), setting, pos, mods,
                raw_str(p.get("expiration_date")), info)
         pid = h("pt", *key)
-        if pid not in self.pt:
+        if pid not in self._pt_seen:
+            if len(self._pt_seen) >= SEEN_CAP:
+                self._pt_seen.clear()
+                self.counts["pt_seen_resets"] += 1
+            self._pt_seen[pid] = None
             row_flags = []
             if e4 is not None and e4 <= PLACEHOLDER_E4 and (ntype or "").lower() != "percentage":
                 row_flags.append("placeholder_amount")
@@ -287,7 +318,7 @@ class FileParser:
             extra = {k: v for k, v in p.items() if k not in (
                 "negotiated_rate", "negotiated_type", "setting", "service_code", "billing_code_modifier",
                 "additional_information", "billing_class", "expiration_date")}
-            self.pt[pid] = {"pt_id": pid, "negotiated_type": ntype, "rate_e4": e4,
+            self.pt_out.append({"pt_id": pid, "negotiated_type": ntype, "rate_e4": e4,
                             "rate_raw": raw_str(p.get("negotiated_rate")),
                             "billing_class": key[2], "setting": setting, "service_code": pos,
                             "service_code_raw": json.dumps(p.get("service_code"), default=str)
@@ -295,23 +326,28 @@ class FileParser:
                             "billing_code_modifier": mods, "expiration_date": key[6],
                             "additional_information": info, "applies_to_revenue_codes": rc_ranges(info),
                             "extra": json.dumps(extra, default=str) if extra else None,
-                            "flags": row_flags}
+                            "flags": row_flags})
         return pid
 
     def price_list(self, prices) -> bytes:
-        ids = tuple(sorted(set(self.price_term(p) for p in prices or [] if isinstance(p, dict))))
-        lid = self._plraw.get(ids)
-        if lid is not None:
-            return lid
-        lid = h_ids("pl", ids)
-        self._plraw[ids] = lid
-        if lid not in self.pl:
-            self.pl[lid] = ids
-            # several amounts with identical terms otherwise: kept as a set, flagged
-            seen = Counter((t["negotiated_type"], t["billing_class"], t["setting"],
-                            tuple(t["service_code"]), tuple(t["billing_code_modifier"]))
-                           for t in (self.pt[i] for i in ids))
-            if any(c > 1 for c in seen.values()):
+        prices = [p for p in prices or [] if isinstance(p, dict)]
+        ids = tuple(sorted(set(self.price_term(p) for p in prices)))
+        lid = xxhash.xxh3_128_digest(b"pl" + b"".join(ids))  # same as h_ids("pl", ids); ids sorted
+        if lid not in self._pl_seen:
+            if len(self._pl_seen) >= SEEN_CAP:
+                self._pl_seen.clear()
+                self.counts["pl_seen_resets"] += 1
+            self._pl_seen[lid] = None
+            self.pl_out.append({"pl_id": lid, "pt_ids": list(ids)})
+            # several amounts under otherwise identical terms: kept as a set, flagged
+            amounts: dict[tuple, set] = {}
+            for p in prices:
+                sc, bm = p.get("service_code") or [], p.get("billing_code_modifier") or []
+                k = (p.get("negotiated_type"), p.get("billing_class"), p.get("setting"),
+                     tuple(sorted(str(x).strip().zfill(2) for x in sc)) if isinstance(sc, list) else str(sc),
+                     tuple(sorted(str(x).strip() for x in bm)) if isinstance(bm, list) else str(bm))
+                amounts.setdefault(k, set()).add(str(p.get("negotiated_rate")))
+            if any(len(v) > 1 for v in amounts.values()):
                 self.flags["price_list_multiple_amounts"] += 1
         return lid
 
@@ -343,6 +379,8 @@ class FileParser:
                 sid = self._refset.get(rk)
                 if sid is None:
                     sid = self._resolve_set(nr)
+                    if len(self._refset) >= RAW_CACHE:
+                        self._refset.clear()
                     self._refset[rk] = sid
                 self.layout.add("provider_references")
             else:
@@ -356,19 +394,25 @@ class FileParser:
                 self.fact_buf = []
 
     def _resolve_set(self, nr: dict) -> bytes:
-        pg_ids: list[bytes] = []
+        packed: list[bytes] = []
         for rid in nr.get("provider_references") or []:
             r = self.refs.get(raw_str(rid))
             if r is None:
                 self.flags["provider_reference_unresolved"] += 1
                 continue
-            pg_ids.extend(r["pg_ids"])
+            packed.append(r["pg_ids"])
+        inline = []
         if nr.get("provider_groups"):
             self.layout.add("inline_provider_groups")
-            pg_ids.extend(self.provider_group(g) for g in nr["provider_groups"])
+            inline = [self.provider_group(g) for g in nr["provider_groups"]]
         if nr.get("provider_references"):
             self.layout.add("provider_references")
-        return self.provider_set(pg_ids)
+        if len(packed) == 1 and not inline:
+            return self.provider_set(packed[0])  # already sorted and distinct
+        ids = inline
+        for b in packed:
+            ids.extend(unpack(b))
+        return self.provider_set(ids)
 
     # passes ---------------------------------------------------------------
     def pass_header_and_refs(self, stream):
@@ -421,6 +465,50 @@ def fact_part(ctype: str | None, code: str | None) -> int:
     return xxhash.xxh3_64_intdigest(f"{ctype or ''}{SEP}{code or ''}".encode()) % FACT_PARTS
 
 
+def _schemas():
+    import pyarrow as pa
+
+    b16, lst = pa.binary(16), pa.list_
+    return {
+        "price_term": pa.schema([
+            ("pt_id", b16), ("negotiated_type", pa.string()), ("rate_e4", pa.int64()), ("rate_raw", pa.string()),
+            ("billing_class", pa.string()), ("setting", pa.string()), ("service_code", lst(pa.string())),
+            ("service_code_raw", pa.string()), ("billing_code_modifier", lst(pa.string())),
+            ("expiration_date", pa.string()), ("additional_information", pa.string()),
+            ("applies_to_revenue_codes", lst(pa.string())), ("extra", pa.string()), ("flags", lst(pa.string()))]),
+        "price_list": pa.schema([("pl_id", b16), ("pt_ids", lst(b16))]),
+    }
+
+
+class RowWriter:
+    """Buffers dict rows and streams them to one ZSTD Parquet file."""
+
+    def __init__(self, path: str, schema, batch: int = 200_000):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        self.pa, self.schema, self.batch, self.path = pa, schema, batch, path
+        self.w = pq.ParquetWriter(path, schema, compression="zstd", compression_level=6)
+        self.buf: list[dict] = []
+        self.rows = 0
+
+    def append(self, row: dict):
+        self.buf.append(row)
+        if len(self.buf) >= self.batch:
+            self.flush()
+
+    def flush(self):
+        if self.buf:
+            self.w.write_table(self.pa.Table.from_pylist(self.buf, schema=self.schema), row_group_size=1_000_000)
+            self.rows += len(self.buf)
+            self.buf = []
+
+    def close(self) -> dict:
+        self.flush()
+        self.w.close()
+        return {"rows": self.rows, "bytes": os.path.getsize(self.path)}
+
+
 class FactWriter:
     """Streams rate_fact rows to Parquet, one file per shuffle partition, in file order."""
 
@@ -469,19 +557,11 @@ def _write_tables(fp: FileParser, outdir: str) -> dict:
             ("pg_id", b16), ("tin_type", pa.string()), ("tin_value", pa.string()), ("tin_raw", pa.string()),
             ("npis", lst(pa.int64())), ("npi_count", pa.int32()), ("tin_wide", pa.bool_()),
             ("business_names", lst(pa.string()))])),
-        "provider_set": ([{"ps_id": k, "pg_ids": v} for k, v in fp.ps.items()],
+        "provider_set": ([{"ps_id": k, "pg_ids": unpack(v)} for k, v in fp.ps.items()],
                          pa.schema([("ps_id", b16), ("pg_ids", lst(b16))])),
-        "provider_reference": (list(fp.refs.values()), pa.schema([
+        "provider_reference": ([{**r, "pg_ids": unpack(r["pg_ids"])} for r in fp.refs.values()], pa.schema([
             ("provider_group_id", pa.string()), ("pg_ids", lst(b16)), ("network_name", lst(pa.string())),
             ("location", pa.string())])),
-        "price_term": (list(fp.pt.values()), pa.schema([
-            ("pt_id", b16), ("negotiated_type", pa.string()), ("rate_e4", pa.int64()), ("rate_raw", pa.string()),
-            ("billing_class", pa.string()), ("setting", pa.string()), ("service_code", lst(pa.string())),
-            ("service_code_raw", pa.string()), ("billing_code_modifier", lst(pa.string())),
-            ("expiration_date", pa.string()), ("additional_information", pa.string()),
-            ("applies_to_revenue_codes", lst(pa.string())), ("extra", pa.string()), ("flags", lst(pa.string()))])),
-        "price_list": ([{"pl_id": k, "pt_ids": v} for k, v in fp.pl.items()],
-                       pa.schema([("pl_id", b16), ("pt_ids", lst(b16))])),
         "code": (list(fp.codes.values()), pa.schema([
             ("code_id", b16), ("negotiation_arrangement", pa.string()), ("billing_code_type", pa.string()),
             ("billing_code_type_version", pa.string()), ("billing_code", pa.string()),
@@ -512,6 +592,9 @@ def parse_file(path: str, outdir: str, source: dict | None = None) -> dict:
     os.makedirs(outdir, exist_ok=True)
     fw = FactWriter(os.path.join(outdir, "rate_fact"))
     fp.fact_sink = fw
+    sch = _schemas()
+    fp.pt_out = RowWriter(os.path.join(outdir, "price_term.parquet"), sch["price_term"])
+    fp.pl_out = RowWriter(os.path.join(outdir, "price_list.parquet"), sch["price_list"])
     with open_json_stream(path) as s2:
         fp.pass_items(s2)
     fw(fp.fact_buf)
@@ -519,6 +602,8 @@ def parse_file(path: str, outdir: str, source: dict | None = None) -> dict:
     t2 = time.time()
     sizes = _write_tables(fp, outdir)
     sizes["rate_fact"] = fw.close()
+    sizes["price_term"] = fp.pt_out.close()
+    sizes["price_list"] = fp.pl_out.close()
     meta = {
         "source": source or {}, "local_bytes": size,
         "tail_crc32": f"0x{int.from_bytes(tail[:4], 'little'):08x}" if len(tail) == 8 else None,
