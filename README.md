@@ -29,8 +29,10 @@ All names live in `project.toml`, so a rename is a one-file change.
 
 ## Secrets (repo Settings → Secrets and variables → Actions)
 
-`HF_TOKEN` (fine-grained, write access to the org), `KAGGLE_API_TOKEN`, `KAGGLE_USERNAME`.
-Tokens never go in code, chat or issues.
+`HF_TOKEN` (fine-grained, write access to the `ratecommons` org) and `KAGGLE_API_TOKEN`
+(for workflows that launch Kaggle jobs). The Kaggle user name is in `project.toml`.
+Tokens never go in code or issues. Later hardening: Hugging Face Trusted Publishers
+(GitHub OIDC, one short-lived token per repo or bucket) can replace `HF_TOKEN`.
 
 ## Local use
 

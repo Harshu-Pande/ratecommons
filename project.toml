@@ -11,3 +11,7 @@ manifests_repo = "ratecommons/raw-manifests"
 ops_repo = "ratecommons/ops"
 # Mutable scratch space for the map/shuffle/reduce stages.
 work_bucket = "ratecommons/work"
+
+[kaggle]
+# Kaggle reaches UHC/UMR only (Cigna geo-blocks it, Aetna is unreachable).
+user = "harshupande1"
