@@ -26,7 +26,7 @@ Where each payer runs (measured 2026-10-21, see DECISIONS):
 
 | Payer | Kaggle (Europe) | GitHub Actions (US) |
 | --- | --- | --- |
-| UHC / UMR | yes, 80 MB/s | to be measured |
+| UHC / UMR | yes: 84 MB/s download, 0.33 GB/s JSON (4 vCPU) | to be measured |
 | Cigna | no, geo-blocked | to be measured |
 | Aetna | no, host unreachable | to be measured |
 

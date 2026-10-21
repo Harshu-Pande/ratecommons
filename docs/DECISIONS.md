@@ -13,7 +13,15 @@ Newest first. One entry per lesson: what we saw, what we changed.
   - Aetna is unreachable: Kaggle's resolver returns `127.0.0.1` for
     `mrf.healthsparq.com`, so the connection is refused.
   So Kaggle takes UHC and UMR (the 89 TB bulk, all on UHC's host), and Cigna and
-  Aetna go to US-based workers (GitHub Actions). Every report now records the
+  Aetna go to US-based workers (GitHub Actions).
+- **Kaggle benchmark (UHC P3 file, 4 vCPU).** rapidgzip produced 20.1 GB of JSON
+  from 1.07 GB compressed in 61 s: 0.33 GB/s of JSON, ratio 18.7. Download alone ran
+  at 84 MB/s, so decompression, not the network, is the limit (about 18 MB/s of
+  compressed input). Each Kaggle session has 1.1 TB of free scratch disk (20.9 GB
+  in `/kaggle/working`), so downloading whole files first is practical there.
+  Consequence: UMR cannot be fully decompressed by brute force (about 1.7 PB of
+  JSON); the tail-fingerprint dedup before download, and later the Rust splitter,
+  carry the plan. Every report now records the
   worker's exit country (`machine().egress`) so this is checked, not assumed.
 - **Lightning AI and Modal are out for now.** Lightning is not accepting new
   accounts; Modal requires a card. Neither is in the plan until that changes.
