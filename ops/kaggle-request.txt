@@ -1,0 +1,2 @@
+# Edit on main to launch a Kaggle job; the last line names the folder under kaggle/.
+smoke
