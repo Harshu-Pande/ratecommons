@@ -5,6 +5,9 @@
 //! records at the byte level (no full parse), and hands each record to worker threads that
 //! parse it with serde_json and hash it. Prints JSON timings so we can see whether parsing
 //! keeps up with decompression.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod map;
 mod model;
 mod split;

@@ -432,7 +432,12 @@ pub struct Flags(pub BTreeMap<String, u64>);
 
 impl Flags {
     pub fn add(&mut self, k: &str) {
-        *self.0.entry(k.to_string()).or_insert(0) += 1;
+        match self.0.get_mut(k) {
+            Some(v) => *v += 1,
+            None => {
+                self.0.insert(k.to_string(), 1);
+            }
+        }
     }
     pub fn merge(&mut self, o: &Flags) {
         for (k, v) in &o.0 {

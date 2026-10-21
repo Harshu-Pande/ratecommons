@@ -7,7 +7,8 @@
 //! identical text is normalized and hashed once per worker.
 use crossbeam_channel::{bounded, Receiver, Sender};
 use serde_json::value::RawValue;
-use std::collections::{HashMap, HashSet};
+// Keys are mostly hashes already; Fx avoids SipHash's cost on every lookup.
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -32,7 +33,7 @@ pub struct Seen {
 }
 impl Seen {
     pub fn new(cap: usize) -> Seen {
-        Seen { shards: (0..64).map(|_| Mutex::new(HashSet::new())).collect(), cap: cap / 64 }
+        Seen { shards: (0..64).map(|_| Mutex::new(HashSet::default())).collect(), cap: cap / 64 }
     }
     /// true when `id` was not seen before (the caller then emits its row)
     pub fn insert(&self, id: &Id) -> bool {
@@ -121,6 +122,37 @@ fn provider_group(sh: &Shared, g: &RawValue, f: &mut Flags, counts: &mut HashMap
     Some(pid)
 }
 
+/// The price's terms other than the amount, and its amount, each hashed; same encoding as parse.py.
+fn amounts_key(o: &RawObject) -> (u64, u64) {
+    let mut key: Vec<u8> = Vec::with_capacity(96);
+    for k in ["negotiated_type", "billing_class", "setting"] {
+        key.extend_from_slice(o.get(k).map(|r| r.get()).unwrap_or("null").as_bytes());
+        key.push(SEP);
+    }
+    for (k, pad) in [("service_code", true), ("billing_code_modifier", false)] {
+        match o.get(k) {
+            Some(r) if r.get().starts_with('[') => {
+                let mut v: Vec<String> = arr(Some(r)).unwrap().0.iter()
+                    .map(|x| {
+                        let s = raw_str(Some(x)).map(|s| s.trim().to_string()).unwrap_or("None".into());
+                        if pad && s.chars().count() < 2 { format!("{:0>2}", s) } else { s }
+                    })
+                    .collect();
+                v.sort();
+                key.extend_from_slice(v.join("\u{1e}").as_bytes());
+            }
+            Some(r) if r.get() != "null" => {
+                key.extend_from_slice(b"S:");
+                key.extend_from_slice(r.get().as_bytes());
+            }
+            _ => {}
+        }
+        key.push(SEP);
+    }
+    let amt = raw_str(o.get("negotiated_rate")).map(|s| s.into_owned()).unwrap_or("None".into());
+    (xxhash_rust::xxh3::xxh3_64(&key), xxhash_rust::xxh3::xxh3_64(amt.as_bytes()))
+}
+
 #[derive(Clone)]
 struct Outs {
     fact: Sender<Msg>,
@@ -137,7 +169,7 @@ struct Worker<'s> {
     layout: HashSet<&'static str>,
     c_refs: HashMap<Id, Id>,
     c_prices: HashMap<Id, Id>,
-    c_price: HashMap<Id, Id>,
+    c_price: HashMap<Id, (Id, u64, u64)>,
     pt: Vec<PtRow>,
     pl: Vec<(Id, Vec<Id>)>,
     ps: Vec<(Id, Vec<Id>)>,
@@ -156,13 +188,16 @@ impl<'s> Worker<'s> {
         if force || self.facts.len() >= 200_000 { let v = std::mem::take(&mut self.facts); if !v.is_empty() { self.out.fact.send(Msg::Fact(v)).unwrap(); } }
     }
 
-    fn price_term(&mut self, praw: &RawValue) -> Id {
+    /// (pt_id, hash of the terms other than the amount, hash of the amount): the two hashes feed
+    /// the "several amounts under identical terms" flag without parsing the price again.
+    fn price_term(&mut self, praw: &RawValue) -> (Id, u64, u64) {
         let key = xxh128(praw.get().as_bytes());
-        if let Some(id) = self.c_price.get(&key) {
-            return *id;
+        if let Some(v) = self.c_price.get(&key) {
+            return *v;
         }
         *self.counts.entry("pt_cache_miss").or_insert(0) += 1;
         let p = obj(praw).expect("price is an object");
+        let (terms_h, amt_h) = amounts_key(&p);
         let f = &mut self.flags;
         let rate = p.get("negotiated_rate");
         let rate_s = raw_str(rate).map(|s| s.into_owned());
@@ -230,8 +265,8 @@ impl<'s> Worker<'s> {
         if self.c_price.len() >= CACHE_CAP {
             self.c_price.clear();
         }
-        self.c_price.insert(key, pid);
-        pid
+        self.c_price.insert(key, (pid, terms_h, amt_h));
+        (pid, terms_h, amt_h)
     }
 
     fn price_list(&mut self, prices: Option<&RawValue>) -> Id {
@@ -243,45 +278,25 @@ impl<'s> Worker<'s> {
             .into_iter().filter(|p| p.get().starts_with('{')).collect();
         *self.counts.entry("pl_cache_miss").or_insert(0) += 1;
         let tpt = Instant::now();
-        let mut ids: Vec<Id> = items.iter().map(|p| self.price_term(p)).collect();
+        let terms: Vec<(Id, u64, u64)> = items.iter().map(|p| self.price_term(p)).collect();
         *self.counts.entry("t_price_term_us").or_insert(0) += tpt.elapsed().as_micros() as u64;
+        let mut ids: Vec<Id> = terms.iter().map(|t| t.0).collect();
         let lid = h_ids(b"pl", &mut ids);
         if self.sh.pl_seen.insert(&lid) {
             // several amounts under otherwise identical terms: kept as a set, flagged
-            if items.len() >= 2 {
-                let mut amounts: HashMap<u64, HashSet<u64>> = HashMap::new();
-                for p in &items {
-                    let o = obj(p).unwrap();
-                    let mut key: Vec<u8> = Vec::with_capacity(96);
-                    for k in ["negotiated_type", "billing_class", "setting"] {
-                        key.extend_from_slice(o.get(k).map(|r| r.get()).unwrap_or("null").as_bytes());
-                        key.push(SEP);
-                    }
-                    for (k, pad) in [("service_code", true), ("billing_code_modifier", false)] {
-                        match o.get(k) {
-                            Some(r) if r.get().starts_with('[') => {
-                                let mut v: Vec<String> = arr(Some(r)).unwrap().0.iter()
-                                    .map(|x| {
-                                        let s = raw_str(Some(x)).map(|s| s.trim().to_string()).unwrap_or("None".into());
-                                        if pad && s.chars().count() < 2 { format!("{:0>2}", s) } else { s }
-                                    })
-                                    .collect();
-                                v.sort();
-                                key.extend_from_slice(v.join("\u{1e}").as_bytes());
-                            }
-                            Some(r) if r.get() != "null" => {
-                                key.extend_from_slice(b"S:");
-                                key.extend_from_slice(r.get().as_bytes());
-                            }
-                            _ => {}
+            if terms.len() >= 2 {
+                let mut amounts: HashMap<u64, u64> = HashMap::with_capacity_and_hasher(terms.len(), Default::default());
+                let mut multi = false;
+                for &(_, k, a) in &terms {
+                    match amounts.insert(k, a) {
+                        Some(prev) if prev != a => {
+                            multi = true;
+                            break;
                         }
-                        key.push(SEP);
+                        _ => {}
                     }
-                    let amt = raw_str(o.get("negotiated_rate")).map(|s| s.into_owned()).unwrap_or("None".into());
-                    amounts.entry(xxhash_rust::xxh3::xxh3_64(&key)).or_default()
-                        .insert(xxhash_rust::xxh3::xxh3_64(amt.as_bytes()));
                 }
-                if amounts.values().any(|v| v.len() > 1) {
+                if multi {
                     self.flags.add("price_list_multiple_amounts");
                 }
             }
@@ -430,7 +445,7 @@ impl<'s> Worker<'s> {
 
 fn writer_thread(rx: Receiver<Msg>, outdir: String) -> serde_json::Map<String, serde_json::Value> {
     let fact_dir = format!("{outdir}/rate_fact");
-    let mut w: HashMap<&'static str, Pq> = HashMap::new();
+    let mut w: HashMap<&'static str, Pq> = HashMap::default();
     let mut parts: Vec<Option<Pq>> = (0..FACT_PARTS).map(|_| None).collect();
     let mut busy = std::collections::BTreeMap::<&str, f64>::new();
     fn wr<'a>(w: &'a mut HashMap<&'static str, Pq>, outdir: &str, name: &'static str) -> &'a mut Pq {
@@ -596,7 +611,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     };
 
     let sh = Arc::new(Shared {
-        pg: Mutex::new(PgTable { rows: Vec::new(), index: HashMap::new() }),
+        pg: Mutex::new(PgTable { rows: Vec::new(), index: HashMap::default() }),
         blocks: Seen::new(usize::MAX / 2),
         pt_seen: Seen::new(150_000_000),
         pl_seen: Seen::new(150_000_000),
@@ -617,10 +632,10 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     drop(senders);
 
     let mut main_flags = Flags::default();
-    let mut main_counts: HashMap<&'static str, u64> = HashMap::new();
-    let mut refs: HashMap<Option<String>, Vec<Id>> = HashMap::new();
+    let mut main_counts: HashMap<&'static str, u64> = HashMap::default();
+    let mut refs: HashMap<Option<String>, Vec<Id>> = HashMap::default();
     let mut ref_rows: Vec<RefRow> = Vec::new();
-    let mut ref_index: HashMap<Option<String>, usize> = HashMap::new();
+    let mut ref_index: HashMap<Option<String>, usize> = HashMap::default();
     let mut header = serde_json::Map::new();
     let mut extra_top = serde_json::Map::new();
     let mut keys: Vec<String> = Vec::new();
@@ -701,9 +716,9 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                         let out = wtx.clone();
                         handles.push(std::thread::spawn(move || {
                             let mut w = Worker {
-                                sh: &sh, refs: &refs, out, flags: Flags::default(), counts: HashMap::new(),
-                                layout: HashSet::new(), c_refs: HashMap::new(), c_prices: HashMap::new(),
-                                c_price: HashMap::new(), pt: vec![], pl: vec![], ps: vec![], codes: vec![], facts: vec![],
+                                sh: &sh, refs: &refs, out, flags: Flags::default(), counts: HashMap::default(),
+                                layout: HashSet::default(), c_refs: HashMap::default(), c_prices: HashMap::default(),
+                                c_price: HashMap::default(), pt: vec![], pl: vec![], ps: vec![], codes: vec![], facts: vec![],
                                 fb: vec![],
                             };
                             let mut busy = 0.0f64;
@@ -728,7 +743,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     drop(item_tx);
     let mut flags = main_flags;
     let mut counts = main_counts;
-    let mut layout: HashSet<&'static str> = HashSet::new();
+    let mut layout: HashSet<&'static str> = HashSet::default();
     for h in handles {
         let (f, c, l) = h.join().unwrap();
         flags.merge(&f);
