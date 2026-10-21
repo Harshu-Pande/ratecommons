@@ -10,15 +10,16 @@ code for another track until it reports to `datasets/ratecommons/ops`.
 - How to start runs and read results without the Actions API: see DECISIONS
   (edit `ops/smoke-request.txt`, `ops/archive-request.txt`, `ops/kaggle-request.txt`).
 
-## Head start (night of 2026-10-21): where each track stands
+## Status, day 1 (2026-10-21, afternoon)
 
 | Track | Done | Next |
 | --- | --- | --- |
-| A. Parser v0 | `parse.py` (Parser-rules flags, content-hashed tables), `pipeline.py` + `map.yml` (40 shards). Full Cigna run launched: 124 files, 29.7 GB | Check `runs/*-map-cigna-*`; fix failures; then `reduce` |
-| Reduce | `reduce.py` + `reduce.yml`: 16 fact parts + dims, derived networks and network sets, published to `datasets/ratecommons/cigna` (trusted publisher set) | Run `cigna 2026-10` once the map run is clean; then a dataset card |
-| B. Rust core | `core/` splitter: zlib-rs inflate thread + byte-level record cutter; counts match Python exactly. `core.yml` E7 bench on Cigna national OAP launched | Typed parse (simd-json or serde structs), the same canonical hashes as `parse.py` (cross-check test), Parquet out; then Aetna |
-| C. Identity | `datasets/ratecommons/identity`: Doctors and Clinicians (3.63M rows), IRS exempt orgs (1.98M). NPPES loader ready | NPPES when CMS's download page is back; reassignment (PPEF) |
-| D. Code dictionary | not started | DuckDB query over the reduced Cigna tables: every CSTM-ALL / LOCAL code with counts and example rates |
+| A. Map | Cigna 124/124 files mapped (Python v0). Rust core is the default parser: parity with `parse.py`, 0.36 GB/s of JSON per GitHub runner (3 workers), shard-level seen-blocks and record cache | Aetna: 6-file test run, then all 6,229 files (252 shards, 12 at a time) |
+| Reduce | Cigna 2026-10 published: 304,709,442 distinct facts from 1,928,514,784 rate rows, 124 networks, 11.6 GB, with a dataset card. Facts reduce uses fixed-size set keys (no list aggregates) | `verify` on Cigna national OAP (running); Aetna reduce in blocks mode |
+| B. Rust core | Typed parse with the same IDs as Python; mimalloc + Fx hashing (2x on GitHub); record cache for byte-identical records | Profile the remaining scan passes (`skip_value`, `obj`); measure the record cache on Aetna |
+| C. Identity | Doctors and Clinicians, IRS exempt orgs. NPPES: CMS page down all day; loader falls back to NBER's copies of the CMS zips (`npi_raw_YYYYMM.zip`) | Check the NPPES run; reassignment (PPEF) |
+| D. Code dictionary | `codebook.py` written | Run on Cigna 2026-10 |
+| Licensing | CPT/CDT/RC/proprietary-DRG text withheld from public tables; raw text in the private `ratecommons/restricted` bucket | Squash the Cigna dataset history (old code table) once Harshu agrees |
 
 How to run things (no Actions API needed): edit the last line of `ops/run-request.txt`
 (any `ticdata` command), `ops/map-request.txt` (`<payer> <shards> [limit]`),
@@ -54,11 +55,12 @@ rapidgzip on the local file, against today's streaming 0.7 GB/s (see DECISIONS).
 
 ## Standing answers to the risks the design doc raised
 
-- **CPT descriptions (AMA copyright).** We write our own plain-English description
-  for each CPT code from public explanations, check it, and publish it as our text.
-  It reads better for patients and AI anyway. HCPCS Level II text comes from CMS and
-  is public domain. Payers' own `description` fields stay in the raw tables exactly
-  as published. If the AMA objects to anything, we change it then.
+- **CPT descriptions (AMA copyright).** Following the design's safe default, public
+  tables never carry CPT (or CDT, revenue-code, proprietary DRG) descriptor text from
+  payer files: `licensing.py` withholds it and the raw text is kept, as published, in the
+  private `ratecommons/restricted` bucket (discard no data). We write our own
+  plain-English descriptions for CPT codes later (Track E). HCPCS Level II text from CMS
+  is public domain and stays.
 - **Hugging Face storage ceiling.** Deduplicate first, Parquet with ZSTD, measure in
   experiment E3, and apply for Hugging Face's storage grant for impactful public work
   as soon as the first real dataset is up.
