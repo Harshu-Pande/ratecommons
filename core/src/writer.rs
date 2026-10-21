@@ -49,9 +49,10 @@ pub fn schema(table: &str) -> Arc<Schema> {
             f("name", s.clone()), f("description", s.clone()), f("severity_of_illness", s.clone()), f("bundle", s.clone()),
         ],
         "rate_fact" => vec![
-            f("fact_id", b16()), f("code_id", b16()), f("ps_id", b16()), f("pl_id", b16()),
+            f("fact_id", b16()), f("code_id", b16()), f("ps_id", b16()), f("pl_id", b16()), f("block_id", b16()),
             f("billing_code_type", s.clone()), f("billing_code", s.clone()),
         ],
+        "file_block" => vec![f("block_id", b16()), f("code_id", b16()), f("part", DataType::Int32), f("n_rates", DataType::Int32)],
         other => panic!("unknown table {other}"),
     }))
 }
@@ -134,6 +135,7 @@ pub struct FactRow {
     pub code_id: Id,
     pub ps_id: Id,
     pub pl_id: Id,
+    pub block_id: Id,
     pub billing_code_type: Option<Arc<str>>,
     pub billing_code: Option<Arc<str>>,
 }
@@ -262,7 +264,25 @@ pub fn fact_cols(rows: &[FactRow]) -> Vec<ArrayRef> {
         ids(rows.iter().map(|r| r.code_id)),
         ids(rows.iter().map(|r| r.ps_id)),
         ids(rows.iter().map(|r| r.pl_id)),
+        ids(rows.iter().map(|r| r.block_id)),
         strs(rows.iter().map(|r| r.billing_code_type.as_deref())),
         strs(rows.iter().map(|r| r.billing_code.as_deref())),
     ]
+}
+
+pub struct FbRow {
+    pub block_id: Id,
+    pub code_id: Id,
+    pub part: i32,
+    pub n_rates: i32,
+}
+
+pub fn fb_cols(rows: &[FbRow]) -> Vec<ArrayRef> {
+    let mut p = Int32Builder::new();
+    let mut n = Int32Builder::new();
+    for r in rows {
+        p.append_value(r.part);
+        n.append_value(r.n_rates);
+    }
+    vec![ids(rows.iter().map(|r| r.block_id)), ids(rows.iter().map(|r| r.code_id)), Arc::new(p.finish()), Arc::new(n.finish())]
 }

@@ -44,12 +44,16 @@ def compare(py_dir: str, rs_dir: str) -> dict:
     fb = Counter(tuple(r.values()) for r in rows(rs_dir, "rate_fact"))
     if fa != fb:
         diffs["rate_fact"] = {"python": sum(fa.values()), "rust": sum(fb.values()), "distinct_diff": len(set(fa) ^ set(fb))}
+    ba = Counter(tuple(r.values()) for r in rows(py_dir, "file_block"))
+    bb = Counter(tuple(r.values()) for r in rows(rs_dir, "file_block"))
+    if ba != bb:
+        diffs["file_block"] = {"python": sum(ba.values()), "rust": sum(bb.values())}
     ma = json.loads((Path(py_dir) / "meta.json").read_text())
     mb = json.loads((Path(rs_dir) / "meta.json").read_text())
     for k in ("header", "top_level_keys", "layout", "tail_crc32", "tail_isize"):
         if ma.get(k) != mb.get(k):
             diffs[f"meta.{k}"] = {"python": ma.get(k), "rust": mb.get(k)}
-    for k in ("in_network_items", "negotiated_rates", "provider_references"):
+    for k in ("in_network_items", "negotiated_rates", "provider_references", "blocks_new", "blocks_repeated"):
         if ma["counts"].get(k) != mb["counts"].get(k):
             diffs[f"counts.{k}"] = {"python": ma["counts"].get(k), "rust": mb["counts"].get(k)}
     return diffs

@@ -588,8 +588,9 @@ mod tests {
 
     #[test]
     fn py_dumps_matches_python() {
-        let v: serde_json::Value = serde_json::from_str(r#"{"b": [1, 2.50, "é"], "a": null}"#).unwrap();
-        assert_eq!(py_dumps(&v, true), r#"{"a": null, "b": [1, "2.50", "é"]}"#);
-        assert_eq!(py_dumps(&v, false), r#"{"b": [1, "2.50", "é"], "a": null}"#);
+        let v: serde_json::Value = serde_json::from_str("{\"b\": [1, 2.50, \"\\u00e9\"], \"a\": null}").unwrap();
+        let esc = "\\u00e9"; // Python json.dumps writes non-ASCII as \uXXXX
+        assert_eq!(py_dumps(&v, true), format!("{{\"a\": null, \"b\": [1, \"2.50\", \"{esc}\"]}}"));
+        assert_eq!(py_dumps(&v, false), format!("{{\"b\": [1, \"2.50\", \"{esc}\"], \"a\": null}}"));
     }
 }

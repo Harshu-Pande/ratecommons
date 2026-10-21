@@ -230,6 +230,11 @@ class FileParser:
         self.codes: dict[bytes, dict] = {}
         self.fact_buf: list[tuple] = []   # flushed to Parquet in batches (files can hold 10^8 facts)
         self.fact_sink = None
+        # record-level dedup (Duplicate files tab): a block is one billing-code record identified
+        # order-independently by its code and its set of (provider set, price list) pairs. Facts are
+        # written once per block; file_block keeps every file's membership.
+        self.blocks_seen: set[bytes] = set()
+        self.fb_rows: list[tuple] = []
         self.counts: Counter = Counter()
         self._refset: dict[tuple, bytes] = {}   # raw provider_references list -> ps_id
         self._ptraw: dict[tuple, bytes] = {}    # raw price fields -> pt_id
@@ -369,6 +374,7 @@ class FileParser:
                                "billing_code_raw": code_raw, "name": ckey[5], "description": ckey[6],
                                "severity_of_illness": ckey[7], "bundle": ckey[8]}
         self.counts["in_network_items"] += 1
+        pairs: set[bytes] = set()
         for nr in it.get("negotiated_rates") or []:
             if not isinstance(nr, dict):
                 f["negotiated_rate_not_object"] += 1
@@ -386,12 +392,24 @@ class FileParser:
             else:
                 sid = self._resolve_set(nr)
             lid = self.price_list(nr.get("negotiated_prices"))
-            fid = xxhash.xxh3_128_digest(b"fact" + cid + sid + lid)  # ordered: code, set, list
             self.counts["negotiated_rates"] += 1
-            self.fact_buf.append((fid, cid, sid, lid, ctype, code))
-            if len(self.fact_buf) >= 500_000 and self.fact_sink:
-                self.fact_sink(self.fact_buf)
-                self.fact_buf = []
+            pairs.add(sid + lid)
+        ordered = sorted(pairs)
+        bid = xxhash.xxh3_128_digest(b"blk" + cid + b"".join(ordered))
+        part = fact_part(ctype, code)
+        self.fb_rows.append((bid, cid, part, len(ordered)))
+        if bid in self.blocks_seen:
+            self.counts["blocks_repeated"] += 1
+            return
+        self.blocks_seen.add(bid)
+        self.counts["blocks_new"] += 1
+        for pr in ordered:
+            sid, lid = pr[:16], pr[16:]
+            fid = xxhash.xxh3_128_digest(b"fact" + cid + sid + lid)  # ordered: code, set, list
+            self.fact_buf.append((fid, cid, sid, lid, bid, ctype, code))
+        if len(self.fact_buf) >= 500_000 and self.fact_sink:
+            self.fact_sink(self.fact_buf)
+            self.fact_buf = []
 
     def _resolve_set(self, nr: dict) -> bytes:
         packed: list[bytes] = []
@@ -519,7 +537,7 @@ class FactWriter:
         b16 = pa.binary(16)
         self.pa, self.pq = pa, pq
         self.schema = pa.schema([("fact_id", b16), ("code_id", b16), ("ps_id", b16), ("pl_id", b16),
-                                 ("billing_code_type", pa.string()), ("billing_code", pa.string())])
+                                 ("block_id", b16), ("billing_code_type", pa.string()), ("billing_code", pa.string())])
         self.folder = folder
         os.makedirs(folder, exist_ok=True)
         self.writers: dict[int, object] = {}
@@ -528,7 +546,7 @@ class FactWriter:
     def __call__(self, buf: list[tuple]):
         parts: dict[int, list[tuple]] = {}
         for r in buf:
-            parts.setdefault(fact_part(r[4], r[5]), []).append(r)
+            parts.setdefault(fact_part(r[5], r[6]), []).append(r)
         for k, rows in parts.items():
             w = self.writers.get(k)
             if w is None:
@@ -578,10 +596,15 @@ def _write_tables(fp: FileParser, outdir: str) -> dict:
     return sizes
 
 
-def parse_file(path: str, outdir: str, source: dict | None = None) -> dict:
-    """Parse one local in-network file into `outdir`. Returns the meta written to meta.json."""
+def parse_file(path: str, outdir: str, source: dict | None = None, seen_blocks: set | None = None) -> dict:
+    """Parse one local in-network file into `outdir`. Returns the meta written to meta.json.
+
+    `seen_blocks` (shared across the files of one shard) skips facts of blocks already written.
+    """
     t0 = time.time()
     fp = FileParser()
+    if seen_blocks is not None:
+        fp.blocks_seen = seen_blocks
     size = os.path.getsize(path)
     with open(path, "rb") as f:
         f.seek(max(0, size - 8))
@@ -604,6 +627,15 @@ def parse_file(path: str, outdir: str, source: dict | None = None) -> dict:
     sizes["rate_fact"] = fw.close()
     sizes["price_term"] = fp.pt_out.close()
     sizes["price_list"] = fp.pl_out.close()
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    b16 = pa.binary(16)
+    fb_schema = pa.schema([("block_id", b16), ("code_id", b16), ("part", pa.int32()), ("n_rates", pa.int32())])
+    cols = list(zip(*fp.fb_rows)) if fp.fb_rows else [[], [], [], []]
+    fbt = pa.table([pa.array(c, type=t) for c, t in zip(cols, fb_schema.types)], schema=fb_schema)
+    pq.write_table(fbt, os.path.join(outdir, "file_block.parquet"), compression="zstd", compression_level=3)
+    sizes["file_block"] = {"rows": fbt.num_rows, "bytes": os.path.getsize(os.path.join(outdir, "file_block.parquet"))}
     meta = {
         "source": source or {}, "local_bytes": size,
         "tail_crc32": f"0x{int.from_bytes(tail[:4], 'little'):08x}" if len(tail) == 8 else None,

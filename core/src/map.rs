@@ -27,7 +27,7 @@ const PRICE_KEYS: [&str; 8] = [
 const CACHE_CAP: usize = 2_000_000;
 
 pub struct Seen {
-    shards: Vec<Mutex<HashSet<u128>>>,
+    pub shards: Vec<Mutex<HashSet<u128>>>,
     cap: usize,
 }
 impl Seen {
@@ -51,6 +51,7 @@ struct PgTable {
 
 pub struct Shared {
     pg: Mutex<PgTable>,
+    blocks: Seen,
     pt_seen: Seen,
     pl_seen: Seen,
     ps_seen: Seen,
@@ -58,6 +59,7 @@ pub struct Shared {
 }
 
 enum Msg {
+    Fb(Vec<FbRow>),
     Pt(Vec<PtRow>),
     Pl(Vec<(Id, Vec<Id>)>),
     Ps(Vec<(Id, Vec<Id>)>),
@@ -141,6 +143,7 @@ struct Worker<'s> {
     ps: Vec<(Id, Vec<Id>)>,
     codes: Vec<CodeRow>,
     facts: Vec<FactRow>,
+    fb: Vec<FbRow>,
 }
 
 impl<'s> Worker<'s> {
@@ -149,6 +152,7 @@ impl<'s> Worker<'s> {
         if force || self.pl.len() >= 50_000 { let v = std::mem::take(&mut self.pl); if !v.is_empty() { self.out.other.send(Msg::Pl(v)).unwrap(); } }
         if force || self.ps.len() >= 20_000 { let v = std::mem::take(&mut self.ps); if !v.is_empty() { self.out.other.send(Msg::Ps(v)).unwrap(); } }
         if force || self.codes.len() >= 50_000 { let v = std::mem::take(&mut self.codes); if !v.is_empty() { self.out.other.send(Msg::Code(v)).unwrap(); } }
+        if force || self.fb.len() >= 50_000 { let v = std::mem::take(&mut self.fb); if !v.is_empty() { self.out.other.send(Msg::Fb(v)).unwrap(); } }
         if force || self.facts.len() >= 200_000 { let v = std::mem::take(&mut self.facts); if !v.is_empty() { self.out.fact.send(Msg::Fact(v)).unwrap(); } }
     }
 
@@ -354,6 +358,7 @@ impl<'s> Worker<'s> {
             });
         }
         *self.counts.entry("in_network_items").or_insert(0) += 1;
+        let mut pairs: Vec<[u8; 32]> = Vec::new();
         for nr in arr(it.get("negotiated_rates")).map(|a| a.0).unwrap_or_default() {
             let o = match obj(nr) {
                 Some(o) => o,
@@ -381,10 +386,35 @@ impl<'s> Worker<'s> {
                 self.resolve_set(&o)
             };
             let lid = self.price_list(o.get("negotiated_prices"));
-            let fid = fact_id(&cid, &sid, &lid);
             *self.counts.entry("negotiated_rates").or_insert(0) += 1;
-            self.facts.push(FactRow { fact_id: fid, code_id: cid, ps_id: sid, pl_id: lid,
-                                      billing_code_type: ctype_a.clone(), billing_code: code_a.clone() });
+            let mut pr = [0u8; 32];
+            pr[..16].copy_from_slice(&sid);
+            pr[16..].copy_from_slice(&lid);
+            pairs.push(pr);
+        }
+        pairs.sort_unstable();
+        pairs.dedup();
+        let mut bb = Vec::with_capacity(3 + 16 + 32 * pairs.len());
+        bb.extend_from_slice(b"blk");
+        bb.extend_from_slice(&cid);
+        for pr in &pairs {
+            bb.extend_from_slice(pr);
+        }
+        let bid = xxh128(&bb);
+        let part = fact_part(ctype.as_deref(), code.as_deref()) as i32;
+        self.fb.push(FbRow { block_id: bid, code_id: cid, part, n_rates: pairs.len() as i32 });
+        if !self.sh.blocks.insert(&bid) {
+            *self.counts.entry("blocks_repeated").or_insert(0) += 1;
+        } else {
+            *self.counts.entry("blocks_new").or_insert(0) += 1;
+            for pr in &pairs {
+                let mut sid = [0u8; 16];
+                let mut lid = [0u8; 16];
+                sid.copy_from_slice(&pr[..16]);
+                lid.copy_from_slice(&pr[16..]);
+                self.facts.push(FactRow { fact_id: fact_id(&cid, &sid, &lid), code_id: cid, ps_id: sid, pl_id: lid,
+                                          block_id: bid, billing_code_type: ctype_a.clone(), billing_code: code_a.clone() });
+            }
         }
         self.flush(false);
     }
@@ -405,6 +435,7 @@ fn writer_thread(rx: Receiver<Msg>, outdir: String) -> serde_json::Map<String, s
             Msg::Pl(v) => { wr(&mut w, &outdir, "price_list").write(pl_cols(&v), "price_list"); "price_list" }
             Msg::Ps(v) => { wr(&mut w, &outdir, "provider_set").write(ps_cols(&v), "provider_set"); "provider_set" }
             Msg::Code(v) => { wr(&mut w, &outdir, "code").write(code_cols(&v), "code"); "code" }
+            Msg::Fb(v) => { wr(&mut w, &outdir, "file_block").write(fb_cols(&v), "file_block"); "file_block" }
             Msg::Fact(v) => {
                 std::fs::create_dir_all(&fact_dir).unwrap();
                 let mut by: Vec<Vec<FactRow>> = (0..FACT_PARTS).map(|_| Vec::new()).collect();
@@ -514,7 +545,34 @@ fn decode_scalar(raw: &[u8]) -> Option<String> {
     raw_str(Some(&r)).map(|s| s.into_owned())
 }
 
-pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Value) -> serde_json::Value {
+/// Load a seen-blocks file (concatenated 16-byte IDs) into the shared set.
+fn load_blocks(path: &str, s: &Seen) -> u64 {
+    let b = std::fs::read(path).unwrap_or_default();
+    let mut n = 0;
+    for c in b.chunks_exact(16) {
+        let mut id = [0u8; 16];
+        id.copy_from_slice(c);
+        s.insert(&id);
+        n += 1;
+    }
+    n
+}
+
+fn save_blocks(path: &str, s: &Seen) -> u64 {
+    let mut out = Vec::new();
+    let mut n = 0;
+    for sh in &s.shards {
+        for v in sh.lock().unwrap().iter() {
+            out.extend_from_slice(&v.to_be_bytes());
+            n += 1;
+        }
+    }
+    std::fs::write(path, out).expect("write seen blocks");
+    n
+}
+
+pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Value,
+                seen_blocks: Option<&str>) -> serde_json::Value {
     let t0 = Instant::now();
     std::fs::create_dir_all(outdir).unwrap();
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
@@ -531,11 +589,13 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
 
     let sh = Arc::new(Shared {
         pg: Mutex::new(PgTable { rows: Vec::new(), index: HashMap::new() }),
+        blocks: Seen::new(usize::MAX / 2),
         pt_seen: Seen::new(150_000_000),
         pl_seen: Seen::new(150_000_000),
         ps_seen: Seen::new(50_000_000),
         code_seen: Seen::new(50_000_000),
     });
+    let blocks_loaded = seen_blocks.map(|p| load_blocks(p, &sh.blocks)).unwrap_or(0);
     // three writer threads: rate facts, price terms, everything else
     let mut whs = Vec::new();
     let mut senders = Vec::new();
@@ -636,6 +696,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                                 sh: &sh, refs: &refs, out, flags: Flags::default(), counts: HashMap::new(),
                                 layout: HashSet::new(), c_refs: HashMap::new(), c_prices: HashMap::new(),
                                 c_price: HashMap::new(), pt: vec![], pl: vec![], ps: vec![], codes: vec![], facts: vec![],
+                                fb: vec![],
                             };
                             let mut busy = 0.0f64;
                             for rec in rx {
@@ -679,7 +740,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
         }
         tables.extend(m);
     }
-    for name in ["price_term", "price_list", "provider_set", "code"] {
+    for name in ["price_term", "price_list", "provider_set", "code", "file_block"] {
         if !tables.contains_key(name) {
             let pw = Pq::create(&format!("{outdir}/{name}.parquet"), name);
             let (r, b) = pw.close();
@@ -709,6 +770,9 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
         flags.add("provider_references_after_in_network_unsupported_in_rust");
     }
 
+    let blocks_saved = seen_blocks.map(|p| save_blocks(p, &sh.blocks)).unwrap_or(0);
+    counts.insert("seen_blocks_loaded", blocks_loaded);
+    counts.insert("seen_blocks_saved", blocks_saved);
     let mut lay: Vec<&str> = layout.into_iter().collect();
     lay.sort();
     let counts_v: serde_json::Map<String, serde_json::Value> =

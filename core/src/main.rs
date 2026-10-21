@@ -52,9 +52,10 @@ fn main() {
         let threads: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or_else(|| {
             std::thread::available_parallelism().map(|n| n.get().saturating_sub(1).max(1)).unwrap_or(2)
         });
-        let source: serde_json::Value = args.get(5).and_then(|s| serde_json::from_str(s).ok())
+        let source: serde_json::Value = args.get(5).filter(|s| !s.starts_with("--")).and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or(serde_json::json!({}));
-        let meta = map::map_file(&args[2], &args[3], threads, source);
+        let seen = args.iter().position(|a| a == "--seen-blocks").and_then(|i| args.get(i + 1)).cloned();
+        let meta = map::map_file(&args[2], &args[3], threads, source, seen.as_deref());
         println!("{}", serde_json::to_string(&meta).unwrap());
         return;
     }

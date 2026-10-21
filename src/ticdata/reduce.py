@@ -122,7 +122,7 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str)
           GROUP BY r.fact_id
         ) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)
     """)
-    ns = "unhex(md5(array_to_string(list_transform(network_ids, x -> hex(x)), '')))"
+    ns = "unhex(md5(array_to_string(list_transform(network_ids, lambda x: hex(x)), '')))"
     con.execute(f"""
         COPY (SELECT fact_id, code_id, ps_id, pl_id, billing_code_type, billing_code, {ns} AS ns_id,
                      '{release}' AS valid_from
