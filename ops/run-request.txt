@@ -11,3 +11,4 @@ nppes --upload --out reports/nppes.json
 nppes --upload --out reports/nppes.json
 verify --payer cigna --release 2026-10 --match national-oap --out reports/verify-cigna-national-oap.json
 nppes --upload --out reports/nppes.json
+verify --payer cigna --release 2026-10 --match national-oap --out reports/verify-cigna-national-oap.json
