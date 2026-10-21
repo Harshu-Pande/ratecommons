@@ -5,6 +5,25 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **First full map run: Cigna October 2026, 124 of 124 files parsed, 0 failures.**
+  1,928,514,784 negotiated rates in 30,297,670 billing-code records, from 1,237,558
+  provider references. 17.6 runner-hours on 40 shards (about 78 minutes wall time at
+  20 at a time). The largest files (1.6-1.8 GB, about 35 GB of JSON, 105-120 million
+  rates each) took 45-75 minutes and peaked at 10.1 GB of memory, inside the 16 GB
+  runners. Every file uses `provider_references`; versions 2.0.1 (122) and 2.0.0 (2).
+  Flags seen: 2,960,698 price lists with several amounts under identical terms,
+  260,368 provider groups with a stray `0` among real NPIs, 183,295 duplicate groups,
+  17,328 unresolved provider references, 5,028 TINs needing trimming, 1,731 placeholder
+  amounts ($0.01 or less). The six `localplus` / `az-localflex` variants each carry
+  116-120 million rates and almost the same counts: near-duplicates, as the Duplicate
+  files tab predicted.
+- **Experiment E7: the Rust core on Cigna's national OAP file (34.7 GB of JSON).**
+  zlib-rs inflated it at 1.9 GB/s on one GitHub core (18 s), faster than rapidgzip;
+  the byte-level splitter ran at 0.69 GB/s; splitting plus a naive serde_json `Value`
+  parse on 3 threads ran at 0.30 GB/s (117 s) against 2,850 s for Python v0, about 24x.
+  Counts match Python exactly (66,734 references, 1,781,542 records, 104,870,647 rates).
+  Decompression is not a bottleneck anywhere; the parser is, and typed parsing should
+  move Rust well past 0.3 GB/s.
 - **Experiment E2b: download whole files, and use cores for files, not inside a file.**
   On a GitHub runner, 8 parallel 64 MB range windows downloaded at 255 MB/s (Cigna
   national OAP, 1.59 GB in 6 s) and 281 MB/s (UHC P3, 15.5 GB in 55 s), about 2.5x
