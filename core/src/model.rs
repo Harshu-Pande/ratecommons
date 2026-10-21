@@ -78,6 +78,16 @@ impl Canon {
 }
 
 /// `xxh3_128(tag + b"".join(sorted(set(ids))))`, as `h_ids` / `pack` in parse.py.
+/// h_ids for IDs already sorted and distinct: streams them into the hash without a copy.
+pub fn h_sorted(tag: &[u8], ids: &[Id]) -> Id {
+    let mut h = xxhash_rust::xxh3::Xxh3::new();
+    h.update(tag);
+    for i in ids {
+        h.update(i);
+    }
+    h.digest128().to_be_bytes()
+}
+
 pub fn h_ids(tag: &[u8], ids: &mut Vec<Id>) -> Id {
     ids.sort_unstable();
     ids.dedup();
@@ -614,6 +624,35 @@ pub fn rc_ranges(info: Option<&str>) -> Vec<String> {
 
 /// `json.dumps(value, default=str[, sort_keys])` as Python writes it for ijson values:
 /// separators ", " and ": ", ASCII-only escapes, non-integer numbers as quoted strings.
+/// py_dumps of a raw JSON value, with a fast path for the common case of a flat array of plain
+/// ASCII strings (place-of-service lists): same output, no serde_json Value built.
+pub fn py_dumps_raw(raw: &str) -> String {
+    let b = raw.trim().as_bytes();
+    if b.first() == Some(&b'[') && b.last() == Some(&b']')
+        && b.iter().all(|&c| c.is_ascii() && c != b'\\' && c != b'{')
+    {
+        let inner = &raw.trim()[1..raw.trim().len() - 1];
+        let mut parts: Vec<&str> = Vec::new();
+        let mut ok = true;
+        for item in inner.split(',') {
+            let t = item.trim();
+            if t.is_empty() && inner.trim().is_empty() {
+                continue;
+            }
+            if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') && !t[1..t.len() - 1].contains('"') {
+                parts.push(t);
+            } else {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return format!("[{}]", parts.join(", "));
+        }
+    }
+    py_dumps(&serde_json::from_str(raw).unwrap_or(serde_json::Value::Null), false)
+}
+
 pub fn py_dumps(v: &serde_json::Value, sort_keys: bool) -> String {
     let mut out = String::new();
     dump(v, sort_keys, &mut out);
@@ -692,6 +731,19 @@ fn dump_str(s: &str, o: &mut String) {
         }
     }
     o.push('"');
+}
+
+#[cfg(test)]
+mod tests_dumps {
+    use super::*;
+    #[test]
+    fn fast_dumps_matches_serde_path() {
+        for raw in [r#"["11","22"]"#, r#"[ "11" , "02" ]"#, "[]", r#"["a,b","c"]"#, r#"["x\"y"]"#, r#"[1,2]"#,
+                    r#"["é"]"#, r#"[["a"]]"#, r#""11""#, r#"["CSTM-00"]"#] {
+            let slow = py_dumps(&serde_json::from_str(raw).unwrap(), false);
+            assert_eq!(py_dumps_raw(raw), slow, "{raw}");
+        }
+    }
 }
 
 #[cfg(test)]

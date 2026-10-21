@@ -14,6 +14,13 @@ Newest first. One entry per lesson: what we saw, what we changed.
   reference's sorted group list, `pg_ids`), and `provider_set` holds `pli_ids`. Same 3,000
   records: 4.1 MB + 10.5 MB, writer time 0.2 s. Python and Rust match. Cigna's first
   release used the flat form; it is re-mapped with the Rust core so every payer has one schema.
+- **`ps_id` hashes the set's provider lists, not its flattened groups.** Flattening meant
+  touching about 2,000 group IDs for each of 53,570 new Aetna sets in 3,000 records (105
+  million IDs, 4.6 s of 11.3 s of worker time). `ps_id` is now the hash of the sorted,
+  distinct `pli_ids` (0.19 s). Trade-off: two sets with the same groups split differently
+  across references get different IDs, so a few identical sets may not merge; the data is
+  never wrong. Lists are written once per distinct reference in the references pass. With a
+  fast path for place-of-service lists, the same Aetna sample runs in 6.8 s instead of 12.8 s.
 - **Aetna jobs died after about a minute with exit code 143** (GitHub's runner kills the job
   under memory pressure), before any file finished. Likely cause: the Rust core queued up to
   256 whole records for its workers, and Aetna records can be very large. In-flight records

@@ -27,6 +27,8 @@ const PRICE_KEYS: [&str; 8] = [
     "additional_information", "billing_class", "expiration_date",
 ];
 const CACHE_CAP: usize = 2_000_000;
+/// Key of a provider reference whose provider_group_id is null.
+const NULL_REF: &str = "\u{0}null";
 
 pub struct Seen {
     pub shards: Vec<Mutex<HashSet<u128>>>,
@@ -234,7 +236,7 @@ struct Outs {
 struct Worker<'s> {
     sh: &'s Shared,
     rc: Option<&'s RecordCache>,
-    refs: &'s HashMap<Option<String>, (Id, Vec<Id>)>,
+    refs: &'s HashMap<String, (Id, Vec<Id>)>,
     out: Outs,
     flags: Flags,
     counts: HashMap<&'static str, u64>,
@@ -332,7 +334,7 @@ impl<'s> Worker<'s> {
                 Some(py_dumps(&serde_json::Value::Object(m), false))
             };
             let sc_raw = p.get("service_code").filter(|r| r.get() != "null")
-                .map(|r| py_dumps(&serde_json::from_str(r.get()).unwrap_or(serde_json::Value::Null), false));
+                .map(|r| py_dumps_raw(r.get()));
             let rc = rc_ranges(info.as_deref());
             self.pt.push(PtRow {
                 pt_id: pid, negotiated_type: ntype, rate_e4: e4, rate_raw: rate_s, billing_class: bclass, setting,
@@ -396,8 +398,8 @@ impl<'s> Worker<'s> {
         let refs_v = nr.get("provider_references");
         if let Some(a) = arr(refs_v) {
             for rid in a.0 {
-                let k = raw_str(Some(rid)).map(|s| s.into_owned());
-                match self.refs.get(&k) {
+                let k = raw_str(Some(rid));
+                match self.refs.get(k.as_deref().unwrap_or(NULL_REF)) {
                     Some(v) => packed.push(v),
                     None => self.flags.add("provider_reference_unresolved"),
                 }
@@ -415,15 +417,10 @@ impl<'s> Worker<'s> {
         }
         let mut lists: Vec<Id> = Vec::with_capacity(packed.len() + 1);
         for p in &packed {
-            lists.push(p.0);
-            if self.sh.pli_seen.insert(&p.0) {
-                self.pli_ids += p.1.len();
-                self.pli.push((p.0, p.1.clone()));
-            }
+            lists.push(p.0); // written with the references
         }
-        let inline_ids: Vec<Id> = inline.iter().flatten().copied().collect();
         if !inline.is_empty() {
-            let mut v = inline_ids.clone();
+            let mut v: Vec<Id> = inline.iter().flatten().copied().collect();
             let lid = h_ids(b"pli", &mut v);
             lists.push(lid);
             if self.sh.pli_seen.insert(&lid) {
@@ -431,17 +428,12 @@ impl<'s> Worker<'s> {
                 self.pli.push((lid, v));
             }
         }
-        let mut ids: Vec<Id> = if packed.len() == 1 && inline.is_empty() {
-            packed[0].1.clone()
-        } else {
-            let mut v: Vec<Id> = packed.iter().flat_map(|p| p.1.iter().copied()).collect();
-            v.extend(inline_ids);
-            v
-        };
-        let sid = h_ids(b"ps", &mut ids);
+        // ps_id is the hash of the set's sorted, distinct provider lists: touching ~10 list IDs
+        // instead of flattening ~2,000 group IDs per Aetna set (see DECISIONS)
+        lists.sort_unstable();
+        lists.dedup();
+        let sid = h_sorted(b"ps", &lists);
         if self.sh.ps_seen.insert(&sid) {
-            lists.sort_unstable();
-            lists.dedup();
             self.ps_ids += lists.len();
             self.ps.push((sid, lists));
         }
@@ -656,11 +648,14 @@ impl Read for ChanReader {
     }
 }
 
-fn threaded_reader(path: String, read: Arc<AtomicU64>) -> (ChanReader, std::thread::JoinHandle<()>) {
+fn threaded_reader(path: String, read: Arc<AtomicU64>, halt: Arc<AtomicBool>) -> (ChanReader, std::thread::JoinHandle<()>) {
     let (tx, rx) = bounded::<Vec<u8>>(4);
     let h = std::thread::spawn(move || {
         let mut src = open(&path);
         loop {
+            if halt.load(Ordering::Relaxed) {
+                break;
+            }
             let mut chunk = vec![0u8; 16 << 20];
             let mut filled = 0;
             while filled < chunk.len() {
@@ -765,7 +760,8 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
 
     let mut main_flags = Flags::default();
     let mut main_counts: HashMap<&'static str, u64> = HashMap::default();
-    let mut refs: HashMap<Option<String>, (Id, Vec<Id>)> = HashMap::default();
+    let mut refs: HashMap<String, (Id, Vec<Id>)> = HashMap::default();
+    let mut pli_rows: Vec<(Id, Vec<Id>)> = Vec::new();
     let mut ref_rows: Vec<RefRow> = Vec::new();
     let mut ref_index: HashMap<Option<String>, usize> = HashMap::default();
     let mut header = serde_json::Map::new();
@@ -780,7 +776,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     // workers start lazily, when the first in_network record arrives (references are complete then)
     let mut item_tx: Option<Sender<(u128, Vec<u8>)>> = None;
     let mut handles: Vec<std::thread::JoinHandle<(Flags, HashMap<&'static str, u64>, HashSet<&'static str>)>> = Vec::new();
-    let mut refs_arc: Option<Arc<HashMap<Option<String>, (Id, Vec<Id>)>>> = None;
+    let mut refs_arc: Option<Arc<HashMap<String, (Id, Vec<Id>)>>> = None;
 
     // records waiting for or inside workers are bounded by bytes, not only by count: one in_network
     // record can be hundreds of MB, and 256 of those would exhaust a 16 GB runner
@@ -818,7 +814,8 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
             }
         })
     };
-    let (reader, inflater) = threaded_reader(path.to_string(), read_bytes.clone());
+    let halt = Arc::new(AtomicBool::new(false));
+    let (reader, inflater) = threaded_reader(path.to_string(), read_bytes.clone(), halt.clone());
     let t_refs = std::cell::Cell::new(0.0f64);
     let total = split(reader, |ev| match ev {
         Event::Key(k) => {
@@ -876,10 +873,18 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                 }
                 let mut lid_src = ids.clone();
                 let lid = h_ids(b"pli", &mut lid_src);
-                refs.insert(rid, (lid, ids));
+                // provider lists are written here, once per distinct reference list (parse.py does the same)
+                if sh.pli_seen.insert(&lid) {
+                    pli_rows.push((lid, ids.clone()));
+                    if pli_rows.len() >= 20_000 {
+                        wtx.other.send(Msg::Pli(std::mem::take(&mut pli_rows))).unwrap();
+                    }
+                }
+                refs.insert(rid.clone().unwrap_or_else(|| NULL_REF.to_string()), (lid, ids));
                 *main_counts.entry("provider_references").or_insert(0) += 1;
             } else if k == b"in_network" {
                 if sent.load(Ordering::Relaxed) >= max_records {
+                    halt.store(true, Ordering::Relaxed);
                     return;
                 }
                 if item_tx.is_none() {
@@ -887,6 +892,9 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                     let arc = Arc::new(std::mem::take(&mut refs));
                     refs_arc = Some(arc.clone());
                     refs_digest = refs_hasher.digest128();
+                    if !pli_rows.is_empty() {
+                        wtx.other.send(Msg::Pli(std::mem::take(&mut pli_rows))).unwrap();
+                    }
                     let (tx, rx) = bounded::<(u128, Vec<u8>)>(256);
                     for _ in 0..threads.max(1) {
                         let rx = rx.clone();
@@ -960,6 +968,9 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     })
     .expect("read input");
     inflater.join().unwrap();
+    if !pli_rows.is_empty() {
+        wtx.other.send(Msg::Pli(std::mem::take(&mut pli_rows))).unwrap();
+    }
     drop(item_tx);
     let mut flags = main_flags;
     let mut counts = main_counts;
