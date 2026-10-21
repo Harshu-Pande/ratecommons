@@ -52,6 +52,22 @@ def main(argv=None) -> int:
     p.add_argument("--upload", action="store_true", help="upload to the identity dataset")
     p.add_argument("--out")
 
+    p = sub.add_parser("plan", help="assign a payer's in-network files to N shards")
+    p.add_argument("--payer", required=True)
+    p.add_argument("--shards", type=int, default=20)
+    p.add_argument("--limit", type=int)
+    p.add_argument("--out", required=True)
+
+    p = sub.add_parser("parse-shard", help="download, parse and upload one shard of a plan")
+    p.add_argument("plan")
+    p.add_argument("--shard", type=int, required=True)
+    p.add_argument("--upload", action="store_true", help="upload tables to the work bucket")
+    p.add_argument("--out")
+
+    p = sub.add_parser("parse-file", help="parse one local in-network file into a folder")
+    p.add_argument("path")
+    p.add_argument("outdir")
+
     p = sub.add_parser("fingerprint", help="tail fingerprint of one URL")
     p.add_argument("url")
 
@@ -93,6 +109,21 @@ def main(argv=None) -> int:
         from . import identity
 
         _write(identity.nppes(a.workdir, cfg.identity_repo if a.upload else None), a.out)
+    elif a.cmd == "plan":
+        from . import pipeline
+
+        _write(pipeline.plan(a.payer, a.shards, limit=a.limit), a.out)
+    elif a.cmd == "parse-shard":
+        from . import hfio, pipeline
+
+        doc = json.loads(Path(a.plan).read_text())
+        tok = (lambda: hfio.token_for(hfio.bucket(cfg.work_bucket))) if a.upload else None
+        _write(pipeline.run_shard(doc, a.shard, upload_bucket=cfg.work_bucket if a.upload else None,
+                                  token=tok), a.out)
+    elif a.cmd == "parse-file":
+        from .parse import parse_file
+
+        _write(parse_file(a.path, a.outdir), None)
     elif a.cmd == "fingerprint":
         from .net import resolve, tail_fingerprint
 

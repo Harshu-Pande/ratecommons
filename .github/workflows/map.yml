@@ -1,0 +1,80 @@
+name: map
+# Map stage: parse every in-network file of one payer into per-file tables in the work bucket
+# (map/<release>/<payer>/<file key>/). Trigger: edit ops/map-request.txt on main; its last
+# non-comment line is "<payer> <shards> [limit]", for example "cigna 40".
+on:
+  workflow_dispatch:
+    inputs:
+      payer: { description: "cigna | aetna | uhc", required: true, default: "cigna" }
+      shards: { description: "number of shards (<= 256)", required: true, default: "40" }
+      limit: { description: "only the first N files (testing)", required: false, default: "" }
+  push:
+    branches: [main]
+    paths: ["ops/map-request.txt"]
+
+permissions:
+  contents: read
+  id-token: write   # Hugging Face Trusted Publishers (work bucket, ops dataset)
+
+concurrency:
+  group: map
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      payer: ${{ steps.plan.outputs.payer }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e .
+      - id: plan
+        run: |
+          read payer shards limit <<< "$(grep -v '^#' ops/map-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
+          [ -n "${{ github.event.inputs.payer }}" ] && payer="${{ github.event.inputs.payer }}" && shards="${{ github.event.inputs.shards }}" && limit="${{ github.event.inputs.limit }}"
+          echo "payer=$payer shards=$shards limit=$limit"
+          ticdata plan --payer "$payer" --shards "$shards" ${limit:+--limit $limit} --out plan.json > /dev/null
+          python -c "import json; d=json.load(open('plan.json')); print(json.dumps([s['shard'] for s in d['shards'] if s['files']]))" > shards.json
+          echo "shards=$(cat shards.json)" >> "$GITHUB_OUTPUT"
+          echo "payer=$payer" >> "$GITHUB_OUTPUT"
+          python -c "import json; d=json.load(open('plan.json')); print(d['files'], 'files', round(d['bytes']/1e9,1), 'GB')" >> "$GITHUB_STEP_SUMMARY"
+          ticdata put-report plan.json --prefix "runs/$(date -u +%F)-map-$payer-${GITHUB_RUN_ID}" || true
+      - uses: actions/upload-artifact@v5
+        with: { name: plan, path: plan.json }
+
+  parse:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        shard: ${{ fromJson(needs.plan.outputs.shards) }}
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e .
+      - uses: actions/download-artifact@v5
+        with: { name: plan }
+      - name: parse shard ${{ matrix.shard }}
+        run: |
+          mkdir -p reports
+          ticdata parse-shard plan.json --shard ${{ matrix.shard }} --upload --out reports/shard-${{ matrix.shard }}.json
+      - if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY" || true
+          import json, glob
+          for f in glob.glob("reports/*.json"):
+              d = json.load(open(f))
+              for r in d["results"]:
+                  print(f"- {'ok' if r['ok'] else 'FAILED'} {r['name']} {r.get('wall_seconds')}s rss {r.get('max_rss_mb')} MB {r.get('error','')[:200]}")
+          PY
+          ticdata put-report reports/* --prefix "runs/$(date -u +%F)-map-${{ needs.plan.outputs.payer }}-${GITHUB_RUN_ID}" || true
