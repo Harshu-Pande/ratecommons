@@ -197,3 +197,49 @@ def upload_folder(repo_id: str, folder: str, path_in_repo: str, message: str) ->
     _retry(lambda: api.upload_folder(repo_id=repo_id, repo_type="dataset", folder_path=folder,
                                      path_in_repo=path_in_repo, commit_message=message))
     return f"https://huggingface.co/datasets/{repo_id}/tree/main/{path_in_repo}"
+
+
+# ---------------------------------------------------------------- other public identity files
+
+CMS_PROVIDER_DATA = "https://data.cms.gov/provider-data/api/1/metastore/schemas/dataset/items/{id}"
+SOURCES = {
+    # Doctors and Clinicians national downloadable file (one row per clinician x group x address)
+    "dac": {"kind": "cms_provider_data", "id": "mj5m-pzi6"},
+    # IRS exempt organizations business master file, four regional CSVs
+    "irs_eo": {"kind": "urls", "urls": [f"https://www.irs.gov/pub/irs-soi/eo{i}.csv" for i in range(1, 5)]},
+}
+
+
+def _source_urls(name: str, s: requests.Session) -> tuple[str, list[str], dict]:
+    src = SOURCES[name]
+    if src["kind"] == "urls":
+        return time.strftime("%Y-%m"), src["urls"], {}
+    meta = s.get(CMS_PROVIDER_DATA.format(id=src["id"]), timeout=60,
+                 headers={"User-Agent": USER_AGENT}).json()
+    urls = [d["downloadURL"] for d in meta.get("distribution", []) if d.get("downloadURL")]
+    rel = (meta.get("modified") or meta.get("issued") or time.strftime("%Y-%m-%d"))[:7]
+    return rel, urls, {"title": meta.get("title"), "modified": meta.get("modified")}
+
+
+def load_source(name: str, workdir: str = "/tmp/ident", upload_repo: str | None = None) -> dict:
+    """Download a public identity CSV source and store it as Parquet (all strings), as published."""
+    s = new_session()
+    wd = Path(workdir) / name
+    wd.mkdir(parents=True, exist_ok=True)
+    rel, urls, info = _source_urls(name, s)
+    out: dict = {"source": name, "release": rel, "info": info, "files": {}}
+    outdir = wd / "parquet"
+    outdir.mkdir(exist_ok=True)
+    for url in urls:
+        stem = snake(Path(url.split("?", 1)[0]).stem)
+        local = str(wd / f"{stem}.csv")
+        dl = _fetch(url, local, s)
+        dest = str(outdir / f"{stem}.parquet")
+        conv = csv_to_parquet(lambda: open(local, "rb"), dest, {"release": rel, "source": url})
+        out["files"][stem] = {"url": url, "download": dl, **conv}
+        os.remove(local)
+    (outdir / "manifest.json").write_text(json.dumps(out, indent=2, default=str))
+    if upload_repo:
+        out["uploaded"] = upload_folder(upload_repo, str(outdir), f"{name}/release={rel}",
+                                        f"{name} {rel}: {', '.join(out['files'])}")
+    return out

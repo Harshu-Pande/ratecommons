@@ -35,6 +35,7 @@ jobs:
           echo "ticdata $args"
           mkdir -p reports
           echo "ticdata $args" > reports/command.txt
+          set -o pipefail
           ticdata $args 2>&1 | tee reports/output.log
       - if: always()
         run: |

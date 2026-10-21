@@ -68,6 +68,11 @@ def main(argv=None) -> int:
     p.add_argument("path")
     p.add_argument("outdir")
 
+    p = sub.add_parser("identity", help="load a public identity CSV source (dac, irs_eo) -> Parquet")
+    p.add_argument("source")
+    p.add_argument("--upload", action="store_true")
+    p.add_argument("--out")
+
     p = sub.add_parser("fingerprint", help="tail fingerprint of one URL")
     p.add_argument("url")
 
@@ -124,6 +129,10 @@ def main(argv=None) -> int:
         from .parse import parse_file
 
         _write(parse_file(a.path, a.outdir), None)
+    elif a.cmd == "identity":
+        from . import identity
+
+        _write(identity.load_source(a.source, upload_repo=cfg.identity_repo if a.upload else None), a.out)
     elif a.cmd == "fingerprint":
         from .net import resolve, tail_fingerprint
 

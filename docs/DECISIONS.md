@@ -5,6 +5,13 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **NPPES bulk download was down for maintenance (07:14 UTC).** `NPI_Files.html`
+  said "This site will be down for maintenance until further notice" and the October
+  zip returned 404 (a cached copy of the page still listed it). Track C started with
+  Doctors and Clinicians and the IRS exempt-organization file; the NPPES loader
+  falls back to the documented file name pattern and is retried daily.
+- **`run.yml` failures must fail the job.** A `ticdata ... | tee` pipeline reported
+  success after a crash; the step now sets `pipefail`.
 - **Kaggle's exit country changes from session to session; probe it, never assume it.**
   The two runs launched from here exited in France and the Netherlands, and could
   reach only UHC. The first run launched from GitHub exited in the US (Atlanta) and
