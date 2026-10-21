@@ -32,7 +32,7 @@ jobs:
         run: |
           read payer release which <<< "$(grep -v '^#' ops/reduce-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
           [ -n "${{ github.event.inputs.payer }}" ] && payer="${{ github.event.inputs.payer }}" && release="${{ github.event.inputs.release }}"
-          dims='"dims-meta","dims-code","dims-provider_group","dims-provider_set","dims-price_term","dims-price_list"'
+          dims='"dims-meta","dims-code","dims-provider_group","dims-provider_set","dims-provider_list","dims-price_term","dims-price_list"'
           facts='"0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"'
           case "${which:-all}" in dims) parts="[$dims]";; facts) parts="[$facts]";; *) parts="[$dims,$facts]";; esac
           echo "payer=$payer" >> "$GITHUB_OUTPUT"; echo "release=$release" >> "$GITHUB_OUTPUT"; echo "parts=$parts" >> "$GITHUB_OUTPUT"
