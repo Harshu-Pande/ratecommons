@@ -3,12 +3,12 @@
 Rule of the day: never wait on a running job. Start the long job first, then write
 code for another track until it reports to `datasets/ratecommons/ops`.
 
-## Morning: read what the smoke run measured
+## Already measured (night before day 1)
 
-- `runs/*-gha-*/gha-bench.json`: rapidgzip GB/s on a 4-vCPU runner, the real
-  compression ratio, and the download speed from each host (experiment E2).
-- `runs/*-kaggle-*/`: whether Kaggle reaches the payers and how fast it is.
-- These numbers set the fleet: how many runners per month, what goes to Kaggle.
+- `runs/2026-10-21-gha-*/`: GitHub runner speed per payer, rapidgzip vs zlib.
+- `runs/20261021-kaggle-*/`: Kaggle reaches UHC/UMR only; its speed and disk.
+- How to start runs and read results without the Actions API: see DECISIONS
+  (edit `ops/smoke-request.txt`, `ops/archive-request.txt`, `ops/kaggle-request.txt`).
 
 ## Tracks, in the order they start
 
@@ -26,9 +26,12 @@ Where each payer runs (measured 2026-10-21, see DECISIONS):
 
 | Payer | Kaggle (Europe) | GitHub Actions (US) |
 | --- | --- | --- |
-| UHC / UMR | yes: 84 MB/s download, 0.33 GB/s JSON (4 vCPU) | to be measured |
-| Cigna | no, geo-blocked | to be measured |
-| Aetna | no, host unreachable | to be measured |
+| UHC / UMR | yes: 84 MB/s download, 0.33 GB/s JSON (4 vCPU) | yes: 116 MB/s, 0.72 GB/s JSON |
+| Cigna | no, geo-blocked | yes: 93 MB/s, 0.68 GB/s JSON |
+| Aetna | no, host unreachable | yes: 488 MB/s |
+
+Day-1 experiment before Track A scales out: whole-file download to runner disk, then
+rapidgzip on the local file, against today's streaming 0.7 GB/s (see DECISIONS).
 
 ## Standing answers to the risks the design doc raised
 

@@ -1,0 +1,58 @@
+name: kaggle
+# Launch a Kaggle job, wait for it, and copy its outputs to datasets/ratecommons/ops.
+# Kaggle (4 vCPU, 32 GB RAM, 1.1 TB scratch, egress in Europe) reaches UHC/UMR only.
+# Trigger: Actions tab -> kaggle -> Run workflow, or push an edit to ops/kaggle-request.txt
+# whose last line is the job folder under kaggle/ (for example "smoke").
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Folder under kaggle/ with a prepare.py"
+        default: "smoke"
+  push:
+    branches: [main]
+    paths: ["ops/kaggle-request.txt"]
+
+permissions:
+  contents: read
+  id-token: write   # Hugging Face Trusted Publishers for the report upload
+
+concurrency:
+  group: kaggle
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e . kaggle==2.2.4
+      - name: Launch on Kaggle and wait
+        run: |
+          if [ -z "$KAGGLE_API_TOKEN" ]; then echo "::error::KAGGLE_API_TOKEN secret is missing"; exit 1; fi
+          job="${{ github.event.inputs.job }}"
+          [ -n "$job" ] || job="$(grep -v '^#' ops/kaggle-request.txt | tail -1 | awk '{print $NF}')"
+          user="$(python -c 'import tomllib;print(tomllib.load(open("project.toml","rb"))["kaggle"]["user"])')"
+          echo "job=$job user=$user"
+          python "kaggle/$job/prepare.py" "$user" "$GITHUB_REPOSITORY"
+          kaggle kernels push -p "kaggle/$job"
+          slug="$user/ratecommons-$job"
+          for i in $(seq 1 700); do
+            s="$(kaggle kernels status "$slug" 2>&1 || true)"; echo "$(date -u +%T) $s"
+            case "$s" in *[Cc][Oo][Mm][Pp][Ll][Ee][Tt][Ee]*|*[Ee][Rr][Rr][Oo][Rr]*|*[Cc][Aa][Nn][Cc][Ee][Ll]*) break;; esac
+            sleep 30
+          done
+          mkdir -p reports/kaggle
+          kaggle kernels output "$slug" -p reports/kaggle || true
+          ls -la reports/kaggle
+          echo "JOB=$job" >> "$GITHUB_ENV"
+      - if: always()
+        run: |
+          for f in reports/kaggle/*.json; do [ -f "$f" ] || continue; echo "### $f" >> "$GITHUB_STEP_SUMMARY"; echo '```json' >> "$GITHUB_STEP_SUMMARY"; head -c 20000 "$f" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"; done
+          ticdata put-report reports/kaggle/* --prefix "runs/$(date -u +%F)-kaggle-${JOB:-job}-${GITHUB_RUN_ID}" || true

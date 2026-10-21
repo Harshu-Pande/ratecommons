@@ -5,6 +5,16 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **GitHub Actions runner, measured (first smoke run).** 4 vCPU AMD EPYC 9V45,
+  16.4 GB RAM, 91 GB free disk (not 14 GB), egress US (Dallas). All three payers
+  reachable: 64 MB-window reads at 116 MB/s (UHC), 488 MB/s (Aetna), 93 MB/s
+  (Cigna). Cigna's national-oap file (1.59 GB, 34.7 GB of JSON, ratio 21.8)
+  streamed and decompressed in 51 s.
+- **Streaming through Python wastes rapidgzip.** Over our HTTP file object, 4-thread
+  rapidgzip gave 0.68-0.72 GB/s of JSON, the same as single-thread zlib on the
+  same bytes (0.74 GB/s). Every block crosses the Python file object under the GIL.
+  First experiment on day 1: download whole files to local disk (91 GB free), then
+  rapidgzip the local file. This is also the design doc's full-download-first rule.
 - **No long-lived Hugging Face token in GitHub.** Workflows use Hugging Face Trusted
   Publishers: the job's GitHub OIDC token is exchanged for a one-hour token scoped to
   one dataset or bucket (`hfio.token_for`). `raw-manifests`, `ops` and the `work`

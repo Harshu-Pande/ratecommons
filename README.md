@@ -8,14 +8,19 @@ tools to query it. Everything here runs on free, no-card services.
 - Decisions and lessons learned while building: [docs/DECISIONS.md](docs/DECISIONS.md)
 - What happens next: [docs/NEXT.md](docs/NEXT.md)
 
-**Status:** day 0, infrastructure. No rate data is published yet.
+**Status:** day 0, infrastructure ready (GitHub, Hugging Face, Kaggle measured). No rate data is published yet.
 
 ## What runs where
 
 | Job | Runs on | When | Writes to |
 | --- | --- | --- | --- |
-| `archive-manifests` | GitHub Actions | daily 09:17 UTC, or by hand | `datasets/ratecommons/raw-manifests` |
-| `smoke` | GitHub Actions + Kaggle | by hand, or edit `ops/smoke-request.txt` | `datasets/ratecommons/ops` |
+| `archive-manifests` | GitHub Actions | daily 09:17 UTC, by hand, or edit `ops/archive-request.txt` | `datasets/ratecommons/raw-manifests` |
+| `smoke` | GitHub Actions | by hand, or edit `ops/smoke-request.txt` | `datasets/ratecommons/ops` |
+| `kaggle` | Kaggle, launched from GitHub Actions | by hand, or edit `ops/kaggle-request.txt` (last line = job folder) | `datasets/ratecommons/ops` |
+
+GitHub writes to Hugging Face through Trusted Publishers (short-lived tokens, nothing
+stored). Kaggle routing: UHC/UMR only, because Cigna geo-blocks Kaggle and Aetna is
+unreachable from it.
 
 ## Where the data lives (Hugging Face)
 
@@ -29,10 +34,10 @@ All names live in `project.toml`, so a rename is a one-file change.
 
 ## Secrets (repo Settings → Secrets and variables → Actions)
 
-`HF_TOKEN` (fine-grained, write access to the `ratecommons` org) and `KAGGLE_API_TOKEN`
-(for workflows that launch Kaggle jobs). The Kaggle user name is in `project.toml`.
-Tokens never go in code or issues. Later hardening: Hugging Face Trusted Publishers
-(GitHub OIDC, one short-lived token per repo or bucket) can replace `HF_TOKEN`.
+Only `KAGGLE_API_TOKEN` (for the `kaggle` workflow). Hugging Face needs no secret:
+each dataset and bucket trusts this repo's `main` branch as a Trusted Publisher, and
+a new dataset or bucket must be given the same setting. The Kaggle user name is in
+`project.toml`. Tokens never go in code or issues.
 
 ## Local use
 
