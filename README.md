@@ -19,8 +19,9 @@ tools to query it. Everything here runs on free, no-card services.
 | `kaggle` | Kaggle, launched from GitHub Actions | by hand, or edit `ops/kaggle-request.txt` (last line = job folder) | `datasets/ratecommons/ops` |
 
 GitHub writes to Hugging Face through Trusted Publishers (short-lived tokens, nothing
-stored). Kaggle routing: UHC/UMR only, because Cigna geo-blocks Kaggle and Aetna is
-unreachable from it.
+stored). Kaggle sessions exit in Europe or the US. From Europe they reach only UHC/UMR,
+because Cigna geo-blocks Europe and Aetna is unreachable there, so workers check which
+payers they can reach before taking jobs.
 
 ## Where the data lives (Hugging Face)
 

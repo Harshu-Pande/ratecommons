@@ -13,5 +13,5 @@ ops_repo = "ratecommons/ops"
 work_bucket = "ratecommons/work"
 
 [kaggle]
-# Kaggle reaches UHC/UMR only (Cigna geo-blocks it, Aetna is unreachable).
+# Kaggle sessions exit in Europe or the US; from Europe only UHC/UMR is reachable.
 user = "harshupande1"

@@ -5,6 +5,13 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **Kaggle's exit country changes from session to session; probe it, never assume it.**
+  The two runs launched from here exited in France and the Netherlands, and could
+  reach only UHC. The first run launched from GitHub exited in the US (Atlanta) and
+  reached all three payers: UHC 101 MB/s, Aetna 308 MB/s, Cigna 117 MB/s. Rule:
+  every worker checks its exit country and which payers it can reach before taking
+  work, and only takes jobs for those payers. The UHC/UMR-only routing below was
+  correct for those sessions, but it is not a fixed property of Kaggle.
 - **GitHub Actions runner, measured (first smoke run).** 4 vCPU AMD EPYC 9V45,
   16.4 GB RAM, 91 GB free disk (not 14 GB), egress US (Dallas). All three payers
   reachable: 64 MB-window reads at 116 MB/s (UHC), 488 MB/s (Aetna), 93 MB/s

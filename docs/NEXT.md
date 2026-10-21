@@ -24,11 +24,14 @@ Payer order: Cigna (30 GB) -> Aetna (8 TB) -> UHC insurer files (1 TB after dedu
 
 Where each payer runs (measured 2026-10-21, see DECISIONS):
 
-| Payer | Kaggle (Europe) | GitHub Actions (US) |
-| --- | --- | --- |
-| UHC / UMR | yes: 84 MB/s download, 0.33 GB/s JSON (4 vCPU) | yes: 116 MB/s, 0.72 GB/s JSON |
-| Cigna | no, geo-blocked | yes: 93 MB/s, 0.68 GB/s JSON |
-| Aetna | no, host unreachable | yes: 488 MB/s |
+| Payer | Kaggle, Europe session | Kaggle, US session | GitHub Actions (US) |
+| --- | --- | --- | --- |
+| UHC / UMR | yes: 84 MB/s, 0.33 GB/s JSON | yes: 101 MB/s | yes: 116 MB/s, 0.72 GB/s JSON |
+| Cigna | no, geo-blocked | yes: 117 MB/s | yes: 93 MB/s, 0.68 GB/s JSON |
+| Aetna | no, host unreachable | yes: 308 MB/s | yes: 488 MB/s |
+
+Kaggle's region varies per session, so workers probe reachability at start and only
+take jobs for payers they can reach (see DECISIONS).
 
 Day-1 experiment before Track A scales out: whole-file download to runner disk, then
 rapidgzip on the local file, against today's streaming 0.7 GB/s (see DECISIONS).

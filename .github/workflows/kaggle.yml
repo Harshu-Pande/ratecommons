@@ -1,6 +1,6 @@
 name: kaggle
 # Launch a Kaggle job, wait for it, and copy its outputs to datasets/ratecommons/ops.
-# Kaggle (4 vCPU, 32 GB RAM, 1.1 TB scratch, egress in Europe) reaches UHC/UMR only.
+# Kaggle: 4 vCPU, 32 GB RAM, 1.1 TB scratch. Exit region varies (Europe or US); from Europe only UHC/UMR is reachable.
 # Trigger: Actions tab -> kaggle -> Run workflow, or push an edit to ops/kaggle-request.txt
 # whose last line is the job folder under kaggle/ (for example "smoke").
 on:
