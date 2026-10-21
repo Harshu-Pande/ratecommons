@@ -641,6 +641,9 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     let mut keys: Vec<String> = Vec::new();
     let mut refs_key_seen = false;
     let mut refs_after_items = false;
+    // hash of the raw provider_references records in order: two files with the same value resolve
+    // every reference identically (the basis for skipping byte-identical records across files)
+    let mut refs_hasher = xxhash_rust::xxh3::Xxh3::new();
 
     // workers start lazily, when the first in_network record arrives (references are complete then)
     let mut item_tx: Option<Sender<Vec<u8>>> = None;
@@ -671,6 +674,8 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                     refs_after_items = true;
                     return;
                 }
+                refs_hasher.update(rec);
+                refs_hasher.update(b"\x1e");
                 let text = std::str::from_utf8(rec).expect("UTF-8");
                 let r: RawObject = obj(raw(text)).expect("provider reference object");
                 let rid = raw_str(r.get("provider_group_id")).map(|s| s.into_owned());
@@ -813,6 +818,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
         "flags": flags.0,
         "tables": tables,
         "json_bytes": total,
+        "refs_hash": format!("{:032x}", refs_hasher.digest128()),
         "seconds": {"refs_pass": (t_refs.get() * 10.0).round() / 10.0,
                     "items_pass": ((t_items - t_refs.get()) * 10.0).round() / 10.0,
                     "write": ((t0.elapsed().as_secs_f64() - t_items) * 10.0).round() / 10.0},

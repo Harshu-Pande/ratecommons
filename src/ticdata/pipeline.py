@@ -110,7 +110,11 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
                 threads = os.environ.get("TIC_CORE_THREADS", str(max(1, (os.cpu_count() or 2) - 2)))
                 cp = subprocess.run([core, "map", local, outdir, threads, json.dumps(source),
                                      "--seen-blocks", seen_path], capture_output=True, text=True)
-                if cp.returncode == 0:
+                if cp.returncode == 0 and "provider_references_after_in_network_unsupported_in_rust" in \
+                        json.loads(cp.stdout).get("flags", {}):
+                    rec["rust_error"] = "provider_references after in_network: parsed with Python instead"
+                    shutil.rmtree(outdir, ignore_errors=True)
+                elif cp.returncode == 0:
                     meta = json.loads(cp.stdout)
                     rec["parser"] = "rust"
                 else:  # zip input (exit 3) or a failure: fall back to the Python parser
@@ -125,8 +129,8 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
                 with open(seen_path, "wb") as fh:
                     fh.write(b"".join(seen))
                 rec["parser"] = "python"
-            rec.update({k: meta[k] for k in ("counts", "flags", "tables", "seconds", "layout",
-                                             "tail_crc32", "tail_isize", "header")})
+            rec.update({k: meta.get(k) for k in ("counts", "flags", "tables", "seconds", "layout",
+                                                 "tail_crc32", "tail_isize", "header", "json_bytes", "refs_hash")})
             text_path = os.path.join(workdir, "code_text.parquet")
             if os.path.exists(text_path):
                 os.remove(text_path)
