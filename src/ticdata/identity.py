@@ -69,6 +69,8 @@ def nppes_links(s: requests.Session | None = None) -> dict:
                 break
             y, m = (y, m - 1) if m > 1 else (y - 1, 12)
         if not guessed:
+            guessed = _nber_latest(s)
+        if not guessed:
             raise RuntimeError(f"no monthly NPPES file: page {page_note}; first 300 chars {html[:300]!r}")
         full = [guessed]
     m = re.search(r"_([A-Za-z]+)_(\d{4})", full[-1])
@@ -76,6 +78,27 @@ def nppes_links(s: requests.Session | None = None) -> dict:
     return {"release": release, "full": absu(full[-1]),
             "deactivated": [absu(h) for h in hrefs if "Deactivated" in h],
             "weekly": [absu(h) for h in hrefs if "Weekly" in h], "page": page_note, "guessed": bool(guessed)}
+
+
+NBER_ZIPS = "https://data.nber.org/npi/zip/"
+
+
+def _nber_latest(s: requests.Session) -> str | None:
+    """Newest monthly CMS zip on the NBER mirror (byte copies of the CMS source zips), used while
+    the CMS download page is down."""
+    try:
+        html = s.get(NBER_ZIPS, timeout=60, headers={"User-Agent": USER_AGENT}).text
+    except Exception:
+        return None
+    best = None
+    for h in set(re.findall(r"""href\s*=\s*["']?([^"' >]*NPPES_Data_Dissemination_([A-Za-z]+)_(\d{4})(_V\d)?\.zip)""",
+                            html, flags=re.I)):
+        key = (int(h[2]), MONTHS.get(h[1].capitalize(), 0), h[3])
+        if best is None or key > best[0]:
+            best = (key, h[0])
+    if not best:
+        return None
+    return best[1] if best[1].startswith("http") else NBER_ZIPS + best[1].split("/")[-1]
 
 
 def _fetch(url: str, path: str, s: requests.Session) -> dict:
