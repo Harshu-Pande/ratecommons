@@ -58,10 +58,16 @@ def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = 
 
     with ThreadPoolExecutor(8) as ex:
         uniq = list(ex.map(size_of, uniq))
+    # Contiguous runs in size order: near-duplicate files (same network family, sizes within a
+    # few KB) land in the same shard, where the shared seen-blocks set writes their facts once.
+    total = sum(e["size"] or 0 for e in uniq)
+    target = total / max(shards, 1)
     load = [0] * shards
     assign: list[list[dict]] = [[] for _ in range(shards)]
-    for e in sorted(uniq, key=lambda e: -(e["size"] or 0)):
-        i = load.index(min(load))
+    i = 0
+    for e in sorted(uniq, key=lambda e: (-(e["size"] or 0), e["name"])):
+        if load[i] >= target and i < shards - 1:
+            i += 1
         assign[i].append({k: e.get(k) for k in ("name", "url", "size", "kind")})
         load[i] += e["size"] or 0
     return {"payer": payer, "kind": kind, "files": len(uniq), "bytes": sum(load),
@@ -76,6 +82,9 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
     files = plan_doc["shards"][shard]["files"]
     s = new_session()
     os.makedirs(workdir, exist_ok=True)
+    seen_path = os.path.join(workdir, "seen_blocks.bin")  # blocks already written by this shard
+    if os.path.exists(seen_path):
+        os.remove(seen_path)
     results = []
     for e in files:
         key, rel = file_key(e["name"]), release_of(e["name"])
@@ -92,8 +101,8 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
                 import subprocess
 
                 threads = os.environ.get("TIC_CORE_THREADS", str(max(1, (os.cpu_count() or 2) - 2)))
-                cp = subprocess.run([core, "map", local, outdir, threads, json.dumps(source)],
-                                    capture_output=True, text=True)
+                cp = subprocess.run([core, "map", local, outdir, threads, json.dumps(source),
+                                     "--seen-blocks", seen_path], capture_output=True, text=True)
                 if cp.returncode == 0:
                     meta = json.loads(cp.stdout)
                     rec["parser"] = "rust"
@@ -101,7 +110,13 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
                     rec["rust_error"] = (cp.stderr or "")[-1500:]
                     shutil.rmtree(outdir, ignore_errors=True)
             if meta is None:
-                meta = parse_file(local, outdir, source=source)
+                seen = set()
+                if os.path.exists(seen_path):
+                    b = open(seen_path, "rb").read()
+                    seen = {b[i:i + 16] for i in range(0, len(b), 16)}
+                meta = parse_file(local, outdir, source=source, seen_blocks=seen)
+                with open(seen_path, "wb") as fh:
+                    fh.write(b"".join(seen))
                 rec["parser"] = "python"
             rec.update({k: meta[k] for k in ("counts", "flags", "tables", "seconds", "layout",
                                              "tail_crc32", "tail_isize", "header")})

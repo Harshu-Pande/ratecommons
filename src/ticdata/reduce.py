@@ -74,7 +74,8 @@ def reduce_part(payer: str, release: str, part: int, bucket: str, out: str, toke
     t0 = time.time()
     prefix = f"map/{release}/{payer}/"
     allp = _list(bucket, prefix, token)
-    want = [p for p in allp if p.endswith("/meta.json") or p.endswith(f"/rate_fact/part-{part:02d}.parquet")]
+    want = [p for p in allp if p.endswith("/meta.json") or p.endswith("/file_block.parquet")
+            or p.endswith(f"/rate_fact/part-{part:02d}.parquet")]
     local = os.path.join(workdir, f"p{part:02d}")
     _fetch(bucket, want, local, prefix, token)
     res = reduce_part_local(local, payer, release, part, out)
@@ -112,16 +113,49 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str)
     con.register("nets", pa.Table.from_pylist([{"file_key": n["file_key"], "network_id": n["network_id"]}
                                                for n in nets]))
     tmp = f"{local}/facts_tmp.parquet"
-    con.execute(f"""
-        COPY (
-          SELECT r.fact_id, any_value(r.code_id) code_id, any_value(r.ps_id) ps_id, any_value(r.pl_id) pl_id,
-                 any_value(r.billing_code_type) billing_code_type, any_value(r.billing_code) billing_code,
-                 list(DISTINCT n.network_id ORDER BY n.network_id) network_ids, count(*) n_in
-          FROM read_parquet({files!r}, filename = true) r
-          JOIN nets n ON n.file_key = split_part(r.filename, '/', -3)
-          GROUP BY r.fact_id
-        ) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)
-    """)
+    fbs = sorted(str(p) for p in Path(local).glob("*/file_block.parquet"))
+    if fbs:
+        # block-level membership: a fact's networks are the union of the networks of every
+        # block (billing-code record) it appears in; facts were written once per block per shard
+        res["mode"] = "blocks"
+        os.makedirs(f"{out}/block", exist_ok=True)
+        con.execute(f"""
+            CREATE TABLE bn AS
+            SELECT fb.block_id, any_value(fb.code_id) code_id, any_value(fb.n_rates) n_rates,
+                   list(DISTINCT n.network_id ORDER BY n.network_id) network_ids, count(*) n_files
+            FROM read_parquet({fbs!r}, filename = true) fb
+            JOIN nets n ON n.file_key = split_part(fb.filename, '/', -2)
+            WHERE fb.part = {part}
+            GROUP BY fb.block_id
+        """)
+        con.execute(f"""
+            COPY (
+              SELECT x.fact_id, any_value(x.code_id) code_id, any_value(x.ps_id) ps_id, any_value(x.pl_id) pl_id,
+                     any_value(x.billing_code_type) billing_code_type, any_value(x.billing_code) billing_code,
+                     list_sort(list_distinct(flatten(list(bn.network_ids)))) network_ids, count(*) n_in
+              FROM (SELECT DISTINCT fact_id, block_id, code_id, ps_id, pl_id, billing_code_type, billing_code
+                    FROM read_parquet({files!r})) x
+              JOIN bn USING (block_id)
+              GROUP BY x.fact_id
+            ) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)
+        """)
+        ns_b = "unhex(md5(array_to_string(list_transform(network_ids, lambda x: hex(x)), '')))"
+        con.execute(f"""COPY (SELECT block_id, code_id, n_rates, n_files, {ns_b} AS ns_id FROM bn)
+                        TO '{out}/block/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+        res["blocks"] = con.execute("SELECT count(*) FROM bn").fetchone()[0]
+    else:
+        # older map output without blocks: membership straight from the file each fact came from
+        res["mode"] = "files"
+        con.execute(f"""
+            COPY (
+              SELECT r.fact_id, any_value(r.code_id) code_id, any_value(r.ps_id) ps_id, any_value(r.pl_id) pl_id,
+                     any_value(r.billing_code_type) billing_code_type, any_value(r.billing_code) billing_code,
+                     list(DISTINCT n.network_id ORDER BY n.network_id) network_ids, count(*) n_in
+              FROM read_parquet({files!r}, filename = true) r
+              JOIN nets n ON n.file_key = split_part(r.filename, '/', -3)
+              GROUP BY r.fact_id
+            ) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)
+        """)
     ns = "unhex(md5(array_to_string(list_transform(network_ids, lambda x: hex(x)), '')))"
     con.execute(f"""
         COPY (SELECT fact_id, code_id, ps_id, pl_id, billing_code_type, billing_code, {ns} AS ns_id,
