@@ -1,0 +1,2 @@
+Edit this file on main to run archive-manifests now.
+2026-10-21 first run from GitHub

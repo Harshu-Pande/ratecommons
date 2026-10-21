@@ -53,11 +53,13 @@ def upload(out: Path, summary: dict, repo_id: str) -> dict:
     """Upload only sources whose bytes changed since the last archived run."""
     from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 
-    api = HfApi(token=os.environ["HF_TOKEN"])
-    api.create_repo(repo_id, repo_type="dataset", private=False, exist_ok=True)
+    from .hfio import dataset, token_for
+
+    token = token_for(dataset(repo_id))
+    api = HfApi(token=token)
     try:
         prev = json.loads(Path(hf_hub_download(repo_id, "state/sha256.json", repo_type="dataset",
-                                               token=os.environ["HF_TOKEN"])).read_text())
+                                               token=token)).read_text())
     except Exception:
         prev = {}
     day = summary["date"]

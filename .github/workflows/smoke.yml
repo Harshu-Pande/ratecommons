@@ -14,13 +14,14 @@ on:
 
 permissions:
   contents: read
+  id-token: write   # Hugging Face Trusted Publishers: short-lived tokens, no stored secret
 
 concurrency:
   group: smoke
   cancel-in-progress: false
 
 env:
-  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}   # optional; empty means use Trusted Publishers
   PYTHONUNBUFFERED: "1"
 
 jobs:
@@ -34,7 +35,6 @@ jobs:
       - run: pip install -q -e .
       - name: Hugging Face repos, bucket and round trip
         run: |
-          if [ -z "$HF_TOKEN" ]; then echo "::error::HF_TOKEN secret is missing"; exit 1; fi
           ticdata smoke-hf --out reports/gha-hf.json
       - if: always()
         run: |
