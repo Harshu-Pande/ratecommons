@@ -43,6 +43,10 @@ def main(argv=None) -> int:
     p.add_argument("files", nargs="+")
     p.add_argument("--prefix", required=True)
 
+    p = sub.add_parser("bench-local", help="experiment E2b: whole-file download, then local rapidgzip")
+    p.add_argument("--payers", default="cigna,uhc")
+    p.add_argument("--out")
+
     p = sub.add_parser("fingerprint", help="tail fingerprint of one URL")
     p.add_argument("url")
 
@@ -76,6 +80,10 @@ def main(argv=None) -> int:
 
         for url in hfio.put_files(cfg, a.prefix, a.files, f"reports {a.prefix}"):
             print(url)
+    elif a.cmd == "bench-local":
+        from . import smoke
+
+        _write(smoke.bench_local(tuple(a.payers.split(","))), a.out)
     elif a.cmd == "fingerprint":
         from .net import resolve, tail_fingerprint
 

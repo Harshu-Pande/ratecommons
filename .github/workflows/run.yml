@@ -1,0 +1,44 @@
+name: run
+# Run one ticdata command on a GitHub runner and copy everything it writes to reports/
+# into datasets/ratecommons/ops. Agents trigger it by committing an edit to
+# ops/run-request.txt; the last non-comment line is the argument list after "ticdata",
+# for example: bench-local --payers cigna,uhc --out reports/bench-local.json
+on:
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "Arguments after 'ticdata'"
+        required: true
+  push:
+    branches: [main]
+    paths: ["ops/run-request.txt"]
+
+permissions:
+  contents: read
+  id-token: write   # Hugging Face Trusted Publishers
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e .
+      - name: ticdata
+        run: |
+          args="${{ github.event.inputs.args }}"
+          [ -n "$args" ] || args="$(grep -v '^#' ops/run-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
+          echo "ticdata $args"
+          mkdir -p reports
+          echo "ticdata $args" > reports/command.txt
+          ticdata $args 2>&1 | tee reports/output.log
+      - if: always()
+        run: |
+          for f in reports/*.json; do [ -f "$f" ] || continue; echo "### $f" >> "$GITHUB_STEP_SUMMARY"; echo '```json' >> "$GITHUB_STEP_SUMMARY"; head -c 20000 "$f" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"; done
+          tail -c 200000 reports/output.log > reports/output.tail.log || true
+          rm -f reports/output.log
+          ticdata put-report reports/* --prefix "runs/$(date -u +%F)-gha-run-${GITHUB_RUN_ID}" || true

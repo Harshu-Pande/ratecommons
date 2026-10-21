@@ -283,3 +283,40 @@ def tail_fingerprint(url: str, size: int, s: requests.Session | None = None,
     """CRC32 and length (mod 2**32) of the file's last gzip member: its last 8 bytes."""
     tail = fetch_range(url, size - 8, size - 1, s, total=size, stats=stats)
     return int.from_bytes(tail[:4], "little"), int.from_bytes(tail[4:], "little")
+
+
+def download(url: str, path: str, size: int | None = None, *, threads: int = 8,
+             window: int = 64 << 20, s: requests.Session | None = None,
+             stats: Stats | None = None) -> dict:
+    """Download a whole file to `path` with parallel guarded range reads.
+
+    Every window is a separate `fetch_range` (206 only, total size checked), written at its
+    offset, so a dropped connection costs one window. Returns timing and HTTP stats.
+    """
+    import os
+
+    s = s or new_session(pool=max(16, threads * 2))
+    stats = stats or Stats()
+    if size is None:
+        r = resolve(url, s)
+        url, size = r.url, r.size
+    t0 = time.time()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.ftruncate(fd, size)
+
+        def one(start: int) -> int:
+            end = min(start + window, size) - 1
+            data = fetch_range(url, start, end, s, total=size, stats=stats)
+            os.pwrite(fd, data, start)
+            return len(data)
+
+        with ThreadPoolExecutor(max_workers=threads) as ex:
+            got = sum(ex.map(one, range(0, size, window)))
+    finally:
+        os.close(fd)
+    dt = time.time() - t0
+    if got != size:
+        raise IOError(f"downloaded {got} of {size} bytes")
+    return {"bytes": size, "seconds": round(dt, 1), "mb_per_s": round(size / dt / 1e6, 1),
+            "threads": threads, "window_mb": window >> 20, "http": stats.as_dict()}

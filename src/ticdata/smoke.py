@@ -12,7 +12,7 @@ import time
 import zlib
 
 from . import discover
-from .net import HttpFile, Stats, fetch_range, new_session, resolve, tail_fingerprint
+from .net import HttpFile, Stats, download, fetch_range, new_session, resolve, tail_fingerprint
 
 
 def egress() -> dict:
@@ -161,4 +161,49 @@ def bench(uhc_gb: float = 20.0, payers: tuple[str, ...] = ("cigna", "uhc")) -> d
             out["uhc_partial"] = {"file": u["name"], **run(u["url"], int(uhc_gb * 1e9))}
         except Exception as ex:
             out["uhc_error"] = repr(ex)[:800]
+    return out
+
+
+def bench_local(payers: tuple[str, ...] = ("cigna", "uhc"), workdir: str = "/tmp/ticbench") -> dict:
+    """Experiment E2b: download the whole file to local disk first, then rapidgzip the local file.
+
+    Compares with `bench()`, which streams through the Python HTTP file object.
+    """
+    import shutil
+
+    import rapidgzip
+
+    os.makedirs(workdir, exist_ok=True)
+    s = new_session()
+    threads = os.cpu_count() or 2
+    out: dict = {"machine": machine()}
+    disc = {"cigna": discover.cigna, "uhc": discover.uhc, "aetna": discover.aetna}
+    for p in payers:
+        try:
+            _, entries = disc[p](s)
+            e = _pick(entries, p)
+            rem = resolve(e["url"], s)
+            free = shutil.disk_usage(workdir).free
+            if rem.size > free * 0.9:
+                out[p] = {"file": e["name"], "skipped": f"{rem.size/1e9:.1f} GB > free disk {free/1e9:.1f} GB"}
+                continue
+            path = os.path.join(workdir, "f.gz")
+            dl = download(rem.url, path, rem.size, threads=8, s=s)
+            res = {"file": e["name"], "download": dl}
+            for par in sorted({1, threads}):
+                t0 = time.time()
+                n = 0
+                with rapidgzip.open(path, parallelization=par) as g:
+                    while True:
+                        b = g.read(64 << 20)
+                        if not b:
+                            break
+                        n += len(b)
+                dt = time.time() - t0
+                res[f"rapidgzip_p{par}"] = {"json_gb": round(n / 1e9, 2), "seconds": round(dt, 1),
+                                           "json_gb_per_s": round(n / dt / 1e9, 2)}
+            os.remove(path)
+            out[p] = res
+        except Exception as ex:
+            out[p] = {"error": repr(ex)[:800]}
     return out

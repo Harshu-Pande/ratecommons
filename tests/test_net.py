@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-from ticdata.net import HttpFile, RangeRefused, fetch_range, tail_fingerprint
+from ticdata.net import HttpFile, RangeRefused, download, fetch_range, tail_fingerprint
 
 DATA = gzip.compress(os.urandom(1 << 20) + b"x" * (3 << 20))
 
@@ -94,3 +94,10 @@ def test_httpfile_random_access(server):
     assert f.read(100) == DATA[-100:]
     f.seek(12345)
     assert f.read(10) == DATA[12345:12355]
+
+
+def test_download_whole_file_in_parallel_windows(server, tmp_path):
+    p = tmp_path / "f.gz"
+    res = download(server, str(p), len(DATA), threads=4, window=200_000)
+    assert p.read_bytes() == DATA
+    assert res["bytes"] == len(DATA) and res["http"]["range_ignored"] >= 1
