@@ -10,6 +10,22 @@ code for another track until it reports to `datasets/ratecommons/ops`.
 - How to start runs and read results without the Actions API: see DECISIONS
   (edit `ops/smoke-request.txt`, `ops/archive-request.txt`, `ops/kaggle-request.txt`).
 
+## Head start (night of 2026-10-21): where each track stands
+
+| Track | Done | Next |
+| --- | --- | --- |
+| A. Parser v0 | `parse.py` (Parser-rules flags, content-hashed tables), `pipeline.py` + `map.yml` (40 shards). Full Cigna run launched: 124 files, 29.7 GB | Check `runs/*-map-cigna-*`; fix failures; then `reduce` |
+| Reduce | `reduce.py` + `reduce.yml`: 16 fact parts + dims, derived networks and network sets, published to `datasets/ratecommons/cigna` (trusted publisher set) | Run `cigna 2026-10` once the map run is clean; then a dataset card |
+| B. Rust core | `core/` splitter: zlib-rs inflate thread + byte-level record cutter; counts match Python exactly. `core.yml` E7 bench on Cigna national OAP launched | Typed parse (simd-json or serde structs), the same canonical hashes as `parse.py` (cross-check test), Parquet out; then Aetna |
+| C. Identity | `datasets/ratecommons/identity`: Doctors and Clinicians (3.63M rows), IRS exempt orgs (1.98M). NPPES loader ready | NPPES when CMS's download page is back; reassignment (PPEF) |
+| D. Code dictionary | not started | DuckDB query over the reduced Cigna tables: every CSTM-ALL / LOCAL code with counts and example rates |
+
+How to run things (no Actions API needed): edit the last line of `ops/run-request.txt`
+(any `ticdata` command), `ops/map-request.txt` (`<payer> <shards> [limit]`),
+`ops/reduce-request.txt` (`<payer> <release>`), `ops/core-request.txt` (`<payer> <name>`),
+`ops/kaggle-request.txt` (job folder), then commit and push. Reports land in
+`datasets/ratecommons/ops/runs/`.
+
 ## Tracks, in the order they start
 
 | Track | First deliverable | Runs while |
