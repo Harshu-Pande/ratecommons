@@ -1,7 +1,8 @@
 name: map
 # Map stage: parse every in-network file of one payer into per-file tables in the work bucket
 # (map/<release>/<payer>/<file key>/). Trigger: edit ops/map-request.txt on main; its last
-# non-comment line is "<payer> <shards> [limit]", for example "cigna 40".
+# non-comment line is "<payer> <shards> [limit] [a-b]", for example "cigna 40" or "aetna 252 0 0-59"
+# (limit 0 = all files; a-b runs only those shards of the plan).
 on:
   workflow_dispatch:
     inputs:
@@ -34,11 +35,13 @@ jobs:
       - run: pip install -q -e .
       - id: plan
         run: |
-          read payer shards limit <<< "$(grep -v '^#' ops/map-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
+          read payer shards limit range <<< "$(grep -v '^#' ops/map-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
+          [ "$limit" = "0" ] && limit=""
           [ -n "${{ github.event.inputs.payer }}" ] && payer="${{ github.event.inputs.payer }}" && shards="${{ github.event.inputs.shards }}" && limit="${{ github.event.inputs.limit }}"
           echo "payer=$payer shards=$shards limit=$limit"
           ticdata plan --payer "$payer" --shards "$shards" ${limit:+--limit $limit} --out plan.json > /dev/null
-          python -c "import json; d=json.load(open('plan.json')); print(json.dumps([s['shard'] for s in d['shards'] if s['files']]))" > shards.json
+          # optional 4th word "a-b": run only shards a..b of the plan (waves that fit storage)
+          RANGE="$range" python -c "import json, os; d=json.load(open('plan.json')); r=os.environ['RANGE']; a, b = (map(int, r.split('-')) if r else (0, 10**9)); print(json.dumps([s['shard'] for s in d['shards'] if s['files'] and a <= s['shard'] <= b]))" > shards.json
           echo "shards=$(cat shards.json)" >> "$GITHUB_OUTPUT"
           echo "payer=$payer" >> "$GITHUB_OUTPUT"
           python -c "import json; d=json.load(open('plan.json')); print(d['files'], 'files', round(d['bytes']/1e9,1), 'GB')" >> "$GITHUB_STEP_SUMMARY"

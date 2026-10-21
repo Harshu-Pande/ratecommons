@@ -5,6 +5,14 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **Aetna is mapped in waves because its map output would not fit Hugging Face's 7.8 TB.**
+  The first real Aetna chunk (3 files, 2.2 GB gzip, 40 GB of JSON) produced 2.86 GB of map
+  output, so all 8 TB of Aetna would leave about 10 TB of shuffle files. The map request takes
+  a shard range (`aetna 252 0 0-59`); a wave is reduced and measured before the next starts,
+  and its map outputs can be deleted once its reduce is published. Org usage before Aetna:
+  0.13 TB public, 0.07 GB private. Measured on GitHub: about 19.5 GB of JSON per Aetna file,
+  0.11 GB/s per runner before the provider-set changes (about 0.2 GB/s after), RSS 4 GB, and
+  32% of the second file's records were blocks already written by the first.
 - **Provider sets are stored as lists of provider lists (design change).** On Aetna a
   negotiated rate's provider set names about 1,800 provider groups, and 3,000 records
   produced 52,814 distinct sets: 1.54 GB of Parquet, 15 s of writer time, and the memory
