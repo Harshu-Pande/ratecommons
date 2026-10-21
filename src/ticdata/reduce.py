@@ -25,6 +25,7 @@ from pathlib import Path
 DIMS = {
     "provider_group": "pg_id",
     "provider_set": "ps_id",
+    "provider_list": "pli_id",
     "price_term": "pt_id",
     "price_list": "pl_id",
     "code": "code_id",
@@ -264,7 +265,7 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str)
     return res
 
 
-DIM_SLICES = {"price_list": 8, "price_term": 4, "provider_set": 4}
+DIM_SLICES = {"price_list": 8, "price_term": 4, "provider_set": 4, "provider_list": 4}
 
 
 def restricted_dir(out: str) -> str:

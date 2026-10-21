@@ -11,7 +11,9 @@ TABLES = [
                     "parser flags, and its `network_id`."),
     ("code", "Billing codes as published (type, version, code, arrangement), keyed by `code_id`. "
              "Descriptor text is withheld where it is licensed (see below)."),
-    ("provider_set", "`ps_id` -> the provider groups (`pg_ids`) a rate applies to."),
+    ("provider_set", "`ps_id` -> the provider lists (`pli_ids`) a rate applies to. Its ID is the hash of "
+                     "the flattened, sorted group list."),
+    ("provider_list", "`pli_id` -> the provider groups (`pg_ids`) of one provider reference as published."),
     ("provider_group", "`pg_id` -> TIN (type, normalized value, raw values) and sorted NPI list; "
                        "`tin_wide` when the file lists NPI 0 (the whole TIN). Business names are hints only."),
     ("price_list", "`pl_id` -> the price terms (`pt_ids`) of one negotiated_prices list."),
@@ -88,7 +90,7 @@ def build(payer: str, release: str, repo: str, payer_name: str, rows_in: int | N
         "",
         "```",
         "rate_fact -> code (code_id)",
-        "          -> provider_set (ps_id) -> provider_group (pg_ids)",
+        "          -> provider_set (ps_id) -> provider_list (pli_ids) -> provider_group (pg_ids)",
         "          -> price_list (pl_id)   -> price_term (pt_ids)",
         "          -> network_set (ns_id)  -> network / source_file (network_ids)",
         "```",
@@ -98,7 +100,9 @@ def build(payer: str, release: str, repo: str, payer_name: str, rows_in: int | N
         "```sql",
         "INSTALL httpfs; LOAD httpfs;",
         f"CREATE VIEW fact AS SELECT * FROM '{base}/rate_fact/*.parquet';",
-        f"CREATE VIEW ps AS SELECT ps_id, unnest(pg_ids) AS pg_id FROM '{base}/provider_set/*.parquet';",
+        f"CREATE VIEW ps AS SELECT DISTINCT s.ps_id, unnest(l.pg_ids) AS pg_id",
+        f"  FROM (SELECT ps_id, unnest(pli_ids) AS pli_id FROM '{base}/provider_set/*.parquet') s",
+        f"  JOIN '{base}/provider_list/*.parquet' l USING (pli_id);",
         f"CREATE VIEW pg AS SELECT * FROM '{base}/provider_group.parquet';",
         f"CREATE VIEW pl AS SELECT pl_id, unnest(pt_ids) AS pt_id FROM '{base}/price_list/*.parquet';",
         f"CREATE VIEW pt AS SELECT * FROM '{base}/price_term/*.parquet';",

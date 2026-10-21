@@ -5,6 +5,15 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **Provider sets are stored as lists of provider lists (design change).** On Aetna a
+  negotiated rate's provider set names about 1,800 provider groups, and 3,000 records
+  produced 52,814 distinct sets: 1.54 GB of Parquet, 15 s of writer time, and the memory
+  blow-up that killed the first Aetna jobs (exit 143 at 15 GB RSS). The design's identity is
+  kept (`ps_id` = hash of the flattened, sorted group list) but the set is stored as the
+  provider lists it was built from: new table `provider_list` (`pli_id` = hash of one
+  reference's sorted group list, `pg_ids`), and `provider_set` holds `pli_ids`. Same 3,000
+  records: 4.1 MB + 10.5 MB, writer time 0.2 s. Python and Rust match. Cigna's first
+  release used the flat form; it is re-mapped with the Rust core so every payer has one schema.
 - **Aetna jobs died after about a minute with exit code 143** (GitHub's runner kills the job
   under memory pressure), before any file finished. Likely cause: the Rust core queued up to
   256 whole records for its workers, and Aetna records can be very large. In-flight records

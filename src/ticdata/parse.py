@@ -6,7 +6,9 @@ accept any valid JSON, keep every raw value, normalize beside it, record deviati
 
 Tables written per file (IDs are xxh3-128 content hashes, so every worker agrees):
   provider_group     pg_id = TIN + sorted NPI list (names never part of identity)
-  provider_set       ps_id = sorted distinct pg_ids
+  provider_list      pli_id = sorted distinct pg_ids of one provider reference (or one inline list)
+  provider_set       ps_id = sorted distinct pg_ids (all lists of a rate, flattened); stored as its
+                     pli_ids, since Aetna sets name thousands of groups and repeat them across sets
   provider_reference file-local provider_group_id -> pg_ids, with network_name as published
   price_term         pt_id = one negotiated price, amount in ten-thousandths of a dollar
   price_list         pl_id = sorted distinct pt_ids
@@ -218,7 +220,8 @@ class FileParser:
         self.extra_top: dict = {}
         self.layout: set[str] = set()
         self.pg: dict[bytes, dict] = {}
-        self.ps: dict[bytes, list[bytes]] = {}
+        self.ps: dict[bytes, list[bytes]] = {}   # ps_id -> packed pli_ids
+        self.pli: dict[bytes, bytes] = {}        # pli_id -> packed pg_ids
         self.refs: dict[str, dict] = {}
         # price terms and lists can number 10^7-10^8 in national files: rows stream to writers,
         # and only bounded "recently seen" sets stay in memory. A repeat after a reset is written
@@ -260,11 +263,17 @@ class FileParser:
                 cur["business_names"].append(name)
         return pid
 
-    def provider_set(self, pg_ids) -> bytes:
-        packed = pg_ids if isinstance(pg_ids, bytes) else pack(pg_ids)
-        sid = xxhash.xxh3_128_digest(b"ps" + packed)  # same as h_ids("ps", ids)
+    def provider_list(self, packed: bytes) -> bytes:
+        lid = xxhash.xxh3_128_digest(b"pli" + packed)  # same as h_ids("pli", ids)
+        if lid not in self.pli:
+            self.pli[lid] = packed
+        return lid
+
+    def provider_set(self, flat: bytes, pli_ids: list[bytes]) -> bytes:
+        """flat: packed sorted distinct pg_ids of the whole set; pli_ids: the lists it came from."""
+        sid = xxhash.xxh3_128_digest(b"ps" + flat)  # same as h_ids("ps", ids)
         if sid not in self.ps:
-            self.ps[sid] = packed
+            self.ps[sid] = pack(pli_ids)
         return sid
 
     def reference(self, ref: dict):
@@ -425,12 +434,15 @@ class FileParser:
             inline = [self.provider_group(g) for g in nr["provider_groups"]]
         if nr.get("provider_references"):
             self.layout.add("provider_references")
+        lists = [self.provider_list(b) for b in packed]
+        if inline:
+            lists.append(self.provider_list(pack(inline)))
         if len(packed) == 1 and not inline:
-            return self.provider_set(packed[0])  # already sorted and distinct
-        ids = inline
+            return self.provider_set(packed[0], lists)  # already sorted and distinct
+        ids = list(inline)
         for b in packed:
             ids.extend(unpack(b))
-        return self.provider_set(ids)
+        return self.provider_set(pack(ids), lists)
 
     # passes ---------------------------------------------------------------
     def pass_header_and_refs(self, stream):
@@ -575,8 +587,10 @@ def _write_tables(fp: FileParser, outdir: str) -> dict:
             ("pg_id", b16), ("tin_type", pa.string()), ("tin_value", pa.string()), ("tin_raw", pa.string()),
             ("npis", lst(pa.int64())), ("npi_count", pa.int32()), ("tin_wide", pa.bool_()),
             ("business_names", lst(pa.string()))])),
-        "provider_set": ([{"ps_id": k, "pg_ids": unpack(v)} for k, v in fp.ps.items()],
-                         pa.schema([("ps_id", b16), ("pg_ids", lst(b16))])),
+        "provider_set": ([{"ps_id": k, "pli_ids": unpack(v)} for k, v in fp.ps.items()],
+                         pa.schema([("ps_id", b16), ("pli_ids", lst(b16))])),
+        "provider_list": ([{"pli_id": k, "pg_ids": unpack(v)} for k, v in fp.pli.items()],
+                          pa.schema([("pli_id", b16), ("pg_ids", lst(b16))])),
         "provider_reference": ([{**r, "pg_ids": unpack(r["pg_ids"])} for r in fp.refs.values()], pa.schema([
             ("provider_group_id", pa.string()), ("pg_ids", lst(b16)), ("network_name", lst(pa.string())),
             ("location", pa.string())])),

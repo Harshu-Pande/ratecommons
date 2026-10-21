@@ -16,7 +16,8 @@ import json
 import os
 from pathlib import Path
 
-KEYED = {"price_term": "pt_id", "price_list": "pl_id", "provider_set": "ps_id", "code": "code_id"}
+KEYED = {"price_term": "pt_id", "price_list": "pl_id", "provider_set": "ps_id", "provider_list": "pli_id",
+         "code": "code_id"}
 
 
 def consolidate(items: list[tuple[str, str]], dest: str) -> dict:

@@ -11,7 +11,7 @@ import pytest
 from ticdata.parse import parse_file
 
 BIN = Path(__file__).resolve().parents[1] / "core/target/release/ticcore"
-KEYS = {"provider_group": "pg_id", "provider_set": "ps_id", "price_term": "pt_id", "price_list": "pl_id",
+KEYS = {"provider_group": "pg_id", "provider_set": "ps_id", "provider_list": "pli_id", "price_term": "pt_id", "price_list": "pl_id",
         "code": "code_id", "provider_reference": "provider_group_id"}
 
 

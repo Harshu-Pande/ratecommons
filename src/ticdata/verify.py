@@ -65,7 +65,7 @@ def verify_file(payer: str, release: str, repo: str, match: str, workdir: str = 
         "in_release_not_in_file": "SELECT count(*) FROM pf SEMI JOIN ns USING (ns_id) ANTI JOIN lf USING (fact_id)",
     }
     for name, key, table in (("price_term", "pt_id", "price_term"), ("price_list", "pl_id", "price_list"),
-                             ("provider_set", "ps_id", "provider_set"), ("code", "code_id", "code"),
+                             ("provider_set", "ps_id", "provider_set"), ("provider_list", "pli_id", "provider_list"), ("code", "code_id", "code"),
                              ("provider_group", "pg_id", "provider_group")):
         src = f"'{base}/{table}.parquet'" if os.path.exists(f"{base}/{table}.parquet") else f"'{base}/{table}/*.parquet'"
         checks[f"{name}_missing"] = (f"SELECT count(*) FROM (SELECT DISTINCT {key} FROM '{out}/{table}.parquet') "

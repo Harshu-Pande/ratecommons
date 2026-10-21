@@ -125,6 +125,7 @@ pub struct Shared {
     pt_seen: Seen,
     pl_seen: Seen,
     ps_seen: Seen,
+    pli_seen: Seen,
     code_seen: Seen,
 }
 
@@ -133,6 +134,7 @@ enum Msg {
     Pt(Vec<PtRow>),
     Pl(Vec<(Id, Vec<Id>)>),
     Ps(Vec<(Id, Vec<Id>)>),
+    Pli(Vec<(Id, Vec<Id>)>),
     Code(Vec<CodeRow>),
     Fact(Vec<FactRow>),
 }
@@ -232,7 +234,7 @@ struct Outs {
 struct Worker<'s> {
     sh: &'s Shared,
     rc: Option<&'s RecordCache>,
-    refs: &'s HashMap<Option<String>, Vec<Id>>,
+    refs: &'s HashMap<Option<String>, (Id, Vec<Id>)>,
     out: Outs,
     flags: Flags,
     counts: HashMap<&'static str, u64>,
@@ -246,8 +248,10 @@ struct Worker<'s> {
     codes: Vec<CodeRow>,
     facts: Vec<FactRow>,
     fb: Vec<FbRow>,
+    pli: Vec<(Id, Vec<Id>)>,
     pl_ids: usize,
     ps_ids: usize,
+    pli_ids: usize,
 }
 
 impl<'s> Worker<'s> {
@@ -255,6 +259,7 @@ impl<'s> Worker<'s> {
         if force || self.pt.len() >= 50_000 { let v = std::mem::take(&mut self.pt); if !v.is_empty() { self.out.pt.send(Msg::Pt(v)).unwrap(); } }
         // list tables flush by size too: one Aetna provider set can name thousands of groups
         if force || self.pl.len() >= 50_000 || self.pl_ids >= 2_000_000 { self.pl_ids = 0; let v = std::mem::take(&mut self.pl); if !v.is_empty() { self.out.other.send(Msg::Pl(v)).unwrap(); } }
+        if force || self.pli.len() >= 20_000 || self.pli_ids >= 2_000_000 { self.pli_ids = 0; let v = std::mem::take(&mut self.pli); if !v.is_empty() { self.out.other.send(Msg::Pli(v)).unwrap(); } }
         if force || self.ps.len() >= 20_000 || self.ps_ids >= 2_000_000 { self.ps_ids = 0; let v = std::mem::take(&mut self.ps); if !v.is_empty() { self.out.other.send(Msg::Ps(v)).unwrap(); } }
         if force || self.codes.len() >= 50_000 { let v = std::mem::take(&mut self.codes); if !v.is_empty() { self.out.other.send(Msg::Code(v)).unwrap(); } }
         if force || self.fb.len() >= 50_000 { let v = std::mem::take(&mut self.fb); if !v.is_empty() { self.out.other.send(Msg::Fb(v)).unwrap(); } }
@@ -383,8 +388,11 @@ impl<'s> Worker<'s> {
         lid
     }
 
+    /// A provider set's ID is its flattened, sorted group list (the design's identity); it is
+    /// stored as the provider lists (one per reference, or one inline list) it was built from,
+    /// because Aetna sets name thousands of groups and the same lists recur across sets.
     fn resolve_set(&mut self, nr: &RawObject) -> Id {
-        let mut packed: Vec<&Vec<Id>> = Vec::new();
+        let mut packed: Vec<&(Id, Vec<Id>)> = Vec::new();
         let refs_v = nr.get("provider_references");
         if let Some(a) = arr(refs_v) {
             for rid in a.0 {
@@ -405,17 +413,37 @@ impl<'s> Worker<'s> {
         if truthy(refs_v) {
             self.layout.insert("provider_references");
         }
+        let mut lists: Vec<Id> = Vec::with_capacity(packed.len() + 1);
+        for p in &packed {
+            lists.push(p.0);
+            if self.sh.pli_seen.insert(&p.0) {
+                self.pli_ids += p.1.len();
+                self.pli.push((p.0, p.1.clone()));
+            }
+        }
+        let inline_ids: Vec<Id> = inline.iter().flatten().copied().collect();
+        if !inline.is_empty() {
+            let mut v = inline_ids.clone();
+            let lid = h_ids(b"pli", &mut v);
+            lists.push(lid);
+            if self.sh.pli_seen.insert(&lid) {
+                self.pli_ids += v.len();
+                self.pli.push((lid, v));
+            }
+        }
         let mut ids: Vec<Id> = if packed.len() == 1 && inline.is_empty() {
-            packed[0].clone()
+            packed[0].1.clone()
         } else {
-            let mut v: Vec<Id> = packed.iter().flat_map(|p| p.iter().copied()).collect();
-            v.extend(inline.into_iter().flatten());
+            let mut v: Vec<Id> = packed.iter().flat_map(|p| p.1.iter().copied()).collect();
+            v.extend(inline_ids);
             v
         };
         let sid = h_ids(b"ps", &mut ids);
         if self.sh.ps_seen.insert(&sid) {
-            self.ps_ids += ids.len();
-            self.ps.push((sid, ids));
+            lists.sort_unstable();
+            lists.dedup();
+            self.ps_ids += lists.len();
+            self.ps.push((sid, lists));
         }
         sid
     }
@@ -548,6 +576,7 @@ fn writer_thread(rx: Receiver<Msg>, outdir: String) -> serde_json::Map<String, s
             Msg::Pt(v) => { wr(&mut w, &outdir, "price_term").write(pt_cols(&v), "price_term"); "price_term" }
             Msg::Pl(v) => { wr(&mut w, &outdir, "price_list").write(pl_cols(&v), "price_list"); "price_list" }
             Msg::Ps(v) => { wr(&mut w, &outdir, "provider_set").write(ps_cols(&v), "provider_set"); "provider_set" }
+            Msg::Pli(v) => { wr(&mut w, &outdir, "provider_list").write(ps_cols(&v), "provider_list"); "provider_list" }
             Msg::Code(v) => { wr(&mut w, &outdir, "code").write(code_cols(&v), "code"); "code" }
             Msg::Fb(v) => { wr(&mut w, &outdir, "file_block").write(fb_cols(&v), "file_block"); "file_block" }
             Msg::Fact(v) => {
@@ -708,6 +737,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
         pt_seen: Seen::new(60_000_000),
         pl_seen: Seen::new(60_000_000),
         ps_seen: Seen::new(50_000_000),
+        pli_seen: Seen::new(50_000_000),
         code_seen: Seen::new(50_000_000),
     });
     let blocks_loaded = seen_blocks.map(|p| load_blocks(p, &sh.blocks)).unwrap_or(0);
@@ -735,7 +765,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
 
     let mut main_flags = Flags::default();
     let mut main_counts: HashMap<&'static str, u64> = HashMap::default();
-    let mut refs: HashMap<Option<String>, Vec<Id>> = HashMap::default();
+    let mut refs: HashMap<Option<String>, (Id, Vec<Id>)> = HashMap::default();
     let mut ref_rows: Vec<RefRow> = Vec::new();
     let mut ref_index: HashMap<Option<String>, usize> = HashMap::default();
     let mut header = serde_json::Map::new();
@@ -750,7 +780,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     // workers start lazily, when the first in_network record arrives (references are complete then)
     let mut item_tx: Option<Sender<(u128, Vec<u8>)>> = None;
     let mut handles: Vec<std::thread::JoinHandle<(Flags, HashMap<&'static str, u64>, HashSet<&'static str>)>> = Vec::new();
-    let mut refs_arc: Option<Arc<HashMap<Option<String>, Vec<Id>>>> = None;
+    let mut refs_arc: Option<Arc<HashMap<Option<String>, (Id, Vec<Id>)>>> = None;
 
     // records waiting for or inside workers are bounded by bytes, not only by count: one in_network
     // record can be hundreds of MB, and 256 of those would exhaust a 16 GB runner
@@ -759,6 +789,8 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     let read_bytes = Arc::new(AtomicU64::new(0));
     let sent = Arc::new(AtomicU64::new(0));
     let biggest = Arc::new(AtomicU64::new(0));
+    // profiling aid: parse only the first N in_network records (the rest is still read, not parsed)
+    let max_records: u64 = std::env::var("TIC_MAX_RECORDS").ok().and_then(|v| v.parse().ok()).unwrap_or(u64::MAX);
     let stop = Arc::new(AtomicBool::new(false));
     // progress on stderr every 15 s, so a killed run still shows how far it got and how big it grew
     let progress = {
@@ -842,9 +874,14 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                         ref_rows.push(row);
                     }
                 }
-                refs.insert(rid, ids);
+                let mut lid_src = ids.clone();
+                let lid = h_ids(b"pli", &mut lid_src);
+                refs.insert(rid, (lid, ids));
                 *main_counts.entry("provider_references").or_insert(0) += 1;
             } else if k == b"in_network" {
+                if sent.load(Ordering::Relaxed) >= max_records {
+                    return;
+                }
                 if item_tx.is_none() {
                     t_refs.set(t0.elapsed().as_secs_f64());
                     let arc = Arc::new(std::mem::take(&mut refs));
@@ -864,7 +901,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                                 counts: HashMap::default(),
                                 layout: HashSet::default(), c_refs: HashMap::default(), c_prices: HashMap::default(),
                                 c_price: HashMap::default(), pt: vec![], pl: vec![], ps: vec![], codes: vec![], facts: vec![],
-                                fb: vec![], pl_ids: 0, ps_ids: 0,
+                                fb: vec![], pli: vec![], pl_ids: 0, ps_ids: 0, pli_ids: 0,
                             };
                             let mut busy = 0.0f64;
                             for (key, rec) in rx {
@@ -964,7 +1001,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
         }
         tables.extend(m);
     }
-    for name in ["price_term", "price_list", "provider_set", "code", "file_block"] {
+    for name in ["price_term", "price_list", "provider_set", "provider_list", "code", "file_block"] {
         if !tables.contains_key(name) {
             let pw = Pq::create(&format!("{outdir}/{name}.parquet"), name);
             let (r, b) = pw.close();

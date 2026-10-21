@@ -30,7 +30,8 @@ pub fn schema(table: &str) -> Arc<Schema> {
             f("npis", list(DataType::Int64)), f("npi_count", DataType::Int32), f("tin_wide", DataType::Boolean),
             f("business_names", list(s.clone())),
         ],
-        "provider_set" => vec![f("ps_id", b16()), f("pg_ids", list(b16()))],
+        "provider_set" => vec![f("ps_id", b16()), f("pli_ids", list(b16()))],
+        "provider_list" => vec![f("pli_id", b16()), f("pg_ids", list(b16()))],
         "provider_reference" => vec![
             f("provider_group_id", s.clone()), f("pg_ids", list(b16())), f("network_name", list(s.clone())),
             f("location", s.clone()),
