@@ -121,3 +121,42 @@ def test_reduce_merges_identical_files_into_one_network(tmp_path):
     assert dims["tables"]["price_term"]["rows_out"] == 5
     sets = pq.read_table(tmp_path / "out/network_set").to_pylist()
     assert {len(s["network_ids"]) for s in sets} == {1}
+
+
+def _fact_sets(out):
+    """fact_id -> frozenset of network_ids, from a reduced release folder."""
+    sets = {r["ns_id"]: frozenset(r["network_ids"]) for r in pq.read_table(out / "network_set").to_pylist()}
+    return {r["fact_id"]: sets[r["ns_id"]] for r in pq.read_table(out / "rate_fact").to_pylist()}
+
+
+def test_reduce_network_sets_blocks_and_files_modes_agree(tmp_path):
+    """A fact shared by two files in different blocks gets both networks, in both reduce modes."""
+    import copy
+    import shutil
+
+    from ticdata.reduce import reduce_part_local
+
+    doc_b = copy.deepcopy(DOC)
+    doc_b["in_network"][0]["negotiated_rates"][0]["negotiated_prices"][0]["negotiated_rate"] = 80.0
+    (tmp_path / "b.json").write_text(json.dumps(doc_b))
+    _write_two_member_gzip(tmp_path / "a.json.gz")
+    with open(tmp_path / "b.json.gz", "wb") as f:
+        f.write(gzip.compress((tmp_path / "b.json").read_bytes()))
+    results = {}
+    for mode, shared in (("blocks", set()), ("blocks_sep", None), ("files", None)):
+        m = tmp_path / mode / "map"
+        parse_file(str(tmp_path / "a.json.gz"), str(m / "a"), {"name": "a"}, shared)
+        parse_file(str(tmp_path / "b.json.gz"), str(m / "b"), {"name": "b"}, shared)
+        shutil.copytree(m / "a", m / "c")  # identical file: same network as a
+        if mode == "files":
+            for fb in m.glob("*/file_block.parquet"):
+                fb.unlink()
+        for k in range(16):
+            r = reduce_part_local(str(m), "test", "2026-10", k, str(tmp_path / mode / "out"))
+            assert r.get("mode", mode.split("_")[0]) == mode.split("_")[0]
+        results[mode] = _fact_sets(tmp_path / mode / "out")
+    assert results["blocks"] == results["files"] == results["blocks_sep"]
+    sizes = sorted(len(s) for s in results["files"].values())
+    # 99213 group 1 (one price list): one fact only in a, one only in b, since the changed price changes
+    # the price list; the other 3 facts (99213 group 2, URC, RC 918) are in both networks
+    assert sizes == [1, 1, 2, 2, 2]

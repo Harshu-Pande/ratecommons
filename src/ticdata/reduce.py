@@ -98,78 +98,145 @@ def _duck(workdir: str):
     return con
 
 
-def reduce_part_local(local: str, payer: str, release: str, part: int, out: str) -> dict:
+NS_SQL = "unhex(md5(array_to_string(list_transform(network_ids, lambda x: hex(x)), '')))"
+FACT_COLS = "fact_id, code_id, ps_id, pl_id, billing_code_type, billing_code"
+ANY_COLS = ", ".join(f"any_value({c}) {c}" for c in FACT_COLS.split(", ")[1:])
+
+
+def _nets_table(con, nets: list[dict]) -> dict:
+    """Register `nets` (net, network_id, h1, h2): one small integer and two 64-bit halves per network.
+
+    A network set is grouped by (bit_xor(h1), bit_xor(h2), count) over its distinct members: fixed-size,
+    order-free aggregate states that spill cheaply. ns_id itself stays md5 over the sorted network IDs.
+    Returns file_key -> net.
+    """
     import pyarrow as pa
+
+    ids = sorted({n["network_id"] for n in nets})
+    idx = {nid: i for i, nid in enumerate(ids)}
+    con.register("nets", pa.table({
+        "net": pa.array(range(len(ids)), pa.int32()),
+        "network_id": pa.array(ids, pa.binary(16)),
+        "h1": pa.array([int.from_bytes(i[:8], "big") for i in ids], pa.uint64()),
+        "h2": pa.array([int.from_bytes(i[8:], "big") for i in ids], pa.uint64()),
+    }))
+    return {n["file_key"]: idx[n["network_id"]] for n in nets}
+
+
+def _ns_map(con, keyed: str, members: str, name: str) -> int:
+    """Turn set keys into ns_ids. `keyed` has (x1, x2, n_net, rep); `members` has (rep, net) for those reps.
+
+    Creates table `name` (x1, x2, n_net, ns_id, network_ids) and checks every set has n_net members.
+    """
+    con.execute(f"""
+        CREATE OR REPLACE TABLE {name} AS
+        WITH k AS ({keyed}),
+             m AS (SELECT mm.rep, list(n.network_id ORDER BY n.network_id) network_ids
+                   FROM ({members}) mm JOIN nets n USING (net)
+                   WHERE mm.rep IN (SELECT rep FROM k) GROUP BY mm.rep)
+        SELECT k.x1, k.x2, k.n_net, {NS_SQL} AS ns_id, m.network_ids
+        FROM k JOIN m USING (rep)
+    """)
+    bad = con.execute(f"SELECT count(*) FROM {name} WHERE len(network_ids) <> n_net").fetchone()[0]
+    if bad:
+        raise RuntimeError(f"{bad} network sets disagree with their keys")
+    return con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
+
+
+def reduce_part_local(local: str, payer: str, release: str, part: int, out: str) -> dict:
+    """Distinct facts of one partition, each with the set of networks (derived from files) it appears in.
+
+    Memory stays flat: no list aggregates over the big input, only fixed-size group states.
+    """
+    import pyarrow.parquet as pq
 
     t0 = time.time()
     nets = networks(local, payer)
     files = sorted(str(p) for p in Path(local).glob(f"*/rate_fact/part-{part:02d}.parquet"))
     os.makedirs(f"{out}/rate_fact", exist_ok=True)
     os.makedirs(f"{out}/network_set", exist_ok=True)
-    res = {"part": part, "files": len(files), "networks": len(nets), "seconds": 0.0}
+    res = {"part": part, "files": len(files), "networks": len({n["network_id"] for n in nets}), "seconds": 0.0}
     if not files:
         return res
+    res["rows_in"] = sum(pq.ParquetFile(f).metadata.num_rows for f in files)
     con = _duck(local)
-    con.register("nets", pa.Table.from_pylist([{"file_key": n["file_key"], "network_id": n["network_id"]}
-                                               for n in nets]))
+    net_of = _nets_table(con, nets)
+    key = lambda p: Path(p).parts[-3]  # <file key>/rate_fact/part-XX.parquet
     tmp = f"{local}/facts_tmp.parquet"
     fbs = sorted(str(p) for p in Path(local).glob("*/file_block.parquet"))
     if fbs:
-        # block-level membership: a fact's networks are the union of the networks of every
-        # block (billing-code record) it appears in; facts were written once per block per shard
+        # block membership: a fact's networks are the union over the blocks (billing-code records) it
+        # appears in; the map wrote each block's facts once per shard and every file's block list
         res["mode"] = "blocks"
         os.makedirs(f"{out}/block", exist_ok=True)
+        fb_union = " UNION ALL ".join(
+            f"SELECT block_id, code_id, n_rates, {net_of[Path(f).parent.name]} AS net FROM read_parquet('{f}') "
+            f"WHERE part = {part}" for f in fbs)
+        con.execute(f"CREATE TABLE fbr AS {fb_union}")
+        con.execute("CREATE TABLE bnet AS SELECT DISTINCT block_id, net FROM fbr")
+        con.execute("""CREATE TABLE bn AS
+                       SELECT b.block_id, bit_xor(n.h1) x1, bit_xor(n.h2) x2, count(*)::INTEGER n_net
+                       FROM bnet b JOIN nets n USING (net) GROUP BY b.block_id""")
         con.execute(f"""
-            CREATE TABLE bn AS
-            SELECT fb.block_id, any_value(fb.code_id) code_id, any_value(fb.n_rates) n_rates,
-                   list(DISTINCT n.network_id ORDER BY n.network_id) network_ids, count(*) n_files
-            FROM read_parquet({fbs!r}, filename = true) fb
-            JOIN nets n ON n.file_key = split_part(fb.filename, '/', -2)
-            WHERE fb.part = {part}
-            GROUP BY fb.block_id
-        """)
+            COPY (SELECT fact_id, {ANY_COLS}, min(block_id) b_min, max(block_id) b_max
+                  FROM read_parquet({files!r}) GROUP BY fact_id)
+            TO '{local}/fx.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+        fx = f"read_parquet('{local}/fx.parquet')"
+        con.execute(f"""CREATE TABLE multi AS
+                        SELECT DISTINCT r.fact_id, b.net
+                        FROM read_parquet({files!r}) r JOIN bnet b USING (block_id)
+                        WHERE r.fact_id IN (SELECT fact_id FROM {fx} WHERE b_min <> b_max)""")
         con.execute(f"""
             COPY (
-              SELECT x.fact_id, any_value(x.code_id) code_id, any_value(x.ps_id) ps_id, any_value(x.pl_id) pl_id,
-                     any_value(x.billing_code_type) billing_code_type, any_value(x.billing_code) billing_code,
-                     list_sort(list_distinct(flatten(list(bn.network_ids)))) network_ids, count(*) n_in
-              FROM (SELECT DISTINCT fact_id, block_id, code_id, ps_id, pl_id, billing_code_type, billing_code
-                    FROM read_parquet({files!r})) x
-              JOIN bn USING (block_id)
-              GROUP BY x.fact_id
-            ) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)
-        """)
-        ns_b = "unhex(md5(array_to_string(list_transform(network_ids, lambda x: hex(x)), '')))"
-        con.execute(f"""COPY (SELECT block_id, code_id, n_rates, n_files, {ns_b} AS ns_id FROM bn)
-                        TO '{out}/block/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+              SELECT f.{FACT_COLS.replace(', ', ', f.')}, bn.x1, bn.x2, bn.n_net
+              FROM {fx} f JOIN bn ON bn.block_id = f.b_min WHERE f.b_min = f.b_max
+              UNION ALL
+              SELECT f.{FACT_COLS.replace(', ', ', f.')}, u.x1, u.x2, u.n_net
+              FROM {fx} f JOIN (SELECT m.fact_id, bit_xor(n.h1) x1, bit_xor(n.h2) x2, count(*)::INTEGER n_net
+                                FROM multi m JOIN nets n USING (net) GROUP BY m.fact_id) u USING (fact_id)
+            ) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)""")
+        res["multi_block_facts"] = con.execute("SELECT count(DISTINCT fact_id) FROM multi").fetchone()[0]
+        res["block_sets"] = _ns_map(con, "SELECT x1, x2, n_net, any_value(block_id) rep FROM bn GROUP BY ALL",
+                                    "SELECT block_id rep, net FROM bnet", "bns")
+        con.execute(f"""
+            COPY (SELECT a.block_id, a.code_id, a.n_rates, a.n_files, s.ns_id
+                  FROM (SELECT block_id, any_value(code_id) code_id, any_value(n_rates) n_rates,
+                               count(*)::INTEGER n_files FROM fbr GROUP BY block_id) a
+                  JOIN bn USING (block_id) JOIN bns s USING (x1, x2, n_net))
+            TO '{out}/block/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
         res["blocks"] = con.execute("SELECT count(*) FROM bn").fetchone()[0]
+        members = f"""SELECT DISTINCT r.fact_id rep, b.net FROM read_parquet({files!r}) r
+                      JOIN bnet b USING (block_id) WHERE r.fact_id IN (SELECT fact_id FROM reps)"""
     else:
-        # older map output without blocks: membership straight from the file each fact came from
+        # older map output without blocks: membership is the file each fact came from. Read one file
+        # per network (identical files are one network) so each (fact, network) pair counts once.
         res["mode"] = "files"
+        rep_files: dict[int, str] = {}
+        for f in files:
+            rep_files.setdefault(net_of[key(f)], f)
+        per_net = " UNION ALL ".join(
+            f"SELECT DISTINCT {FACT_COLS}, {i} AS net FROM read_parquet('{f}')" for i, f in rep_files.items())
         con.execute(f"""
-            COPY (
-              SELECT r.fact_id, any_value(r.code_id) code_id, any_value(r.ps_id) ps_id, any_value(r.pl_id) pl_id,
-                     any_value(r.billing_code_type) billing_code_type, any_value(r.billing_code) billing_code,
-                     list(DISTINCT n.network_id ORDER BY n.network_id) network_ids, count(*) n_in
-              FROM read_parquet({files!r}, filename = true) r
-              JOIN nets n ON n.file_key = split_part(r.filename, '/', -3)
-              GROUP BY r.fact_id
-            ) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)
-        """)
-    ns = "unhex(md5(array_to_string(list_transform(network_ids, lambda x: hex(x)), '')))"
+            COPY (SELECT fact_id, {ANY_COLS}, bit_xor(n.h1) x1, bit_xor(n.h2) x2, count(*)::INTEGER n_net
+                  FROM ({per_net}) r JOIN nets n USING (net) GROUP BY fact_id)
+            TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)""")
+        members = " UNION ALL ".join(
+            f"SELECT DISTINCT fact_id rep, {i} AS net FROM read_parquet('{f}') "
+            "WHERE fact_id IN (SELECT fact_id FROM reps)" for i, f in rep_files.items())
+    t = f"read_parquet('{tmp}')"
+    con.execute(f"CREATE TABLE reps AS SELECT x1, x2, n_net, any_value(fact_id) fact_id FROM {t} GROUP BY ALL")
+    res["network_sets"] = _ns_map(con, "SELECT x1, x2, n_net, fact_id rep FROM reps", members, "fns")
     con.execute(f"""
-        COPY (SELECT fact_id, code_id, ps_id, pl_id, billing_code_type, billing_code, {ns} AS ns_id,
-                     '{release}' AS valid_from
-              FROM read_parquet('{tmp}') ORDER BY billing_code_type, billing_code, ps_id)
-        TO '{out}/rate_fact/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)
-    """)
-    con.execute(f"""
-        COPY (SELECT DISTINCT {ns} AS ns_id, network_ids FROM read_parquet('{tmp}'))
-        TO '{out}/network_set/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)
-    """)
-    res["rows_in"], res["facts"] = con.execute(f"SELECT sum(n_in), count(*) FROM read_parquet('{tmp}')").fetchone()
-    res["network_sets"] = con.execute(
-        f"SELECT count(*) FROM read_parquet('{out}/network_set/part-{part:02d}.parquet')").fetchone()[0]
+        COPY (SELECT f.{FACT_COLS.replace(', ', ', f.')}, s.ns_id, '{release}' AS valid_from
+              FROM {t} f JOIN fns s USING (x1, x2, n_net)
+              ORDER BY f.billing_code_type, f.billing_code, f.ps_id)
+        TO '{out}/rate_fact/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)""")
+    extra = "UNION SELECT ns_id, network_ids FROM bns" if fbs else ""
+    con.execute(f"""COPY (SELECT ns_id, network_ids FROM fns {extra})
+                    TO '{out}/network_set/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+    res["facts"] = con.execute(f"SELECT count(*) FROM read_parquet('{out}/rate_fact/part-{part:02d}.parquet')").fetchone()[0]
+    if res["facts"] != con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]:
+        raise RuntimeError("facts lost joining to their network sets")
     os.remove(tmp)
     res["seconds"] = round(time.time() - t0, 1)
     return res
