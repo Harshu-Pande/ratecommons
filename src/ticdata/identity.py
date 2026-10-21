@@ -38,19 +38,44 @@ def snake(name: str) -> str:
 
 
 def nppes_links(s: requests.Session | None = None) -> dict:
+    """Links on the NPPES download page; if the page gives none (bot wall, layout change),
+    fall back to the documented name pattern for this month and last month."""
     s = s or new_session()
-    html = s.get(NPPES_PAGE, timeout=60, headers={"User-Agent": USER_AGENT}).text
-    hrefs = sorted(set(re.findall(r'href="([^"]+\.zip)"', html, flags=re.I)))
-    full = [h for h in hrefs if re.search(r"NPPES_Data_Dissemination_[A-Za-z]+_\d{4}(_V\d)?\.zip$", h)]
-    deact = [h for h in hrefs if "Deactivated" in h]
-    weekly = [h for h in hrefs if "Weekly" in h]
+    page_note = None
+    try:
+        r = s.get(NPPES_PAGE, timeout=60, headers={"User-Agent": USER_AGENT})
+        html = r.text
+        page_note = f"HTTP {r.status_code}, {len(html)} chars"
+    except Exception as ex:
+        html, page_note = "", repr(ex)[:200]
+    hrefs = sorted(set(re.findall(r"""href\s*=\s*["']?([^"' >]+\.zip)""", html, flags=re.I)))
     absu = lambda h: h if h.startswith("http") else NPPES_BASE + h.lstrip("./")  # noqa: E731
+    full = [h for h in hrefs if re.search(r"NPPES_Data_Dissemination_[A-Za-z]+_\d{4}(_V\d)?\.zip$", h)]
+    guessed = None
     if not full:
-        raise RuntimeError(f"no monthly NPPES file found among {hrefs}")
+        names = {v: k for k, v in MONTHS.items()}
+        y, m = int(time.strftime("%Y")), int(time.strftime("%m"))
+        for _ in range(3):
+            for suffix in ("_V2", ""):
+                url = f"{NPPES_BASE}NPPES_Data_Dissemination_{names[m]}_{y}{suffix}.zip"
+                try:
+                    if s.head(url, timeout=30, allow_redirects=True,
+                              headers={"User-Agent": USER_AGENT}).status_code == 200:
+                        guessed = url
+                        break
+                except Exception:
+                    pass
+            if guessed:
+                break
+            y, m = (y, m - 1) if m > 1 else (y - 1, 12)
+        if not guessed:
+            raise RuntimeError(f"no monthly NPPES file: page {page_note}; first 300 chars {html[:300]!r}")
+        full = [guessed]
     m = re.search(r"_([A-Za-z]+)_(\d{4})", full[-1])
     release = f"{m.group(2)}-{MONTHS.get(m.group(1).capitalize(), 0):02d}" if m else time.strftime("%Y-%m")
-    return {"release": release, "full": absu(full[-1]), "deactivated": [absu(h) for h in deact],
-            "weekly": [absu(h) for h in weekly], "all": [absu(h) for h in hrefs]}
+    return {"release": release, "full": absu(full[-1]),
+            "deactivated": [absu(h) for h in hrefs if "Deactivated" in h],
+            "weekly": [absu(h) for h in hrefs if "Weekly" in h], "page": page_note, "guessed": bool(guessed)}
 
 
 def _fetch(url: str, path: str, s: requests.Session) -> dict:
