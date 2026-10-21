@@ -74,11 +74,22 @@ def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = 
             "shards": [{"shard": i, "bytes": load[i], "files": a} for i, a in enumerate(assign)]}
 
 
+CHUNK_FILES = int(os.environ.get("TIC_CHUNK_FILES", "25"))
+
+
 def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_bucket: str | None = None,
-              token=None, restricted_bucket: str | None = None, restricted_token=None) -> dict:
-    """Parse each file of one shard. Code text we may not republish (licensing.py) is split off
-    before anything is uploaded: the public work bucket gets the redacted code table, the
-    private restricted bucket gets the raw text."""
+              token=None, restricted_bucket: str | None = None, restricted_token=None,
+              chunk_files: int = CHUNK_FILES, chunk_out: str | None = None) -> dict:
+    """Parse each file of one shard, then upload the outputs in chunks of `chunk_files` files,
+    each chunk merged into one set of tables (consolidate.py) under
+    map/<release>/<payer>/shard-<NNN>-<CC>/.
+
+    The shard shares one seen-blocks set and one record cache across its files, so near-duplicate
+    files write their facts once and skip byte-identical records. Code text we may not republish
+    (licensing.py) is split off before anything is uploaded: the public work bucket gets the
+    redacted code tables, the private restricted bucket gets the raw text.
+    """
+    from .consolidate import consolidate
     from .licensing import redact_code_file
     from .parse import parse_file
 
@@ -88,17 +99,64 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
     payer = plan_doc["payer"]
     files = plan_doc["shards"][shard]["files"]
     s = new_session()
-    os.makedirs(workdir, exist_ok=True)
+    if os.path.exists(workdir):
+        shutil.rmtree(workdir)
+    os.makedirs(workdir)
     seen_path = os.path.join(workdir, "seen_blocks.bin")  # blocks already written by this shard
     rcache_path = os.path.join(workdir, "record_cache.bin")  # records already parsed by this shard
-    for p in (seen_path, rcache_path):
-        if os.path.exists(p):
-            os.remove(p)
-    results = []
+    stage = os.path.join(workdir, "stage")  # per-file outputs waiting for their chunk upload
+    os.makedirs(stage)
+    results: list[dict] = []
+    staged: list[tuple[str, str, str]] = []  # (file key, output folder, release)
+    chunks: list[dict] = []
+
+    def flush():
+        if not staged:
+            return
+        rel = staged[0][2]
+        cdir = os.path.join(workdir, "chunk")
+        shutil.rmtree(cdir, ignore_errors=True)
+        info = {"chunk": len(chunks), "release": rel, "files": [k for k, _, _ in staged]}
+        t0 = time.time()
+        info["tables"] = consolidate([(k, d) for k, d, _ in staged], cdir)["tables"]
+        texts = [(k, f"{d}.code_text.parquet") for k, d, _ in staged if os.path.exists(f"{d}.code_text.parquet")]
+        prefix = f"map/{rel}/{payer}/shard-{shard:03d}-{len(chunks):02d}"
+        if upload_bucket:
+            from huggingface_hub import batch_bucket_files
+
+            if texts:  # private first: never publish without keeping the raw text
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+
+                tables = [pq.read_table(t).append_column("file_key", pa.array([k] * pq.ParquetFile(t).metadata.num_rows))
+                          for k, t in texts]
+                pq.write_table(pa.concat_tables(tables), f"{cdir}.code_text.parquet", compression="zstd")
+                batch_bucket_files(restricted_bucket, add=[(f"{cdir}.code_text.parquet", f"{prefix}/code_text.parquet")],
+                                   token=restricted_token() if callable(restricted_token) else restricted_token)
+            adds = [(os.path.join(root, f), f"{prefix}/{os.path.relpath(os.path.join(root, f), cdir)}")
+                    for root, _, fs in os.walk(cdir) for f in sorted(fs)]
+            batch_bucket_files(upload_bucket, add=adds, token=token() if callable(token) else token)
+            info["uploaded"] = prefix
+        if chunk_out:  # keep the chunk locally (tests, local runs)
+            dest = os.path.join(chunk_out, os.path.basename(prefix))
+            shutil.rmtree(dest, ignore_errors=True)
+            shutil.copytree(cdir, dest)
+        info["seconds"] = round(time.time() - t0, 1)
+        chunks.append(info)
+        print(json.dumps({"chunk": info["chunk"], "files": len(info["files"]), "seconds": info["seconds"]}), flush=True)
+        for _, d, _ in staged:
+            shutil.rmtree(d, ignore_errors=True)
+            if os.path.exists(f"{d}.code_text.parquet"):
+                os.remove(f"{d}.code_text.parquet")
+        staged.clear()
+        shutil.rmtree(cdir, ignore_errors=True)
+
     for e in files:
         key, rel = file_key(e["name"]), release_of(e["name"])
+        if staged and (staged[0][2] != rel or len(staged) >= chunk_files):
+            flush()
         local = os.path.join(workdir, "in.bin")
-        outdir = os.path.join(workdir, key)
+        outdir = os.path.join(stage, key)
         rec = {"name": e["name"], "key": key, "release": rel, "size": e.get("size")}
         t0 = time.time()
         try:
@@ -134,27 +192,15 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
                 rec["parser"] = "python"
             rec.update({k: meta.get(k) for k in ("counts", "flags", "tables", "seconds", "layout",
                                                  "tail_crc32", "tail_isize", "header", "json_bytes", "refs_hash")})
-            text_path = os.path.join(workdir, "code_text.parquet")
-            if os.path.exists(text_path):
-                os.remove(text_path)
             if os.path.exists(os.path.join(outdir, "code.parquet")):
-                rec["code_text"] = redact_code_file(os.path.join(outdir, "code.parquet"), text_path)
-            if upload_bucket:
-                from huggingface_hub import batch_bucket_files
-
-                prefix = f"map/{rel}/{payer}/{key}"
-                if os.path.exists(text_path):  # private first: never publish without keeping the raw text
-                    batch_bucket_files(restricted_bucket, add=[(text_path, f"{prefix}/code_text.parquet")],
-                                       token=restricted_token() if callable(restricted_token) else restricted_token)
-                adds = [(os.path.join(root, f), f"{prefix}/{os.path.relpath(os.path.join(root, f), outdir)}")
-                        for root, _, fs in os.walk(outdir) for f in sorted(fs)]
-                batch_bucket_files(upload_bucket, add=adds, token=token() if callable(token) else token)
-                rec["uploaded"] = prefix
+                rec["code_text"] = redact_code_file(os.path.join(outdir, "code.parquet"), f"{outdir}.code_text.parquet")
+            staged.append((key, outdir, rel))
             rec["ok"] = True
         except Exception as ex:
             rec["ok"] = False
             rec["error"] = repr(ex)[:1000]
             rec["traceback"] = traceback.format_exc()[-3000:]
+            shutil.rmtree(outdir, ignore_errors=True)
         finally:
             rec["wall_seconds"] = round(time.time() - t0, 1)
             import resource
@@ -163,8 +209,8 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
                                           resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss) / 1024)
             if os.path.exists(local):
                 os.remove(local)
-            shutil.rmtree(outdir, ignore_errors=True)
         results.append(rec)
         print(json.dumps({k: rec.get(k) for k in ("name", "ok", "wall_seconds", "error")}), flush=True)
+    flush()
     return {"payer": payer, "shard": shard, "files": len(files), "ok": sum(r["ok"] for r in results),
-            "results": results}
+            "chunks": chunks, "results": results}

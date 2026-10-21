@@ -49,17 +49,27 @@ def _fetch(bucket: str, paths: list[str], dest: str, prefix: str, token) -> list
     return [local for _, local in files]
 
 
+def _metas(local_root: str) -> list[tuple[str, dict]]:
+    """(file key, meta) for every mapped file: per-file folders (<file key>/meta.json) or
+    consolidated chunk folders (<chunk>/metas.json)."""
+    from .pipeline import file_key
+
+    out = [(p.parent.name, json.loads(p.read_text())) for p in sorted(Path(local_root).glob("*/meta.json"))]
+    for p in sorted(Path(local_root).glob("*/metas.json")):
+        out += [(file_key((m.get("source") or {}).get("name") or ""), m) for m in json.loads(p.read_text())]
+    return out
+
+
 def networks(local_root: str, payer: str) -> list[dict]:
     """One row per file: its derived network ID is the content identity of the file."""
     import xxhash
 
     rows = []
-    for meta_path in sorted(Path(local_root).glob("*/meta.json")):
-        m = json.loads(meta_path.read_text())
+    for key, m in _metas(local_root):
         src = m.get("source") or {}
         content = f"{payer}|{m.get('local_bytes')}|{m.get('tail_crc32')}|{m.get('tail_isize')}"
         rows.append({
-            "file_key": meta_path.parent.name, "name": src.get("name"), "url": src.get("url"),
+            "file_key": key, "name": src.get("name"), "url": src.get("url"),
             "bytes": m.get("local_bytes"), "tail_crc32": m.get("tail_crc32"), "tail_isize": m.get("tail_isize"),
             "network_id": xxhash.xxh3_128_digest(b"net" + content.encode()),
             "header": json.dumps(m.get("header"), sort_keys=True), "counts": json.dumps(m.get("counts")),
@@ -74,8 +84,8 @@ def reduce_part(payer: str, release: str, part: int, bucket: str, out: str, toke
     t0 = time.time()
     prefix = f"map/{release}/{payer}/"
     allp = _list(bucket, prefix, token)
-    want = [p for p in allp if p.endswith("/meta.json") or p.endswith("/file_block.parquet")
-            or p.endswith(f"/rate_fact/part-{part:02d}.parquet")]
+    want = [p for p in allp if p.endswith("/meta.json") or p.endswith("/metas.json")
+            or p.endswith("/file_block.parquet") or p.endswith(f"/rate_fact/part-{part:02d}.parquet")]
     local = os.path.join(workdir, f"p{part:02d}")
     _fetch(bucket, want, local, prefix, token)
     res = reduce_part_local(local, payer, release, part, out)
@@ -169,10 +179,22 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str)
         # appears in; the map wrote each block's facts once per shard and every file's block list
         res["mode"] = "blocks"
         os.makedirs(f"{out}/block", exist_ok=True)
-        fb_union = " UNION ALL ".join(
-            f"SELECT block_id, code_id, n_rates, {net_of[Path(f).parent.name]} AS net FROM read_parquet('{f}') "
-            f"WHERE part = {part}" for f in fbs)
-        con.execute(f"CREATE TABLE fbr AS {fb_union}")
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        con.register("netmap", pa.table({"file_key": list(net_of), "net": pa.array(list(net_of.values()), pa.int32())}))
+        chunked = [f for f in fbs if "file_key" in pq.read_schema(f).names]
+        per_file = [f for f in fbs if f not in chunked]
+        selects = [f"SELECT block_id, code_id, n_rates, {net_of[Path(f).parent.name]} AS net FROM read_parquet('{f}') "
+                   f"WHERE part = {part}" for f in per_file]
+        if chunked:
+            selects.append(f"SELECT fb.block_id, fb.code_id, fb.n_rates, m.net FROM read_parquet({chunked!r}) fb "
+                           f"JOIN netmap m USING (file_key) WHERE fb.part = {part}")
+        con.execute(f"CREATE TABLE fbr AS {' UNION ALL '.join(selects)}")
+        missing = con.execute(f"""SELECT count(*) FROM read_parquet({chunked!r}) WHERE file_key NOT IN
+                                  (SELECT file_key FROM netmap)""").fetchone()[0] if chunked else 0
+        if missing:
+            raise RuntimeError(f"{missing} file_block rows name a file without meta")
         con.execute("CREATE TABLE bnet AS SELECT DISTINCT block_id, net FROM fbr")
         con.execute("""CREATE TABLE bn AS
                        SELECT b.block_id, bit_xor(n.h1) x1, bit_xor(n.h2) x2, count(*)::INTEGER n_net
@@ -256,12 +278,13 @@ def reduce_dims(payer: str, release: str, bucket: str, out: str, token=None, wor
     t0 = time.time()
     prefix = f"map/{release}/{payer}/"
     allp = _list(bucket, prefix, token)
+    is_meta = lambda p: p.endswith("/meta.json") or p.endswith("/metas.json")  # noqa: E731
     if table == "meta":
-        want = [p for p in allp if p.endswith("/meta.json")]
+        want = [p for p in allp if is_meta(p)]
     elif table == "all":
         want = [p for p in allp if "/rate_fact" not in p]
     else:
-        want = [p for p in allp if p.endswith(f"/{table}.parquet") or p.endswith("/meta.json")]
+        want = [p for p in allp if p.endswith(f"/{table}.parquet") or is_meta(p)]
     local = os.path.join(workdir, f"dims-{table}")
     _fetch(bucket, want, local, prefix, token)
     res = reduce_dims_local(local, payer, out, table)

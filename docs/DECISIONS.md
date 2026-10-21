@@ -5,6 +5,12 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **Map outputs are uploaded per chunk of a shard, not per file.** Per-file folders meant
+  about 25 objects per file: 155,000 for Aetna, and every reduce job would fetch about
+  19,000 of them, against Hugging Face's few-large-files guidance and download rate limits.
+  A shard now uploads one folder per 25 files (`map/<release>/<payer>/shard-NNN-CC/`):
+  `metas.json`, `file_block` and `provider_reference` with a `file_key` column, dims distinct
+  by ID, and 16 fact parts. Reduce reads both layouts (Cigna stays per file).
 - **Byte-identical records are not parsed twice in a shard.** Near-duplicate files repeat
   most in_network records byte for byte. When two files carry the same provider_references
   (hashed in order as `refs_hash`), an identical record resolves identically, so the Rust
