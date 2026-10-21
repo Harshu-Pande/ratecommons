@@ -5,6 +5,16 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **No long-lived Hugging Face token in GitHub.** Workflows use Hugging Face Trusted
+  Publishers: the job's GitHub OIDC token is exchanged for a one-hour token scoped to
+  one dataset or bucket (`hfio.token_for`). `raw-manifests`, `ops` and the `work`
+  bucket each trust `Harshu-Pande/ratecommons` on branch `main` (set in each
+  resource's Hugging Face settings). A new dataset or bucket needs the same entry.
+  An `HF_TOKEN` secret, if ever added, still takes precedence.
+- **Agents start runs by committing, and read results from Hugging Face.** The
+  session's GitHub access cannot call the Actions API (dispatch, secrets, run
+  logs). So each workflow also runs on a push that edits its `ops/*-request.txt`
+  file, and every job writes its reports to `datasets/ratecommons/ops`.
 - **Workers are routed by what they can reach, not just by CPU.** The first Kaggle
   run (4 vCPU, 32.9 GB RAM, egress in Europe: CloudFront POP `CDG50`) showed:
   - UHC works: 80.5 MB/s from `mrfstorage.uhc.com`, faster than our US test box.
