@@ -17,6 +17,10 @@ def build(release_dir: str, out_path: str, payer: str, all_codes: bool = False) 
     """Read one release's reduced tables (local folder or hf:// path) and write the dictionary."""
     import duckdb
 
+    def src(t: str) -> str:  # a table is one file or a folder of parts
+        f = f"{release_dir}/{t}.parquet"
+        return f if os.path.exists(f) or "://" in release_dir else f"{release_dir}/{t}/*.parquet"
+
     con = duckdb.connect()
     con.execute("SET preserve_insertion_order = false")
     std = ", ".join(f"'{t}'" for t in STANDARD_TYPES)
@@ -24,8 +28,8 @@ def build(release_dir: str, out_path: str, payer: str, all_codes: bool = False) 
     q = f"""
     WITH c AS (SELECT * FROM read_parquet('{release_dir}/code.parquet')),
          f AS (SELECT * FROM read_parquet('{release_dir}/rate_fact/*.parquet')),
-         pl AS (SELECT pl_id, unnest(pt_ids) AS pt_id FROM read_parquet('{release_dir}/price_list.parquet')),
-         pt AS (SELECT pt_id, negotiated_type, rate_e4, setting, billing_class FROM read_parquet('{release_dir}/price_term.parquet')),
+         pl AS (SELECT pl_id, unnest(pt_ids) AS pt_id FROM read_parquet('{src("price_list")}')),
+         pt AS (SELECT pt_id, negotiated_type, rate_e4, setting, billing_class FROM read_parquet('{src("price_term")}')),
          sel AS (SELECT * FROM c {where}),
          j AS (
            SELECT sel.billing_code_type, sel.billing_code, sel.name, sel.description, sel.negotiation_arrangement,

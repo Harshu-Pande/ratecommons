@@ -39,9 +39,10 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
-      max-parallel: 17
+      max-parallel: 20
       matrix:
-        part: [dims, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        part: [dims-meta, dims-code, dims-provider_group, dims-provider_set, dims-price_term, dims-price_list,
+               0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     env:
       PYTHONUNBUFFERED: "1"
     steps:
@@ -54,6 +55,11 @@ jobs:
           set -o pipefail
           mkdir -p reports
           ticdata reduce --payer ${{ needs.args.outputs.payer }} --release ${{ needs.args.outputs.release }} \
-            --part ${{ matrix.part }} --publish --out reports/reduce-${{ matrix.part }}.json 2>&1 | tail -50
+            --part ${{ matrix.part }} --publish --out reports/reduce-${{ matrix.part }}.json 2>&1 \
+            | tee reports/reduce-${{ matrix.part }}.log | tail -50
       - if: always()
-        run: ticdata put-report reports/* --prefix "runs/$(date -u +%F)-reduce-${{ needs.args.outputs.payer }}-${GITHUB_RUN_ID}" || true
+        run: |
+          df -h / | tail -1 >> reports/reduce-${{ matrix.part }}.log || true
+          tail -c 100000 reports/reduce-${{ matrix.part }}.log > reports/reduce-${{ matrix.part }}.tail.log || true
+          rm -f reports/reduce-${{ matrix.part }}.log
+          ticdata put-report reports/* --prefix "runs/$(date -u +%F)-reduce-${{ needs.args.outputs.payer }}-${GITHUB_RUN_ID}" || true

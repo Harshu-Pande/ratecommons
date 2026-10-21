@@ -82,101 +82,136 @@ def reduce_part(payer: str, release: str, part: int, bucket: str, out: str, toke
     return res
 
 
-def reduce_part_local(local: str, payer: str, release: str, part: int, out: str) -> dict:
+def _duck(workdir: str):
+    """A DuckDB on disk with spilling, sized for a 16 GB / 4 vCPU runner."""
     import duckdb
+
+    os.makedirs(f"{workdir}/duck_tmp", exist_ok=True)
+    path = f"{workdir}/duck.db"
+    if os.path.exists(path):
+        os.remove(path)
+    con = duckdb.connect(path)
+    con.execute(f"SET temp_directory = '{workdir}/duck_tmp'")
+    con.execute(f"SET memory_limit = '{os.environ.get('RC_DUCK_MEMORY', '11GB')}'")
+    con.execute("SET preserve_insertion_order = false")
+    return con
+
+
+def reduce_part_local(local: str, payer: str, release: str, part: int, out: str) -> dict:
     import pyarrow as pa
 
     t0 = time.time()
     nets = networks(local, payer)
-    con = duckdb.connect()
-    con.execute("SET preserve_insertion_order = false")
-    con.register("nets", pa.Table.from_pylist([{"file_key": n["file_key"], "network_id": n["network_id"]}
-                                               for n in nets]))
     files = sorted(str(p) for p in Path(local).glob(f"*/rate_fact/part-{part:02d}.parquet"))
     os.makedirs(f"{out}/rate_fact", exist_ok=True)
     os.makedirs(f"{out}/network_set", exist_ok=True)
     res = {"part": part, "files": len(files), "networks": len(nets), "seconds": 0.0}
     if not files:
         return res
+    con = _duck(local)
+    con.register("nets", pa.Table.from_pylist([{"file_key": n["file_key"], "network_id": n["network_id"]}
+                                               for n in nets]))
+    tmp = f"{local}/facts_tmp.parquet"
     con.execute(f"""
-        CREATE TABLE f AS
-        SELECT r.fact_id, r.code_id, r.ps_id, r.pl_id, r.billing_code_type, r.billing_code, n.network_id
-        FROM read_parquet({files!r}, filename = true) r
-        JOIN nets n ON n.file_key = split_part(r.filename, '/', -3)
+        COPY (
+          SELECT r.fact_id, any_value(r.code_id) code_id, any_value(r.ps_id) ps_id, any_value(r.pl_id) pl_id,
+                 any_value(r.billing_code_type) billing_code_type, any_value(r.billing_code) billing_code,
+                 list(DISTINCT n.network_id ORDER BY n.network_id) network_ids, count(*) n_in
+          FROM read_parquet({files!r}, filename = true) r
+          JOIN nets n ON n.file_key = split_part(r.filename, '/', -3)
+          GROUP BY r.fact_id
+        ) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)
     """)
-    res["rows_in"] = con.execute("SELECT count(*) FROM f").fetchone()[0]
-    con.execute("""
-        CREATE TABLE g AS
-        SELECT fact_id, any_value(code_id) code_id, any_value(ps_id) ps_id, any_value(pl_id) pl_id,
-               any_value(billing_code_type) billing_code_type, any_value(billing_code) billing_code,
-               list(DISTINCT network_id ORDER BY network_id) network_ids
-        FROM f GROUP BY fact_id
-    """)
-    con.execute("""
-        CREATE TABLE g2 AS
-        SELECT *, unhex(md5(array_to_string(list_transform(network_ids, x -> hex(x)), ''))) ns_id FROM g
-    """)
-    res["facts"] = con.execute("SELECT count(*) FROM g2").fetchone()[0]
+    ns = "unhex(md5(array_to_string(list_transform(network_ids, x -> hex(x)), '')))"
     con.execute(f"""
-        COPY (SELECT fact_id, code_id, ps_id, pl_id, billing_code_type, billing_code, ns_id,
+        COPY (SELECT fact_id, code_id, ps_id, pl_id, billing_code_type, billing_code, {ns} AS ns_id,
                      '{release}' AS valid_from
-              FROM g2 ORDER BY billing_code_type, billing_code, ps_id)
+              FROM read_parquet('{tmp}') ORDER BY billing_code_type, billing_code, ps_id)
         TO '{out}/rate_fact/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)
     """)
     con.execute(f"""
-        COPY (SELECT DISTINCT ns_id, network_ids FROM g2)
+        COPY (SELECT DISTINCT {ns} AS ns_id, network_ids FROM read_parquet('{tmp}'))
         TO '{out}/network_set/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)
     """)
-    res["network_sets"] = con.execute("SELECT count(DISTINCT ns_id) FROM g2").fetchone()[0]
+    res["rows_in"], res["facts"] = con.execute(f"SELECT sum(n_in), count(*) FROM read_parquet('{tmp}')").fetchone()
+    res["network_sets"] = con.execute(
+        f"SELECT count(*) FROM read_parquet('{out}/network_set/part-{part:02d}.parquet')").fetchone()[0]
+    os.remove(tmp)
     res["seconds"] = round(time.time() - t0, 1)
     return res
 
 
-def reduce_dims(payer: str, release: str, bucket: str, out: str, token=None, workdir: str = "/tmp/reduce") -> dict:
-    """Distinct dimension rows across all files, plus source_file and network tables."""
+DIM_SLICES = {"price_list": 8, "price_term": 4, "provider_set": 4}
+
+
+def reduce_dims(payer: str, release: str, bucket: str, out: str, token=None, workdir: str = "/tmp/reduce",
+                table: str = "all") -> dict:
+    """Distinct dimension rows across all files (one table, or 'meta' for source_file/network)."""
     t0 = time.time()
     prefix = f"map/{release}/{payer}/"
     allp = _list(bucket, prefix, token)
-    want = [p for p in allp if "/rate_fact/" not in p]
-    local = os.path.join(workdir, "dims")
+    if table == "meta":
+        want = [p for p in allp if p.endswith("/meta.json")]
+    elif table == "all":
+        want = [p for p in allp if "/rate_fact" not in p]
+    else:
+        want = [p for p in allp if p.endswith(f"/{table}.parquet") or p.endswith("/meta.json")]
+    local = os.path.join(workdir, f"dims-{table}")
     _fetch(bucket, want, local, prefix, token)
-    res = reduce_dims_local(local, payer, out)
+    res = reduce_dims_local(local, payer, out, table)
     res["download_seconds"] = round(time.time() - t0, 1) - res["seconds"]
     return res
 
 
-def reduce_dims_local(local: str, payer: str, out: str) -> dict:
-    import duckdb
+def reduce_dims_local(local: str, payer: str, out: str, table: str = "all") -> dict:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
     t0 = time.time()
     os.makedirs(out, exist_ok=True)
+    res: dict = {"tables": {}}
     nets = networks(local, payer)
-    pq.write_table(pa.Table.from_pylist(nets), f"{out}/source_file.parquet", compression="zstd")
-    uniq = {}
-    for n in nets:
-        uniq.setdefault(n["network_id"], n)
-    pq.write_table(pa.Table.from_pylist([{"network_id": k, "example_file": v["name"],
-                                          "files": sum(1 for x in nets if x["network_id"] == k)}
-                                         for k, v in uniq.items()]), f"{out}/network.parquet", compression="zstd")
-    con = duckdb.connect()
-    con.execute("SET preserve_insertion_order = false")
-    res = {"files": len(nets), "networks": len(uniq), "tables": {}}
-    for table, key in DIMS.items():
-        files = sorted(str(p) for p in Path(local).glob(f"*/{table}.parquet"))
+    res["files"] = len(nets)
+    if table in ("all", "meta"):
+        pq.write_table(pa.Table.from_pylist(nets), f"{out}/source_file.parquet", compression="zstd")
+        uniq: dict = {}
+        for n in nets:
+            uniq.setdefault(n["network_id"], []).append(n["name"])
+        pq.write_table(pa.Table.from_pylist([{"network_id": k, "example_file": v[0], "files": len(v)}
+                                             for k, v in uniq.items()]), f"{out}/network.parquet",
+                       compression="zstd")
+        res["networks"] = len(uniq)
+    tables = DIMS if table == "all" else ({table: DIMS[table]} if table in DIMS else {})
+    if not tables:
+        res["seconds"] = round(time.time() - t0, 1)
+        return res
+    con = _duck(local)
+    for name, key in tables.items():
+        files = sorted(str(p) for p in Path(local).glob(f"*/{name}.parquet"))
         if not files:
             continue
-        if table == "provider_group":
+        src = f"read_parquet({files!r}, union_by_name = true)"
+        n_in = con.execute(f"SELECT count(*) FROM {src}").fetchone()[0]
+        if name == "provider_group":
             sel = f"""SELECT pg_id, any_value(tin_type) tin_type, any_value(tin_value) tin_value,
                              list(DISTINCT tin_raw) tin_raws, any_value(npis) npis, any_value(npi_count) npi_count,
                              any_value(tin_wide) tin_wide, list_distinct(flatten(list(business_names))) business_names
-                      FROM read_parquet({files!r}) GROUP BY pg_id"""
+                      FROM {src} GROUP BY pg_id"""
+            con.execute(f"COPY ({sel}) TO '{out}/{name}.parquet' (FORMAT parquet, COMPRESSION zstd)")
+            n_out = con.execute(f"SELECT count(*) FROM read_parquet('{out}/{name}.parquet')").fetchone()[0]
+        elif name in DIM_SLICES:
+            k = DIM_SLICES[name]
+            os.makedirs(f"{out}/{name}", exist_ok=True)
+            n_out = 0
+            for i in range(k):
+                dest = f"{out}/{name}/part-{i:02d}.parquet"
+                con.execute(f"""COPY (SELECT DISTINCT ON ({key}) * FROM {src} WHERE hash({key}) % {k} = {i})
+                                TO '{dest}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)""")
+                n_out += con.execute(f"SELECT count(*) FROM read_parquet('{dest}')").fetchone()[0]
         else:
-            sel = f"SELECT * FROM read_parquet({files!r}, union_by_name = true) QUALIFY row_number() OVER (PARTITION BY {key}) = 1"
-        con.execute(f"COPY ({sel}) TO '{out}/{table}.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)")
-        n_in = con.execute(f"SELECT count(*) FROM read_parquet({files!r})").fetchone()[0]
-        n_out = con.execute(f"SELECT count(*) FROM read_parquet('{out}/{table}.parquet')").fetchone()[0]
-        res["tables"][table] = {"rows_in": n_in, "rows_out": n_out}
+            con.execute(f"COPY (SELECT DISTINCT ON ({key}) * FROM {src}) TO '{out}/{name}.parquet' "
+                        "(FORMAT parquet, COMPRESSION zstd)")
+            n_out = con.execute(f"SELECT count(*) FROM read_parquet('{out}/{name}.parquet')").fetchone()[0]
+        res["tables"][name] = {"rows_in": n_in, "rows_out": n_out}
     res["seconds"] = round(time.time() - t0, 1)
     return res
