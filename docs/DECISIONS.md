@@ -5,6 +5,20 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **Licensed code text was published by mistake, and is now split off before upload.**
+  Cigna puts CPT short descriptors (AMA copyright) in `name` and `description` for
+  94,234 of 116,566 codes; the first code table on `ratecommons/cigna` and the per-file
+  map outputs in the public work bucket carried them. The design's rule is "publish code
+  numbers, never republish CPT descriptions". `licensing.py` now withholds text for CPT
+  (any 5-character CPT-shaped code, whatever the type label), CDT, revenue codes and the
+  proprietary DRG groupers, including descriptions inside `bundle`; HCPCS Level II,
+  MS-DRG, ICD, APC, HIPPS, NDC and payer-defined codes keep their text. To keep "discard
+  no data", the raw text goes to a new private bucket `ratecommons/restricted` (map:
+  `map/<release>/<payer>/<file>/code_text.parquet`; reduce:
+  `release/<payer>/<release>/code_text.parquet`) before the redacted table is uploaded,
+  and `code_id` is unchanged (it hashes the raw text). Rows carry `text_withheld`.
+  The 124 Cigna map outputs and the published code table were rewritten; the old
+  version still sits in the dataset's git history until the history is squashed.
 - **NPPES: the CMS download page stayed "down for maintenance until further notice".**
   The NBER mirror (data.nber.org/npi/zip/) keeps byte copies of the CMS monthly and
   weekly source zips (newest processed month listed: August 2026). The loader now falls

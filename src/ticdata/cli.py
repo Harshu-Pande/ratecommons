@@ -143,8 +143,10 @@ def main(argv=None) -> int:
 
         doc = json.loads(Path(a.plan).read_text())
         tok = (lambda: hfio.token_for(hfio.bucket(cfg.work_bucket))) if a.upload else None
+        rtok = (lambda: hfio.token_for(hfio.bucket(cfg.restricted_bucket))) if a.upload else None
         _write(pipeline.run_shard(doc, a.shard, upload_bucket=cfg.work_bucket if a.upload else None,
-                                  token=tok), a.out)
+                                  token=tok, restricted_bucket=cfg.restricted_bucket if a.upload else None,
+                                  restricted_token=rtok), a.out)
     elif a.cmd == "parse-file":
         from .parse import parse_file
 
@@ -164,6 +166,14 @@ def main(argv=None) -> int:
         else:
             res = reduce.reduce_part(a.payer, a.release, int(a.part), cfg.work_bucket, outdir, token=tok)
         if a.publish:
+            private = Path(reduce.restricted_dir(outdir)) / "code_text.parquet"
+            if private.exists():  # private copy first, then the public tables
+                from huggingface_hub import batch_bucket_files
+
+                batch_bucket_files(cfg.restricted_bucket,
+                                   add=[(str(private), f"release/{a.payer}/{a.release}/code_text.parquet")],
+                                   token=hfio.token_for(hfio.bucket(cfg.restricted_bucket)))
+                res["restricted"] = f"{cfg.restricted_bucket}/release/{a.payer}/{a.release}/code_text.parquet"
             repo = f"{cfg.org}/{a.payer}"
             res["published"] = identity.upload_folder(repo, outdir, f"release={a.release}",
                                                       f"{a.payer} {a.release}: reduce {a.part}")

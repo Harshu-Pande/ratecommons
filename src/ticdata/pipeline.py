@@ -75,8 +75,15 @@ def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = 
 
 
 def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_bucket: str | None = None,
-              token=None) -> dict:
+              token=None, restricted_bucket: str | None = None, restricted_token=None) -> dict:
+    """Parse each file of one shard. Code text we may not republish (licensing.py) is split off
+    before anything is uploaded: the public work bucket gets the redacted code table, the
+    private restricted bucket gets the raw text."""
+    from .licensing import redact_code_file
     from .parse import parse_file
+
+    if upload_bucket and not restricted_bucket:
+        raise ValueError("uploading map outputs needs the restricted bucket for withheld code text")
 
     payer = plan_doc["payer"]
     files = plan_doc["shards"][shard]["files"]
@@ -120,10 +127,18 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
                 rec["parser"] = "python"
             rec.update({k: meta[k] for k in ("counts", "flags", "tables", "seconds", "layout",
                                              "tail_crc32", "tail_isize", "header")})
+            text_path = os.path.join(workdir, "code_text.parquet")
+            if os.path.exists(text_path):
+                os.remove(text_path)
+            if os.path.exists(os.path.join(outdir, "code.parquet")):
+                rec["code_text"] = redact_code_file(os.path.join(outdir, "code.parquet"), text_path)
             if upload_bucket:
                 from huggingface_hub import batch_bucket_files
 
                 prefix = f"map/{rel}/{payer}/{key}"
+                if os.path.exists(text_path):  # private first: never publish without keeping the raw text
+                    batch_bucket_files(restricted_bucket, add=[(text_path, f"{prefix}/code_text.parquet")],
+                                       token=restricted_token() if callable(restricted_token) else restricted_token)
                 adds = [(os.path.join(root, f), f"{prefix}/{os.path.relpath(os.path.join(root, f), outdir)}")
                         for root, _, fs in os.walk(outdir) for f in sorted(fs)]
                 batch_bucket_files(upload_bucket, add=adds, token=token() if callable(token) else token)

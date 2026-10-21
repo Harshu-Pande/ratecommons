@@ -245,6 +245,11 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str)
 DIM_SLICES = {"price_list": 8, "price_term": 4, "provider_set": 4}
 
 
+def restricted_dir(out: str) -> str:
+    """Private outputs of a reduce live beside, never inside, the folder that gets published."""
+    return out.rstrip("/") + ".restricted"
+
+
 def reduce_dims(payer: str, release: str, bucket: str, out: str, token=None, workdir: str = "/tmp/reduce",
                 table: str = "all") -> dict:
     """Distinct dimension rows across all files (one table, or 'meta' for source_file/network)."""
@@ -314,5 +319,11 @@ def reduce_dims_local(local: str, payer: str, out: str, table: str = "all") -> d
                         "(FORMAT parquet, COMPRESSION zstd)")
             n_out = con.execute(f"SELECT count(*) FROM read_parquet('{out}/{name}.parquet')").fetchone()[0]
         res["tables"][name] = {"rows_in": n_in, "rows_out": n_out}
+        if name == "code":  # never publish licensed descriptor text (licensing.py); keep it privately
+            from .licensing import redact_code_file
+
+            os.makedirs(restricted_dir(out), exist_ok=True)
+            res["tables"][name]["text"] = redact_code_file(f"{out}/code.parquet",
+                                                           f"{restricted_dir(out)}/code_text.parquet")
     res["seconds"] = round(time.time() - t0, 1)
     return res

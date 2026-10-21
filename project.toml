@@ -11,6 +11,7 @@ manifests_repo = "ratecommons/raw-manifests"
 ops_repo = "ratecommons/ops"
 # Mutable scratch space for the map/shuffle/reduce stages.
 work_bucket = "ratecommons/work"
+restricted_bucket = "ratecommons/restricted"  # private
 # Public provider identity sources (NPPES, Doctors and Clinicians, reassignment, IRS exempt orgs) as Parquet.
 identity_repo = "ratecommons/identity"
 
