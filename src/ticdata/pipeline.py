@@ -77,6 +77,32 @@ def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = 
 CHUNK_FILES = int(os.environ.get("TIC_CHUNK_FILES", "25"))
 
 
+def _run_streaming(cmd: list[str]):
+    """Run a command, echo its stderr live (progress shows in the job log even if the job is
+    killed) and return a CompletedProcess with stdout and the last 20 kB of stderr."""
+    import subprocess
+    import sys
+    import threading
+
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    tail: list[str] = []
+
+    def pump():
+        for line in p.stderr:
+            sys.stderr.write(line)
+            sys.stderr.flush()
+            tail.append(line)
+            if len(tail) > 400:
+                del tail[:200]
+
+    t = threading.Thread(target=pump, daemon=True)
+    t.start()
+    out = p.stdout.read()
+    p.wait()
+    t.join(timeout=10)
+    return subprocess.CompletedProcess(cmd, p.returncode, out, "".join(tail)[-20000:])
+
+
 def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_bucket: str | None = None,
               token=None, restricted_bucket: str | None = None, restricted_token=None,
               chunk_files: int = CHUNK_FILES, chunk_out: str | None = None) -> dict:
@@ -168,9 +194,8 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
                 import subprocess
 
                 threads = os.environ.get("TIC_CORE_THREADS", str(max(1, (os.cpu_count() or 2) - 2)))
-                cp = subprocess.run([core, "map", local, outdir, threads, json.dumps(source),
-                                     "--seen-blocks", seen_path, "--record-cache", rcache_path],
-                                    capture_output=True, text=True)
+                cp = _run_streaming([core, "map", local, outdir, threads, json.dumps(source),
+                                     "--seen-blocks", seen_path, "--record-cache", rcache_path])
                 if cp.returncode == 0 and "provider_references_after_in_network_unsupported_in_rust" in \
                         json.loads(cp.stdout).get("flags", {}):
                     rec["rust_error"] = "provider_references after in_network: parsed with Python instead"

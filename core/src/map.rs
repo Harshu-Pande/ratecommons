@@ -10,7 +10,8 @@ use serde_json::value::RawValue;
 // Keys are mostly hashes already; Fx avoids SipHash's cost on every lookup.
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::io::Read;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
 use crate::model::*;
@@ -621,7 +622,7 @@ impl Read for ChanReader {
     }
 }
 
-fn threaded_reader(path: String) -> (ChanReader, std::thread::JoinHandle<()>) {
+fn threaded_reader(path: String, read: Arc<AtomicU64>) -> (ChanReader, std::thread::JoinHandle<()>) {
     let (tx, rx) = bounded::<Vec<u8>>(4);
     let h = std::thread::spawn(move || {
         let mut src = open(&path);
@@ -639,6 +640,7 @@ fn threaded_reader(path: String) -> (ChanReader, std::thread::JoinHandle<()>) {
                 break;
             }
             chunk.truncate(filled);
+            read.fetch_add(filled as u64, Ordering::Relaxed);
             if tx.send(chunk).is_err() {
                 break;
             }
@@ -698,13 +700,13 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     let sh = Arc::new(Shared {
         pg: Mutex::new(PgTable { rows: Vec::new(), index: HashMap::default() }),
         blocks: Seen::new(usize::MAX / 2),
-        pt_seen: Seen::new(150_000_000),
-        pl_seen: Seen::new(150_000_000),
+        pt_seen: Seen::new(60_000_000),
+        pl_seen: Seen::new(60_000_000),
         ps_seen: Seen::new(50_000_000),
         code_seen: Seen::new(50_000_000),
     });
     let blocks_loaded = seen_blocks.map(|p| load_blocks(p, &sh.blocks)).unwrap_or(0);
-    let rcache: Option<Arc<RecordCache>> = record_cache.map(|_| Arc::new(RecordCache::new(20_000_000)));
+    let rcache: Option<Arc<RecordCache>> = record_cache.map(|_| Arc::new(RecordCache::new(10_000_000)));
     let recs_loaded = match (&rcache, record_cache) {
         (Some(c), Some(p)) => c.load(p),
         _ => 0,
@@ -745,7 +747,41 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     let mut handles: Vec<std::thread::JoinHandle<(Flags, HashMap<&'static str, u64>, HashSet<&'static str>)>> = Vec::new();
     let mut refs_arc: Option<Arc<HashMap<Option<String>, Vec<Id>>>> = None;
 
-    let (reader, inflater) = threaded_reader(path.to_string());
+    // records waiting for or inside workers are bounded by bytes, not only by count: one in_network
+    // record can be hundreds of MB, and 256 of those would exhaust a 16 GB runner
+    let inflight: Arc<(Mutex<usize>, Condvar)> = Arc::new((Mutex::new(0), Condvar::new()));
+    let inflight_max: usize = std::env::var("TIC_INFLIGHT_MB").ok().and_then(|v| v.parse().ok()).unwrap_or(768) << 20;
+    let read_bytes = Arc::new(AtomicU64::new(0));
+    let sent = Arc::new(AtomicU64::new(0));
+    let biggest = Arc::new(AtomicU64::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    // progress on stderr every 15 s, so a killed run still shows how far it got and how big it grew
+    let progress = {
+        let (read_bytes, sent, biggest, stop, inflight, sh) =
+            (read_bytes.clone(), sent.clone(), biggest.clone(), stop.clone(), inflight.clone(), sh.clone());
+        std::thread::spawn(move || {
+            let t = Instant::now();
+            let mut last = 0u64;
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                let el = t.elapsed().as_secs();
+                if el < last + 15 {
+                    continue;
+                }
+                last = el;
+                let rss_mb = std::fs::read_to_string("/proc/self/statm").ok()
+                    .and_then(|s| s.split_whitespace().nth(1).and_then(|x| x.parse::<u64>().ok()))
+                    .map(|p| p * 4096 >> 20).unwrap_or(0);
+                let pg = sh.pg.lock().map(|t| t.rows.len()).unwrap_or(0);
+                let inf = *inflight.0.lock().unwrap() >> 20;
+                eprintln!("[ticcore {el}s] json {:.2} GB, records {}, biggest record {} MB, in flight {} MB, \
+                           provider groups {}, rss {} MB",
+                          read_bytes.load(Ordering::Relaxed) as f64 / 1e9, sent.load(Ordering::Relaxed),
+                          biggest.load(Ordering::Relaxed) >> 20, inf, pg, rss_mb);
+            }
+        })
+    };
+    let (reader, inflater) = threaded_reader(path.to_string(), read_bytes.clone());
     let t_refs = std::cell::Cell::new(0.0f64);
     let total = split(reader, |ev| match ev {
         Event::Key(k) => {
@@ -816,6 +852,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                         let refs = arc.clone();
                         let out = wtx.clone();
                         let rc = rcache.clone();
+                        let inflight = inflight.clone();
                         handles.push(std::thread::spawn(move || {
                             let mut w = Worker {
                                 sh: &sh, rc: rc.as_deref(), refs: &refs, out, flags: Flags::default(),
@@ -828,6 +865,11 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                             for (key, rec) in rx {
                                 let t = Instant::now();
                                 w.item(key, &rec);
+                                {
+                                    let (m, cv) = &*inflight;
+                                    *m.lock().unwrap() -= rec.len();
+                                    cv.notify_all();
+                                }
                                 busy += t.elapsed().as_secs_f64();
                             }
                             *w.counts.entry("worker_busy_ms").or_insert(0) += (busy * 1000.0) as u64;
@@ -860,6 +902,16 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                         return;
                     }
                 }
+                {
+                    let (m, cv) = &*inflight;
+                    let mut g = m.lock().unwrap();
+                    while *g > 0 && *g + rec.len() > inflight_max {
+                        g = cv.wait(g).unwrap();
+                    }
+                    *g += rec.len();
+                }
+                sent.fetch_add(1, Ordering::Relaxed);
+                biggest.fetch_max(rec.len() as u64, Ordering::Relaxed);
                 item_tx.as_ref().unwrap().send((key, rec.to_vec())).unwrap();
             }
         }
@@ -894,6 +946,9 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
         }
     }
     let t_items = t0.elapsed().as_secs_f64();
+    stop.store(true, Ordering::Relaxed);
+    let _ = progress.join();
+    counts.insert("biggest_record_bytes", biggest.load(Ordering::Relaxed));
     drop(wtx);
     let mut tables = serde_json::Map::new();
     let mut wbusy = serde_json::Map::new();

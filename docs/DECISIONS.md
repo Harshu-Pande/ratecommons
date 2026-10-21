@@ -5,6 +5,21 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **Aetna jobs died after about a minute with exit code 143** (GitHub's runner kills the job
+  under memory pressure), before any file finished. Likely cause: the Rust core queued up to
+  256 whole records for its workers, and Aetna records can be very large. In-flight records
+  are now bounded by bytes (768 MB, `TIC_INFLIGHT_MB`), the price-term and price-list seen
+  sets are capped at 60 million IDs each, the record cache at 10 million records, and the
+  core prints progress (JSON read, records, biggest record, provider groups, RSS) to the job
+  log every 15 s so a killed job still shows how far it got.
+- **Cigna 2026-10 verified end to end.** `verify` re-parsed the national OAP file (Rust core)
+  and compared it with the published release: all 103,603,247 of its facts are published
+  with its network in their set, no published fact claims that network without being in the
+  file, and every price term, price list, provider set, provider group and code ID is
+  published. Zero defects.
+- **NPPES 2026-10 loaded** from NBER's copy of the CMS zip (`npi_raw_202610.zip`, files dated
+  2026-10-11): 9,852,180 NPIs (330 columns), 1,274,332 practice locations, 864,775 other
+  names, 608,236 endpoints. The weekly and deactivation files still need the CMS page.
 - **Map outputs are uploaded per chunk of a shard, not per file.** Per-file folders meant
   about 25 objects per file: 155,000 for Aetna, and every reduce job would fetch about
   19,000 of them, against Hugging Face's few-large-files guidance and download rate limits.
