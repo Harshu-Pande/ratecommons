@@ -1,0 +1,59 @@
+name: reduce
+# Reduce stage: merge one payer-release's map outputs into release tables and publish them to
+# datasets/ratecommons/<payer> under release=<release>/. Trigger: edit ops/reduce-request.txt
+# on main; its last non-comment line is "<payer> <release>", for example "cigna 2026-10".
+on:
+  workflow_dispatch:
+    inputs:
+      payer: { required: true, default: "cigna" }
+      release: { required: true, default: "2026-10" }
+  push:
+    branches: [main]
+    paths: ["ops/reduce-request.txt"]
+
+permissions:
+  contents: read
+  id-token: write   # Trusted Publishers: work bucket (read), payer dataset and ops (write)
+
+concurrency:
+  group: reduce
+  cancel-in-progress: false
+
+jobs:
+  args:
+    runs-on: ubuntu-latest
+    outputs:
+      payer: ${{ steps.a.outputs.payer }}
+      release: ${{ steps.a.outputs.release }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: a
+        run: |
+          read payer release <<< "$(grep -v '^#' ops/reduce-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
+          [ -n "${{ github.event.inputs.payer }}" ] && payer="${{ github.event.inputs.payer }}" && release="${{ github.event.inputs.release }}"
+          echo "payer=$payer" >> "$GITHUB_OUTPUT"; echo "release=$release" >> "$GITHUB_OUTPUT"
+
+  reduce:
+    needs: args
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 17
+      matrix:
+        part: [dims, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e . "duckdb>=1.4"
+      - name: reduce ${{ matrix.part }}
+        run: |
+          set -o pipefail
+          mkdir -p reports
+          ticdata reduce --payer ${{ needs.args.outputs.payer }} --release ${{ needs.args.outputs.release }} \
+            --part ${{ matrix.part }} --publish --out reports/reduce-${{ matrix.part }}.json 2>&1 | tail -50
+      - if: always()
+        run: ticdata put-report reports/* --prefix "runs/$(date -u +%F)-reduce-${{ needs.args.outputs.payer }}-${GITHUB_RUN_ID}" || true

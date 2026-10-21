@@ -73,6 +73,13 @@ def main(argv=None) -> int:
     p.add_argument("--upload", action="store_true")
     p.add_argument("--out")
 
+    p = sub.add_parser("reduce", help="merge a payer-release's map outputs (one fact part, or dims)")
+    p.add_argument("--payer", required=True)
+    p.add_argument("--release", required=True)
+    p.add_argument("--part", required=True, help="0-15 for rate_fact parts, or 'dims'")
+    p.add_argument("--publish", action="store_true", help="upload to datasets/<org>/<payer>")
+    p.add_argument("--out")
+
     p = sub.add_parser("fingerprint", help="tail fingerprint of one URL")
     p.add_argument("url")
 
@@ -133,6 +140,20 @@ def main(argv=None) -> int:
         from . import identity
 
         _write(identity.load_source(a.source, upload_repo=cfg.identity_repo if a.upload else None), a.out)
+    elif a.cmd == "reduce":
+        from . import hfio, identity, reduce
+
+        tok = hfio.token_for(hfio.bucket(cfg.work_bucket))
+        outdir = f"/tmp/reduce-out/{a.payer}/{a.release}"
+        if a.part == "dims":
+            res = reduce.reduce_dims(a.payer, a.release, cfg.work_bucket, outdir, token=tok)
+        else:
+            res = reduce.reduce_part(a.payer, a.release, int(a.part), cfg.work_bucket, outdir, token=tok)
+        if a.publish:
+            repo = f"{cfg.org}/{a.payer}"
+            res["published"] = identity.upload_folder(repo, outdir, f"release={a.release}",
+                                                      f"{a.payer} {a.release}: reduce {a.part}")
+        _write(res, a.out)
     elif a.cmd == "fingerprint":
         from .net import resolve, tail_fingerprint
 

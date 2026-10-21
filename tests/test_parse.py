@@ -101,3 +101,23 @@ def test_parse_file_normalizes_and_flags(tmp_path):
 def test_ids_are_deterministic_and_order_free():
     assert h("ps", [b"\x01" * 16, b"\x02" * 16]) == h("ps", [b"\x02" * 16, b"\x01" * 16])
     assert h("pt", "negotiated", 1) != h("pt", "negotiated", 10)
+
+
+def test_reduce_merges_identical_files_into_one_network(tmp_path):
+    import shutil
+
+    from ticdata.reduce import reduce_dims_local, reduce_part_local
+
+    src = tmp_path / "f.json.gz"
+    _write_two_member_gzip(src)
+    parse_file(str(src), str(tmp_path / "map/a"), {"name": "a"})
+    shutil.copytree(tmp_path / "map/a", tmp_path / "map/b")  # same bytes under another name
+    facts = 0
+    for k in range(16):
+        facts += reduce_part_local(str(tmp_path / "map"), "test", "2026-10", k, str(tmp_path / "out")).get("facts", 0)
+    assert facts == 4
+    dims = reduce_dims_local(str(tmp_path / "map"), "test", str(tmp_path / "out"))
+    assert dims["networks"] == 1 and dims["files"] == 2
+    assert dims["tables"]["price_term"]["rows_out"] == 5
+    sets = pq.read_table(tmp_path / "out/network_set").to_pylist()
+    assert {len(s["network_ids"]) for s in sets} == {1}
