@@ -5,6 +5,11 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **Cigna 2026-10 republished from the Rust re-map and verified again.** Blocks mode:
+  1,242,508,174 map fact rows (down from 1,928,514,784 thanks to per-shard block dedup)
+  reduce to 304,777,863 facts (68,421 more than the first release, from the provider-list
+  `ps_id`); 130,324 provider lists, 1,659,804 provider sets. `verify` on the national OAP
+  file: 103,603,271 facts, zero defects in every check including provider lists.
 - **Aetna is mapped in waves because its map output would not fit Hugging Face's 7.8 TB.**
   The first real Aetna chunk (3 files, 2.2 GB gzip, 40 GB of JSON) produced 2.86 GB of map
   output, so all 8 TB of Aetna would leave about 10 TB of shuffle files. The map request takes
