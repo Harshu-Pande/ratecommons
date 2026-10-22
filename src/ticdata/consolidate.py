@@ -7,7 +7,8 @@ objects per job (the design's Hugging Face rate-limit warning). A chunk folder h
   file_block.parquet              + file_key: which file each block (billing-code record) came from
   provider_reference.parquet      + file_key: provider_group_id is local to its file
   rate_fact/part-XX.parquet       facts, already written once per block per shard
-  price_term, price_list, provider_set, code   distinct by ID across the chunk
+  price_term, price_list, provider_set, provider_list, code   concatenated; the shard's files share
+                                  seen-sets, so IDs repeat only if a set overflowed (reduce dedups)
   provider_group                  distinct rows (reduce merges names per pg_id)
 """
 from __future__ import annotations
@@ -46,9 +47,8 @@ def consolidate(items: list[tuple[str, str]], dest: str) -> dict:
             copy(sql, f"{dest}/{table}.parquet", table)
     for table, key in KEYED.items():
         fs = [f for _, f in have(table)]
-        if fs:
-            copy(f"SELECT DISTINCT ON ({key}) * FROM read_parquet({fs!r}, union_by_name = true)",
-                 f"{dest}/{table}.parquet", table)
+        if fs:  # the shard's files share seen-sets for dims, so a plain concatenation (streams, no spill)
+            copy(f"SELECT * FROM read_parquet({fs!r}, union_by_name = true)", f"{dest}/{table}.parquet", table)
     fs = [f for _, f in have("provider_group")]
     if fs:
         copy(f"SELECT DISTINCT * FROM read_parquet({fs!r}, union_by_name = true)", f"{dest}/provider_group.parquet",

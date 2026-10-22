@@ -5,6 +5,13 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-21
 
+- **Aetna wave 1, first try: parsing fine, consolidation ran out of disk.** All 8 jobs parsed
+  their files (about 115 s per 2.3 GB file, RSS under 5 GB) but failed at the end: 14 files'
+  outputs (about 42 GB) plus DuckDB's temp space for `DISTINCT ON` filled the 44 GB left.
+  Now: the files of a shard share dimension seen-sets (`TIC_SEEN_DIMS`, like seen-blocks),
+  so a later file does not rewrite price terms, lists, sets or codes an earlier one wrote;
+  consolidation is a streaming concatenation with no dedup; and a chunk is flushed at 12 GB
+  of staged output as well as at 25 files.
 - **Cigna 2026-10 republished from the Rust re-map and verified again.** Blocks mode:
   1,242,508,174 map fact rows (down from 1,928,514,784 thanks to per-shard block dedup)
   reduce to 304,777,863 facts (68,421 more than the first release, from the provider-list

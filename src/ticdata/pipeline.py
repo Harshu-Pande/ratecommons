@@ -75,16 +75,18 @@ def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = 
 
 
 CHUNK_FILES = int(os.environ.get("TIC_CHUNK_FILES", "25"))
+CHUNK_BYTES = int(os.environ.get("TIC_CHUNK_GB", "12")) << 30  # staged output per chunk, for runner disk
 
 
-def _run_streaming(cmd: list[str]):
+def _run_streaming(cmd: list[str], env: dict | None = None):
     """Run a command, echo its stderr live (progress shows in the job log even if the job is
     killed) and return a CompletedProcess with stdout and the last 20 kB of stderr."""
     import subprocess
     import sys
     import threading
 
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         env={**os.environ, **(env or {})})
     tail: list[str] = []
 
     def pump():
@@ -179,7 +181,9 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
 
     for e in files:
         key, rel = file_key(e["name"]), release_of(e["name"])
-        if staged and (staged[0][2] != rel or len(staged) >= chunk_files):
+        staged_bytes = sum(f.stat().st_size for _, d, _ in staged for f in __import__("pathlib").Path(d).rglob("*")
+                           if f.is_file())
+        if staged and (staged[0][2] != rel or len(staged) >= chunk_files or staged_bytes >= CHUNK_BYTES):
             flush()
         local = os.path.join(workdir, "in.bin")
         outdir = os.path.join(stage, key)
@@ -195,7 +199,8 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
 
                 threads = os.environ.get("TIC_CORE_THREADS", str(max(1, (os.cpu_count() or 2) - 2)))
                 cp = _run_streaming([core, "map", local, outdir, threads, json.dumps(source),
-                                     "--seen-blocks", seen_path, "--record-cache", rcache_path])
+                                     "--seen-blocks", seen_path, "--record-cache", rcache_path],
+                                    env={"TIC_SEEN_DIMS": os.path.join(workdir, "seen_dims")})
                 if cp.returncode == 0 and "provider_references_after_in_network_unsupported_in_rust" in \
                         json.loads(cp.stdout).get("flags", {}):
                     rec["rust_error"] = "provider_references after in_network: parsed with Python instead"

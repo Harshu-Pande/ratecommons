@@ -736,6 +736,20 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
         code_seen: Seen::new(50_000_000),
     });
     let blocks_loaded = seen_blocks.map(|p| load_blocks(p, &sh.blocks)).unwrap_or(0);
+    // shard-level dimension sets: later files of a shard do not write rows an earlier one wrote
+    let seen_dims = std::env::var("TIC_SEEN_DIMS").ok();
+    let dim_sets = |sh: &Shared| -> Vec<(&'static str, *const Seen)> {
+        vec![("pt", &sh.pt_seen as *const Seen), ("pl", &sh.pl_seen), ("ps", &sh.ps_seen), ("pli", &sh.pli_seen),
+             ("code", &sh.code_seen)]
+    };
+    let mut dims_loaded = 0u64;
+    if let Some(d) = &seen_dims {
+        std::fs::create_dir_all(d).ok();
+        for (n, set) in dim_sets(&sh) {
+            // SAFETY: the pointer is to a field of `sh`, alive for this whole function
+            dims_loaded += load_blocks(&format!("{d}/{n}.bin"), unsafe { &*set });
+        }
+    }
     let rcache: Option<Arc<RecordCache>> = record_cache.map(|_| Arc::new(RecordCache::new(10_000_000)));
     let recs_loaded = match (&rcache, record_cache) {
         (Some(c), Some(p)) => c.load(p),
@@ -1043,6 +1057,14 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     }
 
     let blocks_saved = seen_blocks.map(|p| save_blocks(p, &sh.blocks)).unwrap_or(0);
+    if let Some(d) = &seen_dims {
+        let mut saved = 0;
+        for (n, set) in dim_sets(&sh) {
+            saved += save_blocks(&format!("{d}/{n}.bin"), unsafe { &*set });
+        }
+        counts.insert("seen_dims_loaded", dims_loaded);
+        counts.insert("seen_dims_saved", saved);
+    }
     if let (Some(c), Some(p)) = (&rcache, record_cache) {
         counts.insert("record_cache_loaded", recs_loaded);
         counts.insert("record_cache_saved", c.save(p));
