@@ -5,6 +5,12 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-22
 
+- **Overnight orchestration without a chat session.** `orchestrate.yml` runs every 30 minutes:
+  it dispatches the next reduce wave from `ops/waves.txt` once every shard of the wave has a
+  successful map job, then the merge once every wave is in `reduced/`. It waits while a
+  reduce runs and stops after a failed reduce until someone looks. `reduce.yml` accepts a
+  full request line as a workflow_dispatch input. (The GitHub REST API is reachable from
+  this environment now; GraphQL is not.)
 - **Aetna waves reduce well.** Wave 1 (shards 0-7, 143 files): 4.62 billion map fact rows to
   242,692,818 distinct facts (19x), 17.6 GB reduced. Wave 2 (shards 8-23, 304 files): 6.08
   billion to 127,100,097 (48x), 9.1 GB, about 10 minutes per part. Fixes on the way: facts are
