@@ -5,6 +5,27 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-22
 
+- **Serving packs for interactive questions (`serving.py`, `serve.yml`).** The release tables
+  are normalized for storage; "this code, in this state" needs another layout: rates (fact x
+  price term) sorted by code in 50k-row groups, provider set -> list split by state, group ->
+  NPI split by state (geography from NPPES by NPI and IRS exempt-org by EIN, never names),
+  plus group -> network membership. Cigna's pack: 400,911,894 rate rows, 8.1 GB.
+- **Aetna's provider sets are enormous.** Wave 1 explodes to 2,479,951,868 provider-set ->
+  list rows for the sets its facts use; the pack ran a runner out of disk. Packs take an
+  optional state list (`aetna:wave-1:MO,IL,KS`): only groups practicing there, their lists,
+  and the facts of sets that reach them.
+- **Hugging Face no longer hosts Gradio/Docker Spaces free** (402: PRO for users, Team for
+  orgs; static Spaces stay free). The app (`space/`) runs on Harshu's Mac for now behind a
+  Cloudflare quick tunnel (`~/ratecommons-app/start.sh`), with a 10 GB free-disk floor.
+  Public hosting later means either PRO or re-cutting packs into small per-state/per-code
+  files a serverless front end can fetch.
+- **UHC first subset**: map accepts `match=` name filters; the UHIC Choice Plus C2 and
+  Options PPO P3 files (15 GB gzip each) mapped to 28 GB and reduced into `ratecommons/uhc`
+  (rate_fact 14.1 GB).
+- **Medicare PFS**: PPRRVU columns are fixed by CMS (0 HCPCS, 1 MOD, 5 work, 6 NF PE, 8 F PE,
+  10 MP, 25 CF); header detection by text failed because "HCPCS" itself looks like a code.
+  State amounts use the mean locality GPCI of the state; 99213 national $95.19 (CF 33.4009).
+
 - **Cigna dataset history is left as is (Harshu's call).** The current tables carry no
   licensed descriptor text; yesterday's first code table remains only in the dataset's git
   history. Not squashed.
