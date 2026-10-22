@@ -10,16 +10,18 @@ code for another track until it reports to `datasets/ratecommons/ops`.
 - How to start runs and read results without the Actions API: see DECISIONS
   (edit `ops/smoke-request.txt`, `ops/archive-request.txt`, `ops/kaggle-request.txt`).
 
-## Status, day 1 (2026-10-21, evening)
+## Status, night of day 1 (2026-10-22, 03:30 UTC)
 
 | Track | Done | Next |
 | --- | --- | --- |
-| A. Map | Rust core default: 0.36 GB/s (Cigna) and 0.21 GB/s (Aetna) of JSON per runner, RSS 4.5 GB on Aetna. Provider sets stored as provider lists. Chunked uploads. Cigna re-mapped (124/124). Aetna wave 1 running: shards 0-7 of 252 (143 largest files, 261 GB gzip) | Measure wave 1 after reduce; plan the remaining waves against the 7.8 TB storage limit |
-| Reduce | Fixed-size set keys; blocks mode; reads chunk layout | Cigna 2026-10 re-reduce running; then `verify` + `card`. Aetna: per-wave reduce, then a cross-wave merge (network sets of different waves are disjoint, so set keys combine by XOR) |
-| B. Rust core | Parity with `parse.py`; mimalloc/Fx; record cache; byte-bounded queues; live progress | Price-term path (Aetna prices are ~76% unique) and record scanning |
-| C. Identity | NPPES 2026-10 (via NBER), Doctors and Clinicians, IRS exempt orgs | NPPES weekly/deactivations when the CMS page returns |
-| D. Code dictionary | `codebook` command | Run on Aetna (LOCAL codes) after its reduce |
-| Licensing | Licensed descriptor text withheld; raw text private | Harshu to OK squashing the Cigna dataset history |
+| A. Map | Cigna re-mapped with the Rust core. Aetna shards 0-39 mapped (447 files); shards 40-251 running (about 13 h at 12 jobs) | When the map run ends: reduce waves of ~16 shards (`aetna 2026-10 all wave=N a-b`) |
+| Reduce | Cigna 2026-10 republished and verified (304,777,863 facts). Aetna waves 1-2 reduced (242.7M and 127.1M facts per wave), wave 3 (24-39) running | After the last wave: `aetna 2026-10 all merge`, then `verify` on one Aetna file, `card`, `codebook` |
+| B. Rust core | Provider lists; ps_id over lists; shard-level dim seen-sets; 0.2 GB/s per runner on Aetna | Price-term path |
+| C. Identity | NPPES, DAC, IRS EO for 2026-10 | NPPES weekly when CMS returns |
+| Licensing | Withheld text; private copies | Squash Cigna history once Harshu agrees |
+
+Reduce wave plan for the rest of Aetna: 40-55, 56-71, 72-87, 88-103, 104-119, 120-135, 136-151,
+152-167, 168-183, 184-199, 200-215, 216-231, 232-251 (waves 4-16), then merge.
 
 Scale note: an Aetna file holds about 33 million rates (20 GB of JSON); all 6,229 files are about
 200 billion rate rows before cross-file dedup, and about 10 TB of map output.
