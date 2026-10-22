@@ -5,6 +5,13 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-22
 
+- **AI clients timed out (ChatGPT, 5-6 minutes).** Causes: Gradio ran one tool call at a time (queue
+  concurrency now 6); a `billing_code IN (...)` list does not prune the code-sorted row groups, so
+  multi-code lookups scanned whole rate tables (now one equality scan per code, UNION ALL); provider
+  lookups now start from the provider's groups -> lists -> sets. New tool `provider_rates` (one provider,
+  many codes, one call) and a `modifier` option (26/TC) on `market_distribution`. Through the Vercel
+  gateway on the Mac, cold: 15 radiology codes for one NPI 13.5 s (was 70 s+), 5 urgent-care codes for one
+  TIN 11.3 s, TC distribution 5.1 s. Running the three payers in parallel was slower on the 8 GB Mac.
 - **Stable address without paid hosting.** Tailscale Funnel did not work out on Harshu's Mac. A Vercel
   function (`gateway/`) is the fixed front door and forwards to the Mac's Cloudflare quick tunnel, whose
   address it reads from HMAC-signed notes on an ntfy.sh topic (`space/tunnel.py`). App and tunnel are
