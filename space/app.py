@@ -228,6 +228,19 @@ TOOLS = [lookup_rates, market_distribution, compare_providers, benchmark_provide
 
 # ---------------------------------------------------------------- UI
 
+def public_url() -> str:
+    """The app's public address: RC_PUBLIC_URL, or the first line of the file RC_URL_FILE (a tunnel writes it)."""
+    u = os.environ.get("RC_PUBLIC_URL", "")
+    f = os.environ.get("RC_URL_FILE")
+    if not u and f and os.path.exists(f):
+        u = open(f).read().strip().splitlines()[0] if open(f).read().strip() else ""
+    return u.rstrip("/") or "https://<this-site>"
+
+
+def _ask() -> str:
+    return open(os.path.join(os.path.dirname(__file__), "ASK.md")).read().replace("{URL}", public_url())
+
+
 def _err(fn):
     def w(*a):
         try:
@@ -245,7 +258,7 @@ with gr.Blocks(title="RateCommons Explorer") as demo:
                 "(selected large networks), by code, place and provider. " + NOTE)
     status = gr.JSON(label="Data status", visible=True)
     with gr.Tab("Ask Claude (AI)"):
-        gr.Markdown(open(os.path.join(os.path.dirname(__file__), "ASK.md")).read())
+        ask_md = gr.Markdown(_ask())
     with gr.Tab("Rates lookup"):
         with gr.Row():
             c1, s1 = gr.Textbox(label="Billing code", value="99213"), gr.Textbox(label="State", value="TX")
@@ -334,6 +347,7 @@ with gr.Blocks(title="RateCommons Explorer") as demo:
     for t in TOOLS:
         gr.api(t, api_name=t.__name__)
     demo.load(data_status, None, status, api_visibility="private")
+    demo.load(_ask, None, ask_md, api_visibility="private")
     gr.Timer(20).tick(data_status, None, status, api_visibility="private")
 
 

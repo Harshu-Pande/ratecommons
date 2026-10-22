@@ -3,7 +3,7 @@
 Every analysis on this site is also an **MCP tool**, so Claude can run them for you, chain them and explain the results.
 
 1. In Claude (claude.ai or the desktop app): **Settings → Connectors → Add custom connector**.
-2. Name: `RateCommons`. URL: `https://ratecommons-explorer.hf.space/gradio_api/mcp/`
+2. Name: `RateCommons`. URL: `{URL}/gradio_api/mcp/`
 3. In a chat, enable the RateCommons connector and ask, for example:
    - *What do Cigna, Aetna and UHC pay for a 99214 office visit in Houston? Show the spread and % of Medicare.*
    - *I'm a dermatology practice in Austin, TIN 123456789. How do my 99213/99214/11102 rates compare with other dermatologists in Texas?*

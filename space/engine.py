@@ -12,6 +12,8 @@ import threading
 import time
 from collections import Counter
 
+import shutil
+
 import duckdb
 import pandas as pd
 
@@ -72,6 +74,20 @@ def _label(payer: str, files: list[str], plans: list[str] | None) -> tuple[str, 
     return payer, stem
 
 
+def _pack_bytes(p: str) -> int:
+    from huggingface_hub import HfApi
+
+    try:
+        return sum(getattr(f, "size", 0) or 0 for f in HfApi().list_repo_tree(
+            f"{ORG}/{p}", repo_type="dataset", recursive=True, path_in_repo="serving"))
+    except Exception:
+        return 0
+
+
+def _on_disk(d: str) -> int:
+    return sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(d) for f in fs) if os.path.isdir(d) else 0
+
+
 def load(download: bool = True):
     """Download the packs (if needed) and register views. Runs in a background thread at startup."""
     global _con
@@ -88,6 +104,7 @@ def load(download: bool = True):
         con.execute("SET preserve_insertion_order = false")
         con.execute(f"SET temp_directory = '{DATA}/tmp'")
         con.execute(f"SET memory_limit = '{os.environ.get('RC_MEMORY', '10GB')}'")
+        con.execute(f"SET max_temp_directory_size = '{os.environ.get('RC_TEMP_MAX', '3GB')}'")
         idir = f"{DATA}/identity/serving"
         con.execute(f"CREATE OR REPLACE VIEW nppes AS SELECT * FROM read_parquet('{idir}/nppes.parquet')")
         if os.path.exists(f"{idir}/medicare_pfs.parquet"):
@@ -99,8 +116,18 @@ def load(download: bool = True):
         for p in PAYERS:
             try:
                 if download:
-                    _log(f"downloading {p}")
-                    snapshot_download(f"{ORG}/{p}", repo_type="dataset", local_dir=f"{DATA}/{p}",
+                    need = _pack_bytes(p)
+                    have = _on_disk(f"{DATA}/{p}/serving")
+                    free = shutil.disk_usage(DATA).free
+                    floor = float(os.environ.get("RC_MIN_FREE_GB", "10")) * 1e9 + 3e9  # + DuckDB temp headroom
+                    if need - have > free - floor:
+                        _log(f"{p}: skipped, needs {(need - have) / 1e9:.1f} GB more but only "
+                             f"{(free - floor) / 1e9:.1f} GB may be used (keeping {floor / 1e9:.0f} GB free)")
+                        if not os.path.exists(f"{DATA}/{p}/serving/network.parquet"):
+                            continue
+                    else:
+                        _log(f"downloading {p} ({need / 1e9:.1f} GB)")
+                        snapshot_download(f"{ORG}/{p}", repo_type="dataset", local_dir=f"{DATA}/{p}",
                                       allow_patterns=["serving/*"])
                 d = f"{DATA}/{p}/serving"
                 if not os.path.exists(f"{d}/network.parquet"):
