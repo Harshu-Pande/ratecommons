@@ -5,6 +5,9 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-22
 
+- **Cigna dataset history is left as is (Harshu's call).** The current tables carry no
+  licensed descriptor text; yesterday's first code table remains only in the dataset's git
+  history. Not squashed.
 - **Overnight check-in (09:36 UTC).** Map run for shards 40-251: 109 of 212 shards done, 0
   failed, 12 running. Reduce waves 3 (shards 24-39: 5.69 billion map fact rows to 79,590,344
   facts, 6.5 GB) and 4 (shards 40-55, dispatched by the orchestrator: 6.07 billion to

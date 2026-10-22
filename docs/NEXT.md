@@ -18,7 +18,7 @@ code for another track until it reports to `datasets/ratecommons/ops`.
 | Reduce | Cigna 2026-10 republished and verified (304,777,863 facts). Aetna waves 1-2 reduced (242.7M and 127.1M facts per wave), wave 3 (24-39) running | After the last wave: `aetna 2026-10 all merge`, then `verify` on one Aetna file, `card`, `codebook` |
 | B. Rust core | Provider lists; ps_id over lists; shard-level dim seen-sets; 0.2 GB/s per runner on Aetna | Price-term path |
 | C. Identity | NPPES, DAC, IRS EO for 2026-10 | NPPES weekly when CMS returns |
-| Licensing | Withheld text; private copies | Squash Cigna history once Harshu agrees |
+| Licensing | Withheld text; private copies | Harshu chose to leave the Cigna dataset history as is (Oct 22) |
 
 Reduce wave plan for the rest of Aetna: 40-55, 56-71, 72-87, 88-103, 104-119, 120-135, 136-151,
 152-167, 168-183, 184-199, 200-215, 216-231, 232-251 (waves 4-16), then merge.
