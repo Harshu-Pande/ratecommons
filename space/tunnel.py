@@ -6,7 +6,13 @@ door (gateway/, on Vercel) learns the current address from a signed note posted 
 (RC_ANNOUNCE_KEY_FILE) and in the gateway's environment; the topic name is RC_ANNOUNCE_TOPIC.
 Run by launchd; exits when cloudflared exits so launchd restarts both.
 """
-import hashlib, hmac, os, re, subprocess, sys, time, urllib.request
+import hashlib, hmac, os, re, ssl, subprocess, sys, time, urllib.request
+
+try:  # python.org builds on macOS ship without system CA certificates
+    import certifi
+    CTX = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    CTX = ssl.create_default_context()
 
 HOME = os.path.expanduser("~/ratecommons-app")
 key = open(os.environ.get("RC_ANNOUNCE_KEY_FILE", f"{HOME}/.announce_key")).read().strip().encode()
@@ -32,7 +38,7 @@ def announce():
     sig = hmac.new(key, f"{url}|{ts}".encode(), hashlib.sha256).hexdigest()
     try:
         urllib.request.urlopen(urllib.request.Request(f"https://ntfy.sh/{topic}", data=f"{url}|{ts}|{sig}".encode(),
-                                                      method="POST"), timeout=30)
+                                                      method="POST"), timeout=30, context=CTX)
     except Exception as e:
         print("announce failed", e, flush=True)
 
