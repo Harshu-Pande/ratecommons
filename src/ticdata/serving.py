@@ -63,9 +63,11 @@ def _log(msg: str):
 
 
 def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], networks: list[bytes] | None = None,
-               plans: dict[str, list[str]] | None = None, work: str = "/tmp/packwork") -> dict:
+               plans: dict[str, list[str]] | None = None, work: str = "/tmp/packwork",
+               states: list[str] | None = None) -> dict:
     """`src` holds release tables (a published release, or one reduce wave). `nppes` is the shared
-    nppes.parquet (npi, state, zip5...). `plans` maps source file name -> plan names."""
+    nppes.parquet (npi, state, zip5...). `plans` maps source file name -> plan names. `states` limits the
+    pack to provider groups practicing in those states (and the rates of their provider sets)."""
     t0 = time.time()
     shutil.rmtree(out, ignore_errors=True)
     os.makedirs(f"{out}/rate", exist_ok=True)
@@ -94,6 +96,29 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
     res["networks"] = con.execute(f"SELECT count(*) FROM '{out}/network.parquet'").fetchone()[0]
     _log(f"networks {res['networks']}")
 
+    con.execute(f"CREATE VIEW nppes AS SELECT npi, state FROM read_parquet('{nppes}')")
+    irs_sql = " UNION ALL ".join(f"SELECT ein, state FROM read_parquet('{p}')" for p in irs) if irs else \
+        "SELECT NULL::VARCHAR ein, NULL::VARCHAR state WHERE false"
+    con.execute(f"CREATE TABLE irs AS SELECT ein, any_value(upper(state)) state FROM ({irs_sql}) GROUP BY ein")
+    keep_ps = ""
+    if states:
+        res["states"] = states
+        st = ", ".join(f"'{x}'" for x in states if re.fullmatch(r"[A-Z]{2}", x))
+        con.execute(f"""CREATE TABLE geo_pg AS
+            SELECT DISTINCT g.pg_id FROM (SELECT pg_id, unnest(npis) npi FROM {_src(src, 'provider_group')}) g
+            JOIN nppes n USING (npi) WHERE n.state IN ({st})
+            UNION SELECT g.pg_id FROM {_src(src, 'provider_group')} g JOIN irs e ON e.ein = g.tin_value
+            WHERE (g.tin_wide OR len(g.npis) = 0) AND e.state IN ({st})""")
+        con.execute(f"""CREATE TABLE keep_pli AS SELECT DISTINCT pli_id FROM
+            (SELECT pli_id, unnest(pg_ids) pg_id FROM {_src(src, 'provider_list')}) SEMI JOIN geo_pg USING (pg_id)""")
+        con.execute(f"""CREATE TABLE ps_pli_k AS SELECT ps_id, pli_id FROM
+            (SELECT ps_id, unnest(pli_ids) pli_id FROM {_src(src, 'provider_set')}) SEMI JOIN keep_pli USING (pli_id)""")
+        con.execute("CREATE TABLE keep_ps AS SELECT DISTINCT ps_id FROM ps_pli_k")
+        keep_ps = "SEMI JOIN keep_ps USING (ps_id)"
+        _log(f"states {states}: pg {con.execute('SELECT count(*) FROM geo_pg').fetchone()[0]:,} "
+             f"pli {con.execute('SELECT count(*) FROM keep_pli').fetchone()[0]:,} "
+             f"ps {con.execute('SELECT count(*) FROM keep_ps').fetchone()[0]:,}")
+
     # rates: facts x price terms, per fact part, sorted by code
     con.execute(f"CREATE VIEW pl AS SELECT * FROM {_src(src, 'price_list')}")
     n = 0
@@ -101,7 +126,7 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
     for f in sorted(glob.glob(f"{src}/rate_fact/*.parquet")):
         name = os.path.basename(f)
         con.execute(f"""CREATE OR REPLACE TABLE fx AS SELECT billing_code_type, billing_code, code_id, ps_id, pl_id, ns_id
-                        FROM read_parquet('{f}') SEMI JOIN (SELECT DISTINCT ns_id FROM ns) USING (ns_id)""")
+                        FROM read_parquet('{f}') SEMI JOIN (SELECT DISTINCT ns_id FROM ns) USING (ns_id) {keep_ps}""")
         con.execute("INSERT INTO psns SELECT DISTINCT ps_id, ns_id FROM fx")
         con.execute(f"""COPY (SELECT f.billing_code_type, f.billing_code, f.code_id, f.ps_id, f.ns_id, unnest(p.pt_ids) pt_id
                               FROM fx f JOIN (SELECT pl_id, pt_ids FROM pl SEMI JOIN (SELECT DISTINCT pl_id FROM fx) USING (pl_id)) p
@@ -120,11 +145,17 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
 
     # provider sets -> lists -> groups (only what the rates use)
     con.execute(f"CREATE TABLE ps_used AS SELECT DISTINCT ps_id FROM {R}")
-    con.execute(f"""CREATE TABLE ps_pli AS SELECT ps_id, unnest(pli_ids) pli_id
-                    FROM {_src(src, 'provider_set')} SEMI JOIN ps_used USING (ps_id)""")
+    if states:
+        con.execute("CREATE TABLE ps_pli AS SELECT * FROM ps_pli_k SEMI JOIN ps_used USING (ps_id)")
+        con.execute("DROP TABLE ps_pli_k")
+    else:
+        con.execute(f"""CREATE TABLE ps_pli AS SELECT ps_id, unnest(pli_ids) pli_id
+                        FROM {_src(src, 'provider_set')} SEMI JOIN ps_used USING (ps_id)""")
     _log(f"ps_pli {con.execute('SELECT count(*) FROM ps_pli').fetchone()[0]:,}")
     con.execute(f"""CREATE TABLE pli_pg AS SELECT DISTINCT pli_id, unnest(pg_ids) pg_id
                     FROM {_src(src, 'provider_list')} SEMI JOIN (SELECT DISTINCT pli_id FROM ps_pli) USING (pli_id)""")
+    if states:  # only the groups practicing in the chosen states
+        con.execute("DELETE FROM pli_pg WHERE pg_id NOT IN (SELECT pg_id FROM geo_pg)")
     con.execute(f"COPY (SELECT * FROM pli_pg ORDER BY pli_id) TO '{out}/pli_pg.parquet' {W}")
     # which networks each provider group has any rate in (network breadth, "is X in network Y")
     con.execute("""CREATE TABLE pli_net AS SELECT DISTINCT p.pli_id, n.network_id
@@ -137,19 +168,17 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
                     SEMI JOIN (SELECT DISTINCT pg_id FROM pli_pg) USING (pg_id)""")
 
     # geography from identifiers: NPI -> NPPES practice state; TIN-wide EIN -> IRS exempt-org state
-    con.execute(f"CREATE VIEW nppes AS SELECT npi, state FROM read_parquet('{nppes}')")
     con.execute("""CREATE TABLE pg_npi AS
                    SELECT g.pg_id, x.npi, coalesce(n.state, 'XX') AS state
                    FROM (SELECT pg_id, unnest(npis) npi FROM pg) x JOIN pg g USING (pg_id)
                    LEFT JOIN nppes n USING (npi) WHERE x.npi <> 0""")
-    irs_sql = " UNION ALL ".join(f"SELECT ein, state FROM read_parquet('{p}')" for p in irs) if irs else \
-        "SELECT NULL::VARCHAR ein, NULL::VARCHAR state WHERE false"
     con.execute(f"""INSERT INTO pg_npi
                     SELECT g.pg_id, NULL, coalesce(e.state, 'XX') FROM pg g
-                    LEFT JOIN (SELECT ein, any_value(upper(state)) state FROM ({irs_sql}) GROUP BY ein) e
-                      ON e.ein = g.tin_value
+                    LEFT JOIN irs e ON e.ein = g.tin_value
                     WHERE g.tin_wide OR len(g.npis) = 0 OR g.npis IS NULL""")
     con.execute("UPDATE pg_npi SET state = 'XX' WHERE state IS NULL OR length(state) <> 2 OR NOT regexp_matches(state, '^[A-Z]{2}$')")
+    if states:
+        con.execute(f"DELETE FROM pg_npi WHERE state NOT IN ({st})")
     con.execute(f"COPY (SELECT state, pg_id, npi FROM pg_npi ORDER BY state, pg_id) TO '{out}/pg_npi' "
                 f"(FORMAT parquet, COMPRESSION zstd, PARTITION_BY (state), ROW_GROUP_SIZE 50000)")
     con.execute(f"""COPY (SELECT g.pg_id, g.tin_type, g.tin_value, g.npi_count, g.tin_wide, g.business_names,

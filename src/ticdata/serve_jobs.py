@@ -88,7 +88,8 @@ def aetna_plans() -> dict[str, list[str]]:
     return out
 
 
-def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload: bool = True) -> dict:
+def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload: bool = True,
+         states: list[str] | None = None) -> dict:
     """source: "dataset" (the published release) or "wave-N" (a reduce wave in the work bucket)."""
     from huggingface_hub import hf_hub_download, snapshot_download
 
@@ -115,8 +116,8 @@ def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload:
     irs = [hf_hub_download(f"{ORG}/identity", f"irs_eo/release={release}/eo{i}.parquet", repo_type="dataset",
                            local_dir=f"{work}/id") for i in range(1, 5)]
     plans = aetna_plans() if payer == "aetna" else None
-    res = build_pack(payer, src, f"{work}/out", nppes, irs, plans=plans, work=f"{work}/duck")
-    res.update({"source": source, "release": release})
+    res = build_pack(payer, src, f"{work}/out", nppes, irs, plans=plans, work=f"{work}/duck", states=states)
+    res.update({"source": source, "release": release, "states": states})
     json.dump(res, open(f"{work}/out/pack.json", "w"), indent=1, default=str)
     shutil.rmtree(f"{work}/src", ignore_errors=True)
     shutil.rmtree(f"{work}/duck", ignore_errors=True)

@@ -2,7 +2,8 @@ name: serve
 # Serving packs for the app and MCP tools (src/ticdata/serving.py). Trigger: edit ops/serve-request.txt
 # on main; its last non-comment line lists targets, for example "shared cigna:dataset aetna:wave-1".
 # "shared" rebuilds identity/serving (NPPES lite, Medicare PFS) first; "<payer>:<source>" builds
-# <payer>/serving from the published release ("dataset") or a reduce wave ("wave-N").
+# <payer>/serving from the published release ("dataset") or a reduce wave ("wave-N"); an optional
+# third part limits it to providers in some states, e.g. "aetna:wave-1:MO,IL,KS".
 on:
   workflow_dispatch:
     inputs:
@@ -71,7 +72,7 @@ jobs:
       - run: pip install -q -e .
       - name: pack ${{ matrix.target }}
         run: |
-          t="${{ matrix.target }}"
-          ticdata serve-pack --payer "${t%%:*}" --source "${t#*:}"
+          IFS=: read payer source states <<< "${{ matrix.target }}"
+          ticdata serve-pack --payer "$payer" --source "$source" --states "$states"
       - if: always()
         run: df -h / | tail -1
