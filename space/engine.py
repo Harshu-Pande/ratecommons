@@ -84,6 +84,18 @@ def _pack_bytes(p: str) -> int:
         return 0
 
 
+def _pack_changed(p: str) -> bool:
+    """True when the published pack.json differs from the local one (or cannot be checked)."""
+    from huggingface_hub import hf_hub_download
+
+    try:
+        remote = open(hf_hub_download(f"{ORG}/{p}", "serving/pack.json", repo_type="dataset")).read()
+        local = open(f"{DATA}/{p}/serving/pack.json").read()
+        return remote != local
+    except Exception:
+        return False
+
+
 def _on_disk(d: str) -> int:
     return sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(d) for f in fs) if os.path.isdir(d) else 0
 
@@ -97,8 +109,12 @@ def load(download: bool = True):
         STATUS["state"] = "downloading"
         os.makedirs(DATA, exist_ok=True)
         if download:
-            snapshot_download(f"{ORG}/identity", repo_type="dataset", local_dir=f"{DATA}/identity",
-                              allow_patterns=["serving/*"])
+            try:  # offline at boot: carry on with what is already on disk
+                snapshot_download(f"{ORG}/identity", repo_type="dataset", local_dir=f"{DATA}/identity",
+                                  allow_patterns=["serving/*"])
+            except Exception as e:
+                _log(f"identity download skipped ({e!r}); using local files")
+                download = False
         con = duckdb.connect(f"{DATA}/rc.duckdb")
         con.execute("SET enable_progress_bar = false")
         con.execute("SET preserve_insertion_order = false")
@@ -115,7 +131,9 @@ def load(download: bool = True):
         labels = []
         for p in PAYERS:
             try:
-                if download:
+                if download and os.path.exists(f"{DATA}/{p}/serving/network.parquet") and not _pack_changed(p):
+                    _log(f"{p}: local pack is current")
+                elif download:
                     need = _pack_bytes(p)
                     have = _on_disk(f"{DATA}/{p}/serving")
                     free = shutil.disk_usage(DATA).free
