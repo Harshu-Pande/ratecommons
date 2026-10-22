@@ -9,8 +9,10 @@ rate", call the older pipeline "our in-house pipeline").
 **Data (Hugging Face, org `ratecommons`)**
 - `ratecommons/cigna` release=2026-10: all Cigna in-network files, verified. `serving/`: query pack, 8.1 GB.
 - `ratecommons/uhc` release=2026-10: only 2 files, UHIC Choice Plus C2 and Options PPO P3. `serving/`: 17.5 GB.
-- `ratecommons/aetna`: no release yet (full merge stalled, see below). `serving/`: pack built from reduce
-  wave 1 (140 networks, mostly Choice POS II / Open Access Aetna Select), **Missouri providers only**, 5.0 GB.
+- `ratecommons/aetna`: no release yet (full merge stalled, see below). `serving/`: pack from reduce wave 1,
+  **nationwide but only 3 networks** (files matching `Choice_60178` = Aetna Open Access Managed Choice, and
+  `TENET` = Tenet Healthcare's Choice POS II): 143,052,741 rate rows, 797,363 provider groups, 5.9 GB.
+  (Earlier: all 140 wave-1 networks for Missouri only, 5.0 GB; all-networks national does not fit.)
 - `ratecommons/identity`: NPPES, DAC, IRS EO; `serving/nppes.parquet` (NPI -> name, place, NUCC taxonomy),
   `serving/medicare_pfs.parquet` (CY2026 PFS per HCPCS/modifier, national "US" and per state by mean GPCI).
 

@@ -5,6 +5,10 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-22
 
+- **National Aetna by choosing networks, not states.** Facts of a few networks reference far fewer provider
+  sets than all 140: three networks (Open Access Managed Choice, Tenet's Choice POS II) nationally give
+  143,812,830 set -> list rows and a 5.9 GB pack, built in under 5 minutes (target
+  `aetna:wave-1::Choice_60178,TENET`; serve targets are split on whitespace, so name fragments without spaces).
 - **AI clients timed out (ChatGPT, 5-6 minutes).** Causes: Gradio ran one tool call at a time (queue
   concurrency now 6); a `billing_code IN (...)` list does not prune the code-sorted row groups, so
   multi-code lookups scanned whole rate tables (now one equality scan per code, UNION ALL); provider

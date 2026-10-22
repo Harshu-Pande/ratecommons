@@ -52,7 +52,7 @@ def lookup_rates(code: str, state: str, payer: str = "all", network: str = "", c
 
     Args:
         code: billing code, e.g. CPT/HCPCS "99213", "70553", MS-DRG "470"; a comma list works too
-        state: two-letter state where the provider practices, e.g. "TX" (Aetna data covers Missouri only)
+        state: two-letter state where the provider practices, e.g. "TX" (Aetna: 3 networks nationwide — Open Access Managed Choice and Tenet Healthcare's Choice POS II)
         payer: "cigna", "aetna", "uhc", a comma list, or "all"
         network: optional filter on product/network/plan/employer name, e.g. "Choice Plus", "OAP", "UNITED AIRLINES"
         city: optional practice city (NPPES), e.g. "Austin"
@@ -105,7 +105,7 @@ def provider_rates(provider: str, codes: str, state: str, payer: str = "all", ne
         provider: NPI (10 digits), TIN (9 digits) or name; resolve names with search_providers first if unsure
         codes: comma-separated billing codes (up to 50), e.g. "70450,70460,70551,71046"
         state: two-letter state where the provider practices
-        payer: "cigna", "aetna", "uhc", comma list, or "all" (Aetna is loaded for Missouri only)
+        payer: "cigna", "aetna", "uhc", comma list, or "all" (Aetna: 3 networks nationwide)
         network: optional product/network filter
     """
     return _records(E.provider_rates(provider, codes, state, payer, network), 1000)
