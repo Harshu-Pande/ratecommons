@@ -27,10 +27,20 @@ Comparisons default to `place="office"`: base rates without amount-changing modi
 that apply in an office or anywhere; `facility` and `any` are options. A provider lookup also returns
 flat all-services arrangements (code type CSTM-ALL, e.g. UHC pays Total Access Urgent Care $200/visit).
 
+**Stable public address: https://ratecommons-atticusfinch.vercel.app** (UI, `/api/tool/<name>`, MCP at
+`/gradio_api/mcp/`). It is a Vercel project (`ratecommons`, Harshu's Vercel account; code in `gateway/`)
+that forwards every request to the Mac's current Cloudflare quick tunnel. The Mac's launchd agent
+`org.ratecommons.tunnel` (`space/tunnel.py`) runs cloudflared and posts the tunnel address, signed with
+HMAC, to the ntfy.sh topic in the gateway's `RC_ANNOUNCE_TOPIC` env var every 4 minutes; the key is in the
+gateway env (`RC_ANNOUNCE_KEY`, sensitive) and `~/ratecommons-app/.announce_key` on the Mac, nowhere else.
+When the Mac is off the gateway shows an "offline" page; after the Mac boots and logs in, launchd
+(`org.ratecommons.app`, `org.ratecommons.tunnel`) brings everything back and the address is unchanged.
+The gateway must not forward x-forwarded-* headers: Gradio's MCP server calls the app at its own root URL.
+
 **Where it runs**: Harshu's Mac, `~/ratecommons-app` (repo clone in `repo/`, venv, `cloudflared`, data in
-`data/`, ~29 GB). `start.sh` starts app + Cloudflare quick tunnel and prints the public link
-(currently https://margin-mainstream-drain-respondent.trycloudflare.com; it changes on every restart).
-`restart-app.sh` pulls the repo and restarts only the app (link stays). `stop.sh` stops both.
+`data/`, ~29 GB). Both run as launchd agents (start at login, restart on exit): `run-app.sh` and `repo/space/tunnel.py`.
+Restart the app after a `git pull`: `launchctl kickstart -k gui/$(id -u)/org.ratecommons.app`.
+(`start.sh`/`stop.sh`/`restart-app.sh` are the older manual scripts; do not run them alongside launchd.)
 The app keeps >= 10 GB free on the Mac (it refuses downloads that would go below; Harshu's rule).
 It re-checks the datasets every 15 minutes and downloads new packs.
 
@@ -49,9 +59,9 @@ Other MCP-capable assistants can use the same URL; anything else can call the JS
 2. **UI**: plain Gradio tables. No charts, no CPT descriptions (licensed text is withheld; descriptions
    could be added for HCPCS/DRG, or the AI supplies them). Product labels for Cigna are derived from file
    names and some are odd ("Cigna AZ Localflex..." appears in every state because the file is national).
-3. **Stable public URL**: the quick-tunnel link changes on restart and dies when the Mac sleeps. Options:
-   HF PRO ($9/mo, deploy `space/` as a Gradio Space unchanged), a free VM, or re-cut the packs into
-   small per-state/per-code files a serverless front end (e.g. Vercel) can fetch.
+3. **Always-on hosting**: the address is stable, but answers need the Mac to be on. Options to remove the
+   Mac: HF PRO ($9/mo, deploy `space/` as a Gradio Space unchanged), a free VM, or re-cut the packs into
+   small per-state/per-code files the Vercel side can fetch itself.
 4. **Aetna**: full release merge is stuck: reduce wave 6 (`aetna 2026-10 all wave=6 72-87`) failed twice
    in the dims step; waves 7-16 and the merge wait behind it (`ops/waves.txt`, `ops/orchestrate.py`).
    Aetna provider sets explode (2.5 billion set->list rows for wave 1 nationally), so any Aetna pack must

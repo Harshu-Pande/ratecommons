@@ -5,6 +5,12 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-22
 
+- **Stable address without paid hosting.** Tailscale Funnel did not work out on Harshu's Mac. A Vercel
+  function (`gateway/`) is the fixed front door and forwards to the Mac's Cloudflare quick tunnel, whose
+  address it reads from HMAC-signed notes on an ntfy.sh topic (`space/tunnel.py`). App and tunnel are
+  launchd agents, so a dead battery only means "offline" until the Mac is back. Two traps: Vercel's
+  `/:path*` rewrite drops trailing slashes (MCP lives at `/gradio_api/mcp/`), and forwarding
+  x-forwarded-host makes Gradio's MCP server call itself through the gateway (404 on queue/join).
 - **Serving packs for interactive questions (`serving.py`, `serve.yml`).** The release tables
   are normalized for storage; "this code, in this state" needs another layout: rates (fact x
   price term) sorted by code in 50k-row groups, provider set -> list split by state, group ->

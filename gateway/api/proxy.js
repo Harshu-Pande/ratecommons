@@ -38,9 +38,10 @@ async function handler(request) {
     const t = await target(attempt > 0);
     if (!t) break;
     const headers = new Headers(request.headers);
-    for (const h of ["host", "connection", "content-length", "x-forwarded-for", "x-vercel-id"]) headers.delete(h);
-    headers.set("x-forwarded-host", u.host);
-    headers.set("x-forwarded-proto", "https");
+    // Drop proxy headers: the app must see its own tunnel address as its root, so the MCP server's internal
+    // calls to the app go straight to the tunnel instead of back through this gateway.
+    for (const h of [...headers.keys()]) if (h.startsWith("x-forwarded") || h.startsWith("x-vercel") || h.startsWith("x-real")) headers.delete(h);
+    for (const h of ["host", "connection", "content-length", "forwarded"]) headers.delete(h);
     const init = { method: request.method, headers, redirect: "manual" };
     if (!["GET", "HEAD"].includes(request.method)) { init.body = await request.arrayBuffer(); }
     try {
