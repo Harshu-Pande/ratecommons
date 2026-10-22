@@ -254,8 +254,7 @@ def _core_sql(p: str, code_types: str | None, network: str | None, city: str | N
     params: list = []
     ct = ""
     if code_types:
-        ct = "AND r.billing_code_type = ?"
-        params.append(code_types.upper())
+        ct = "AND r.billing_code_type = '" + re.sub(r"[^A-Z0-9-]", "", code_types.upper()) + "'"
     nf = ""
     if network:
         nf = ("AND (l.product ILIKE ? OR l.label ILIKE ? OR list_contains(list_transform(l.plan_names, x -> x ILIKE ?), true)"
@@ -289,9 +288,7 @@ def _core_sql(p: str, code_types: str | None, network: str | None, city: str | N
     tin_wide_ok = "" if loc_f else " OR n.npi IS NULL"
     sql = f"""
     WITH {pv_cte}
-    f AS (SELECT r.billing_code_type, r.billing_code, r.ps_id, r.pt_id, r.ns_id FROM rate_{p} r
-               WHERE ((r.billing_code IN ($code) {ct}) {"OR r.billing_code_type = 'CSTM-ALL'" if provider else ""})
-               {"AND r.ps_id IN (SELECT ps_id FROM psx0)" if provider else ""}),
+    f AS (SELECT * FROM ($codeunion) r {"WHERE r.ps_id IN (SELECT ps_id FROM psx0)" if provider else ""}),
     nets AS (SELECT DISTINCT n.ns_id, l.product FROM ns_{p} n JOIN netlabel l
              ON l.payer = '{p}' AND l.network_id = n.network_id {nf}),
     f2 AS (SELECT f.*, nets.product FROM f JOIN nets USING (ns_id)),
@@ -320,6 +317,12 @@ def _core_sql(p: str, code_types: str | None, network: str | None, city: str | N
     WHERE true {bc}
     """
     # DuckDB positional parameters in order of appearance; $code/$state are named, so use named for all
+    # one equality scan per code: rate files are sorted by code, and an IN list does not prune row groups
+    one = (f"SELECT r.billing_code_type, r.billing_code, r.ps_id, r.pt_id, r.ns_id FROM rate_{p} r "
+           f"WHERE r.billing_code = $one {ct}")
+    sql = sql.replace("$codeunion", " UNION ALL ".join([one] + (
+        [f"SELECT r.billing_code_type, r.billing_code, r.ps_id, r.pt_id, r.ns_id FROM rate_{p} r "
+         "WHERE r.billing_code_type = 'CSTM-ALL'"] if provider else [])))
     return sql, params, loc_p, prov_p, nf, bc
 
 
@@ -339,7 +342,9 @@ def _run_core(code: str, state: str, payer: str | None = None, code_type: str | 
                                                       billing_class)
         # turn every ? into a named parameter in order of appearance
         # code and state are validated above; inlined so DuckDB prunes partitions and row groups
-        sql = sql.replace("$code", ", ".join(f"'{c}'" for c in codes)).replace("$state", f"'{state}'")
+        one = sql[sql.index("SELECT r.billing_code_type"):].split(" UNION ALL ")[0].split(") r")[0]
+        sql = sql.replace(one, " UNION ALL ".join(one.replace("$one", f"'{c}'") for c in codes), 1)
+        sql = sql.replace("$state", f"'{state}'")
         named: dict = {}
         if "$pvname" in sql:
             named["pvname"] = f"%{provider.strip()}%"
