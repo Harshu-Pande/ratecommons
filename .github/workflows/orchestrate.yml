@@ -1,0 +1,27 @@
+name: orchestrate
+# Every 30 minutes: start the next reduce wave from ops/waves.txt once its shards are mapped.
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write   # dispatch reduce.yml
+
+concurrency:
+  group: orchestrate
+  cancel-in-progress: false
+
+jobs:
+  next:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q huggingface_hub==2.2.0
+      - run: python ops/orchestrate.py
+        env:
+          GH_TOKEN: ${{ github.token }}

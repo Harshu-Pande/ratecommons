@@ -1,0 +1,16 @@
+# Reduce waves the orchestrator runs, in order, once every shard of a wave is mapped.
+# <payer> <release> <wave> <first shard>-<last shard>, or <payer> <release> merge
+aetna 2026-10 4 40-55
+aetna 2026-10 5 56-71
+aetna 2026-10 6 72-87
+aetna 2026-10 7 88-103
+aetna 2026-10 8 104-119
+aetna 2026-10 9 120-135
+aetna 2026-10 10 136-151
+aetna 2026-10 11 152-167
+aetna 2026-10 12 168-183
+aetna 2026-10 13 184-199
+aetna 2026-10 14 200-215
+aetna 2026-10 15 216-231
+aetna 2026-10 16 232-251
+aetna 2026-10 merge
