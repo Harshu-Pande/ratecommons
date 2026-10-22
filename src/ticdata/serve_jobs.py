@@ -89,7 +89,7 @@ def aetna_plans() -> dict[str, list[str]]:
 
 
 def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload: bool = True,
-         states: list[str] | None = None) -> dict:
+         states: list[str] | None = None, match: list[str] | None = None) -> dict:
     """source: "dataset" (the published release) or "wave-N" (a reduce wave in the work bucket)."""
     from huggingface_hub import hf_hub_download, snapshot_download
 
@@ -116,7 +116,16 @@ def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload:
     irs = [hf_hub_download(f"{ORG}/identity", f"irs_eo/release={release}/eo{i}.parquet", repo_type="dataset",
                            local_dir=f"{work}/id") for i in range(1, 5)]
     plans = aetna_plans() if payer == "aetna" else None
-    res = build_pack(payer, src, f"{work}/out", nppes, irs, plans=plans, work=f"{work}/duck", states=states)
+    networks = None
+    if match:  # only networks whose file name or plan names contain one of these
+        import duckdb
+
+        sf = duckdb.sql(f"SELECT name, network_id FROM read_parquet('{src}/source_file.parquet')").fetchall()
+        networks = sorted({nid for name, nid in sf
+                           if any(m.lower() in (name + " " + " ".join((plans or {}).get(name, []))).lower() for m in match)})
+        _log(f"match {match}: {len(networks)} networks")
+    res = build_pack(payer, src, f"{work}/out", nppes, irs, networks=networks, plans=plans, work=f"{work}/duck",
+                     states=states)
     res.update({"source": source, "release": release, "states": states})
     json.dump(res, open(f"{work}/out/pack.json", "w"), indent=1, default=str)
     shutil.rmtree(f"{work}/src", ignore_errors=True)

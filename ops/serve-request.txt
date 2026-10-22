@@ -3,3 +3,4 @@ shared cigna:dataset aetna:wave-1
 uhc:dataset aetna:wave-1:MO,IL,KS
 aetna:wave-1:MO,IL,KS
 aetna:wave-1:MO
+aetna:wave-1::Managed Choice_60178,OMNICOM BENEFITS INC.Open Access Aetna Select

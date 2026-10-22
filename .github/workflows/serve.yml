@@ -72,7 +72,7 @@ jobs:
       - run: pip install -q -e .
       - name: pack ${{ matrix.target }}
         run: |
-          IFS=: read payer source states <<< "${{ matrix.target }}"
-          ticdata serve-pack --payer "$payer" --source "$source" --states "$states"
+          IFS=: read payer source states match <<< "${{ matrix.target }}"
+          ticdata serve-pack --payer "$payer" --source "$source" --states "$states" --match "$match"
       - if: always()
         run: df -h / | tail -1

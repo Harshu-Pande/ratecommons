@@ -120,6 +120,7 @@ def main(argv=None) -> int:
     p.add_argument("--payer", required=True)
     p.add_argument("--source", default="dataset", help="dataset | wave-N")
     p.add_argument("--states", default="", help="comma-separated states: only providers practicing there")
+    p.add_argument("--match", default="", help="comma-separated file/plan name substrings: only those networks")
     p.add_argument("--release", default="2026-10")
     p.add_argument("--no-upload", action="store_true")
     p = sub.add_parser("serve-shared", help="shared serving tables: NPPES lite, Medicare PFS -> identity/serving")
@@ -295,7 +296,7 @@ def main(argv=None) -> int:
         _write({"repo": repo, "chars": len(text)}, None)
     elif a.cmd == "serve-pack":
         from . import serve_jobs
-        print(json.dumps(serve_jobs.pack(a.payer, a.source, a.release, upload=not a.no_upload, states=[x.strip().upper() for x in a.states.split(',') if x.strip()] or None), default=str))
+        print(json.dumps(serve_jobs.pack(a.payer, a.source, a.release, upload=not a.no_upload, states=[x.strip().upper() for x in a.states.split(',') if x.strip()] or None, match=[x.strip() for x in a.match.split(',') if x.strip()] or None), default=str))
     elif a.cmd == "serve-shared":
         from . import serve_jobs
         print(json.dumps(serve_jobs.shared(upload=not a.no_upload), default=str))
