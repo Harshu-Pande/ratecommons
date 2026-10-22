@@ -157,13 +157,27 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
     if states:  # only the groups practicing in the chosen states
         con.execute("DELETE FROM pli_pg WHERE pg_id NOT IN (SELECT pg_id FROM geo_pg)")
     con.execute(f"COPY (SELECT * FROM pli_pg ORDER BY pli_id) TO '{out}/pli_pg.parquet' {W}")
-    # which networks each provider group has any rate in (network breadth, "is X in network Y")
-    con.execute("""CREATE TABLE pli_net AS SELECT DISTINCT p.pli_id, n.network_id
-                   FROM (SELECT DISTINCT ps_id, ns_id FROM psns) x JOIN ps_pli p USING (ps_id) JOIN ns n USING (ns_id)""")
-    con.execute(f"""COPY (SELECT DISTINCT l.pg_id, x.network_id FROM pli_net x JOIN pli_pg l USING (pli_id) ORDER BY 1)
+    # which networks each provider group has any rate in (network breadth, "is X in network Y"): network sets
+    # become bitmasks (64 networks per word) OR-ed up ps -> list -> group, so nothing explodes by network
+    nn = con.execute("SELECT count(DISTINCT network_id) FROM ns").fetchone()[0]
+    words = max(1, (nn + 63) // 64)
+    con.execute("CREATE TABLE net_idx AS SELECT network_id, (row_number() OVER (ORDER BY network_id) - 1)::INTEGER idx "
+                "FROM (SELECT DISTINCT network_id FROM ns)")
+    mw = ", ".join(f"bit_or(CASE WHEN i.idx // 64 = {k} THEN (1::UBIGINT << (i.idx % 64)) ELSE 0::UBIGINT END) m{k}"
+                   for k in range(words))
+    con.execute(f"CREATE TABLE ns_mask AS SELECT n.ns_id, {mw} FROM ns n JOIN net_idx i USING (network_id) GROUP BY n.ns_id")
+    agg = ", ".join(f"bit_or(m{k}) m{k}" for k in range(words))
+    con.execute(f"CREATE TABLE ps_mask AS SELECT x.ps_id, {agg} FROM (SELECT DISTINCT ps_id, ns_id FROM psns) x "
+                "JOIN ns_mask USING (ns_id) GROUP BY x.ps_id")
+    con.execute("DROP TABLE psns")
+    con.execute(f"CREATE TABLE pli_mask AS SELECT p.pli_id, {agg} FROM ps_pli p JOIN ps_mask USING (ps_id) GROUP BY p.pli_id")
+    con.execute(f"CREATE TABLE pg_mask AS SELECT l.pg_id, {agg} FROM pli_pg l JOIN pli_mask USING (pli_id) GROUP BY l.pg_id")
+    con.execute(f"""COPY (SELECT g.pg_id, i.network_id FROM pg_mask g CROSS JOIN net_idx i
+                          WHERE (CASE i.idx // 64 {" ".join(f"WHEN {k} THEN g.m{k}" for k in range(words))} END
+                                 >> (i.idx % 64)) & 1 = 1 ORDER BY 1)
                     TO '{out}/pg_network.parquet' {W}""")
     res["pg_network"] = con.execute(f"SELECT count(*) FROM '{out}/pg_network.parquet'").fetchone()[0]
-    con.execute("DROP TABLE pli_net; DROP TABLE psns")
+    con.execute("DROP TABLE ps_mask; DROP TABLE pli_mask; DROP TABLE pg_mask; DROP TABLE ns_mask")
     con.execute(f"""CREATE TABLE pg AS SELECT * FROM {_src(src, 'provider_group')}
                     SEMI JOIN (SELECT DISTINCT pg_id FROM pli_pg) USING (pg_id)""")
 
