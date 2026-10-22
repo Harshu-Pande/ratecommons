@@ -99,7 +99,7 @@ def reduce_part(payer: str, release: str, part: int, bucket: str, out: str, toke
             or p.endswith("/file_block.parquet") or p.endswith(f"/rate_fact/part-{part:02d}.parquet")]
     local = os.path.join(workdir, f"p{part:02d}")
     _fetch(bucket, want, local, prefix, token)
-    res = reduce_part_local(local, payer, release, part, out, keys=keys)
+    res = reduce_part_local(local, payer, release, part, out, keys=keys, delete_inputs=True)
     res["download_seconds"] = round(time.time() - t0, 1) - res["seconds"]
     return res
 
@@ -176,7 +176,8 @@ def _ns_map(con, keyed: str, members: str, name: str) -> int:
     return con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
 
 
-def reduce_part_local(local: str, payer: str, release: str, part: int, out: str, keys: bool = False) -> dict:
+def reduce_part_local(local: str, payer: str, release: str, part: int, out: str, keys: bool = False,
+                      delete_inputs: bool = False) -> dict:
     """Distinct facts of one partition, each with the set of networks (derived from files) it appears in.
 
     Memory stays flat: no list aggregates over the big input, only fixed-size group states.
@@ -242,16 +243,26 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
         res["slices"] = k
         os.makedirs(f"{local}/facts_tmp", exist_ok=True)
         multi_n = 0
+        split = f"{local}/fact_split-{part:02d}"
+        if k > 1:  # one streaming pass splits the input by slice, so each slice reads only its rows
+            con.execute(f"""COPY (SELECT *, (hash(fact_id) % {k})::INTEGER AS _slice FROM read_parquet({files!r}))
+                            TO '{split}' (FORMAT parquet, PARTITION_BY (_slice), OVERWRITE_OR_IGNORE true)""")
+            if delete_inputs:  # the split copy replaces the downloaded input on disk
+                for f in files:
+                    os.remove(f)
         for i in range(k):
-            sl = f"hash(fact_id) % {k} = {i}"
+            src_i = (f"(SELECT * EXCLUDE (_slice) FROM read_parquet('{split}/_slice={i}/*.parquet'))"
+                     if k > 1 else f"read_parquet({files!r})")
+            if k > 1 and not os.path.isdir(f"{split}/_slice={i}"):
+                continue
             con.execute(f"""
                 COPY (SELECT fact_id, {ANY_COLS}, min(block_id) b_min, max(block_id) b_max
-                      FROM read_parquet({files!r}) WHERE {sl} GROUP BY fact_id)
+                      FROM {src_i} GROUP BY fact_id)
                 TO '{local}/fx.parquet' (FORMAT parquet, COMPRESSION zstd)""")
             fx = f"read_parquet('{local}/fx.parquet')"
             con.execute(f"""CREATE OR REPLACE TABLE multi AS
                             SELECT DISTINCT r.fact_id, b.net
-                            FROM (SELECT fact_id, block_id FROM read_parquet({files!r}) WHERE {sl}) r
+                            FROM (SELECT fact_id, block_id FROM {src_i}) r
                             JOIN bnet b USING (block_id)
                             WHERE r.fact_id IN (SELECT fact_id FROM {fx} WHERE b_min <> b_max)""")
             con.execute(f"""
@@ -275,7 +286,8 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
                   JOIN bn USING (block_id) JOIN bns s USING (x1, x2, n_net))
             TO '{out}/block/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
         res["blocks"] = con.execute("SELECT count(*) FROM bn").fetchone()[0]
-        members = f"""SELECT DISTINCT r.fact_id rep, b.net FROM read_parquet({files!r}) r
+        all_src = f"read_parquet('{split}/*/*.parquet')" if k > 1 else f"read_parquet({files!r})"
+        members = f"""SELECT DISTINCT r.fact_id rep, b.net FROM {all_src} r
                       JOIN bnet b USING (block_id) WHERE r.fact_id IN (SELECT fact_id FROM reps)"""
     else:
         # older map output without blocks: membership is the file each fact came from. Read one file
@@ -313,6 +325,7 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
         import shutil
 
         shutil.rmtree(os.path.dirname(tmp), ignore_errors=True)
+        shutil.rmtree(f"{local}/fact_split-{part:02d}", ignore_errors=True)
     else:
         os.remove(tmp)
     res["seconds"] = round(time.time() - t0, 1)
