@@ -378,33 +378,70 @@ def lookup_rates(code: str, state: str, payer: str = "all", network: str = "", c
     return df.sort_values(["payer", "product", "rate"]).drop(columns=["pg_id"]).head(n)
 
 
-PER_PG = """SELECT payer, product, billing_class, setting, pg_id, code, median(rate) AS rate FROM {base}
-           WHERE negotiated_type IN ('negotiated', 'fee schedule', 'derived') AND rate IS NOT NULL GROUP BY ALL"""
+FACILITY_POS = ("19", "21", "22", "23", "24", "26", "31", "34", "41", "42", "51", "52", "53", "56", "61")
+
+
+def _place_sql(place: str) -> str:
+    """Comparable "base" rates: no modifiers (52/55/56/26/TC... change the amount) and the place of service asked for.
+    office: rates that apply in an office (POS 11) or to any place (CSTM-00 / none listed); facility: facility POS."""
+    pos = "string_split(coalesce(place_of_service, ''), ',')"
+    anyplace = "(coalesce(place_of_service, '') = '' OR place_of_service LIKE 'CSTM%')"
+    if place == "any":
+        return "true"
+    if place == "facility":
+        return f"coalesce(modifiers, '') = '' AND (list_has_any({pos}, {list(FACILITY_POS)}) OR {anyplace})"
+    return f"coalesce(modifiers, '') = '' AND (list_contains({pos}, '11') OR {anyplace})"
+
+
+def _place_mask(df: pd.DataFrame, place: str) -> pd.Series:
+    if place == "any" or df.empty:
+        return pd.Series(True, index=df.index)
+    mods = df["modifiers"].fillna("") == ""
+    pos = df["place_of_service"].fillna("")
+    anyplace = (pos == "") | pos.str.startswith("CSTM")
+    sets = pos.str.split(",")
+    if place == "facility":
+        return mods & (sets.map(lambda xs: any(x in FACILITY_POS for x in xs)) | anyplace)
+    return mods & (sets.map(lambda xs: "11" in xs) | anyplace)
+
+
+def per_pg(place: str = "office") -> str:
+    return ("SELECT payer, product, billing_class, setting, pg_id, code, median(rate) AS rate FROM {base} "
+            "WHERE negotiated_type IN ('negotiated', 'fee schedule', 'derived') AND rate IS NOT NULL AND "
+            + _place_sql(place) + " GROUP BY ALL")
+
+
+PER_PG = per_pg("office")
 
 
 def market_distribution(code: str, state: str, payer: str = "all", network: str = "", city: str = "",
                         zip_prefix: str = "", specialty: str = "", billing_class: str = "professional",
-                        group_by: str = "payer") -> pd.DataFrame:
+                        group_by: str = "payer", place: str = "office") -> pd.DataFrame:
     keys = {"payer": ["payer"], "product": ["payer", "product"], "network": ["payer", "product"],
             "setting": ["payer", "billing_class", "setting"], "none": []}.get(group_by or "payer", ["payer"])
     k = ", ".join(keys)
     wrap = (f"SELECT {k + ', ' if k else ''}code, count(DISTINCT pg_id) AS provider_groups, min(rate) AS min, "
             "quantile_cont(rate, 0.1) AS p10, quantile_cont(rate, 0.25) AS p25, median(rate) AS median, "
             "quantile_cont(rate, 0.75) AS p75, quantile_cont(rate, 0.9) AS p90, max(rate) AS max, avg(rate) AS mean "
-            f"FROM ({PER_PG}) GROUP BY ALL")
+            f"FROM ({per_pg(place)}) GROUP BY ALL")
     df = _run_core(code, state, payer, None, network or None, city or None, zip_prefix or None, specialty or None,
                    None, billing_class or None, wrap=wrap)
     if df.empty:
         return df
     if group_by == "none" and len(df) > 1:  # several payers: recompute over the union
         per = _run_core(code, state, payer, None, network or None, city or None, zip_prefix or None,
-                        specialty or None, None, billing_class or None, wrap=PER_PG, medicare=False)
+                        specialty or None, None, billing_class or None, wrap=per_pg(place), medicare=False)
         r = per["rate"]
         df = pd.DataFrame([{"code": code.upper(), "provider_groups": per["pg_id"].nunique(), "min": r.min(),
                             "p10": r.quantile(.1), "p25": r.quantile(.25), "median": r.median(), "p75": r.quantile(.75),
                             "p90": r.quantile(.9), "max": r.max(), "mean": r.mean()}])
         df = _with_medicare(df, state.upper())
+    if place == "facility":
+        m = _mcr([code.upper()], state.upper())
+        f = m[m["mod"] == ""]["facility_amount"]
+        df["medicare"] = f.iloc[0] if len(f) else None
     df.insert(0, "state", state.upper())
+    df["place"] = place
     for c in ("min", "p10", "p25", "median", "p75", "p90", "max", "mean"):
         df[c] = df[c].astype(float).round(2)
     df["medicare"] = pd.to_numeric(df.get("medicare"), errors="coerce")
@@ -412,13 +449,14 @@ def market_distribution(code: str, state: str, payer: str = "all", network: str 
     return df
 
 
-def compare_providers(codes: str, state: str, providers: str, payer: str = "all", network: str = "") -> pd.DataFrame:
+def compare_providers(codes: str, state: str, providers: str, payer: str = "all", network: str = "",
+                      place: str = "office") -> pd.DataFrame:
     """codes: comma-separated; providers: comma-separated TINs, NPIs or names."""
     rows = []
     for c in [x.strip() for x in codes.split(",") if x.strip()][:20]:
         for pv in [x.strip() for x in providers.split(",") if x.strip()][:10]:
             df = _run_core(c, state, payer, None, network or None, None, None, None, pv, None)
-            df = df[df["negotiated_type"].isin(DOLLAR_TYPES)] if not df.empty else df
+            df = df[df["negotiated_type"].isin(DOLLAR_TYPES) & _place_mask(df, place)] if not df.empty else df
             if df.empty:
                 rows.append({"provider_query": pv, "code": c.upper(), "result": "no published rate found"})
                 continue
@@ -433,16 +471,16 @@ def compare_providers(codes: str, state: str, providers: str, payer: str = "all"
 
 
 def benchmark_provider(provider: str, codes: str, state: str, payer: str = "all", specialty: str = "",
-                       network: str = "") -> pd.DataFrame:
+                       network: str = "", place: str = "office") -> pd.DataFrame:
     """A provider's rates vs. peers in the same state (optionally the same specialty): percentile rank."""
     out = []
     for c in [x.strip() for x in codes.split(",") if x.strip()][:20]:
         mine = _run_core(c, state, payer, None, network or None, None, None, None, provider, "professional")
         per = _run_core(c, state, payer, None, network or None, None, None, specialty or None, None, "professional",
-                        wrap=PER_PG, medicare=False)
+                        wrap=per_pg(place), medicare=False)
         if per.empty:
             out.append({"code": c.upper(), "result": "no published rates in this state"}); continue
-        mine = mine[mine["negotiated_type"].isin(DOLLAR_TYPES)] if not mine.empty else mine
+        mine = mine[mine["negotiated_type"].isin(DOLLAR_TYPES) & _place_mask(mine, place)] if not mine.empty else mine
         if mine.empty:
             out.append({"code": c.upper(), "result": f"no published rate for {provider} in {state.upper()}",
                         "market_median": per["rate"].median()}); continue

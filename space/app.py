@@ -18,7 +18,8 @@ from fastapi.responses import JSONResponse
 
 import engine as E
 
-E.start_background()
+if not os.environ.get("RC_NO_AUTOSTART"):
+    E.start_background()
 
 NOTE = ("A missing rate means **no published rate**, not out of network. Rates are what payers published under the "
         "Transparency in Coverage rule (Oct 2026 files), not a patient's cost. % of Medicare uses the CY2026 "
@@ -68,7 +69,7 @@ def lookup_rates(code: str, state: str, payer: str = "all", network: str = "", c
 
 def market_distribution(code: str, state: str, payer: str = "all", network: str = "", city: str = "",
                         zip_prefix: str = "", specialty: str = "", billing_class: str = "professional",
-                        group_by: str = "payer") -> list[dict]:
+                        group_by: str = "payer", place: str = "office") -> list[dict]:
     """Distribution of negotiated rates for a code in a state: provider-group count, min/p10/p25/median/p75/p90/max,
     mean, Medicare amount and median % of Medicare. Each provider group counts once (its median published amount).
 
@@ -82,11 +83,15 @@ def market_distribution(code: str, state: str, payer: str = "all", network: str 
         specialty: optional taxonomy text or code (peer group)
         billing_class: "professional" (default), "institutional" or "" for both
         group_by: "payer" (default), "product", "setting" or "none"
+        place: "office" (default: base rates with no modifiers that apply in an office or anywhere),
+            "facility" (facility places of service) or "any" (every published amount, incl. modifiers 52/55/56/26/TC)
     """
-    return _records(E.market_distribution(code, state, payer, network, city, zip_prefix, specialty, billing_class, group_by))
+    return _records(E.market_distribution(code, state, payer, network, city, zip_prefix, specialty, billing_class, group_by,
+                                          place))
 
 
-def compare_providers(codes: str, state: str, providers: str, payer: str = "all", network: str = "") -> list[dict]:
+def compare_providers(codes: str, state: str, providers: str, payer: str = "all", network: str = "",
+                      place: str = "office") -> list[dict]:
     """Side-by-side rates of several providers for several codes, per payer product (median of published amounts).
 
     Args:
@@ -95,12 +100,13 @@ def compare_providers(codes: str, state: str, providers: str, payer: str = "all"
         providers: comma-separated TINs, NPIs or provider names, e.g. "Baylor Scott,742664409"
         payer: payer filter or "all"
         network: optional product/network filter
+        place: "office" (default, base rates without modifiers), "facility" or "any"
     """
-    return _records(E.compare_providers(codes, state, providers, payer, network))
+    return _records(E.compare_providers(codes, state, providers, payer, network, place))
 
 
 def benchmark_provider(provider: str, codes: str, state: str, payer: str = "all", specialty: str = "",
-                       network: str = "") -> list[dict]:
+                       network: str = "", place: str = "office") -> list[dict]:
     """How a provider's negotiated rates compare with peers in the same state (optionally same specialty):
     the provider's rate, peer p25/median/p75, percentile rank and % of Medicare for each code and payer product.
     Use it for "how does my practice's contract compare" questions.
@@ -112,8 +118,9 @@ def benchmark_provider(provider: str, codes: str, state: str, payer: str = "all"
         payer: payer filter or "all"
         specialty: optional peer specialty (taxonomy text or code)
         network: optional product/network filter
+        place: "office" (default, base rates without modifiers), "facility" or "any"
     """
-    return _records(E.benchmark_provider(provider, codes, state, payer, specialty, network))
+    return _records(E.benchmark_provider(provider, codes, state, payer, specialty, network, place))
 
 
 def network_breadth(state: str, specialty: str = "", city: str = "", zip_prefix: str = "", payer: str = "all",
