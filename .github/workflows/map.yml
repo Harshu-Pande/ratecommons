@@ -2,7 +2,8 @@ name: map
 # Map stage: parse every in-network file of one payer into per-file tables in the work bucket
 # (map/<release>/<payer>/<file key>/). Trigger: edit ops/map-request.txt on main; its last
 # non-comment line is "<payer> <shards> [limit] [a-b]", for example "cigna 40" or "aetna 252 0 0-59"
-# (limit 0 = all files; a-b runs only those shards of the plan).
+# (limit 0 = all files; a-b runs only those shards of the plan; an optional 5th word
+# "match=A,B" plans only files whose names contain A or B).
 on:
   workflow_dispatch:
     inputs:
@@ -35,11 +36,11 @@ jobs:
       - run: pip install -q -e .
       - id: plan
         run: |
-          read payer shards limit range <<< "$(grep -v '^#' ops/map-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
+          read payer shards limit range match <<< "$(grep -v '^#' ops/map-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
           [ "$limit" = "0" ] && limit=""
           [ -n "${{ github.event.inputs.payer }}" ] && payer="${{ github.event.inputs.payer }}" && shards="${{ github.event.inputs.shards }}" && limit="${{ github.event.inputs.limit }}"
           echo "payer=$payer shards=$shards limit=$limit"
-          ticdata plan --payer "$payer" --shards "$shards" ${limit:+--limit $limit} --out plan.json > /dev/null
+          ticdata plan --payer "$payer" --shards "$shards" ${limit:+--limit $limit} --match "${match#match=}" --out plan.json > /dev/null
           # optional 4th word "a-b": run only shards a..b of the plan (waves that fit storage)
           RANGE="$range" python -c "import json, os; d=json.load(open('plan.json')); r=os.environ['RANGE']; a, b = (map(int, r.split('-')) if r else (0, 10**9)); print(json.dumps([s['shard'] for s in d['shards'] if s['files'] and a <= s['shard'] <= b]))" > shards.json
           echo "shards=$(cat shards.json)" >> "$GITHUB_OUTPUT"
@@ -74,6 +75,8 @@ jobs:
       - uses: actions/download-artifact@v5
         with: { name: ticcore }
       - run: chmod +x ticcore && echo "TIC_CORE=$PWD/ticcore" >> "$GITHUB_ENV"
+      - name: free disk for large files
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL; df -h /
       - name: parse shard ${{ matrix.shard }}
         run: |
           mkdir -p reports

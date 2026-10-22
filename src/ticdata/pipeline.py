@@ -33,7 +33,8 @@ def release_of(name: str) -> str:
     return f"{m.group(1)}-{m.group(2)}" if m else time.strftime("%Y-%m")
 
 
-def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = None) -> dict:
+def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = None,
+         match: list[str] | None = None) -> dict:
     s = new_session(pool=32)
     _, entries = PAYERS[payer](s)
     files = sorted((e for e in entries if e["kind"] == kind), key=lambda e: e["name"])
@@ -43,6 +44,8 @@ def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = 
         if k not in seen:
             seen.add(k)
             uniq.append(e)
+    if match:  # a hand-picked subset of files (names containing any of these substrings)
+        uniq = [e for e in uniq if any(m in e["name"] for m in match)]
     if limit:
         uniq = uniq[:limit]
 

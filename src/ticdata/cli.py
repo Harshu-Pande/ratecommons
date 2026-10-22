@@ -56,6 +56,7 @@ def main(argv=None) -> int:
     p.add_argument("--payer", required=True)
     p.add_argument("--shards", type=int, default=20)
     p.add_argument("--limit", type=int)
+    p.add_argument("--match", default="", help="comma-separated name substrings: plan only those files")
     p.add_argument("--out", required=True)
 
     p = sub.add_parser("parse-shard", help="download, parse and upload one shard of a plan")
@@ -159,7 +160,7 @@ def main(argv=None) -> int:
     elif a.cmd == "plan":
         from . import pipeline
 
-        _write(pipeline.plan(a.payer, a.shards, limit=a.limit), a.out)
+        _write(pipeline.plan(a.payer, a.shards, limit=a.limit, match=[m for m in a.match.split(',') if m] or None), a.out)
     elif a.cmd == "parse-shard":
         from . import hfio, pipeline
 
