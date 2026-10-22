@@ -28,6 +28,7 @@ def consolidate(items: list[tuple[str, str]], dest: str) -> dict:
     os.makedirs(f"{dest}/rate_fact", exist_ok=True)
     con = duckdb.connect()
     con.execute("SET preserve_insertion_order = false")
+    con.execute("SET memory_limit = '6GB'")  # the runner also holds the shard's seen-sets on disk/cache
     con.execute(f"SET temp_directory = '{dest}/.duck_tmp'")
     out: dict = {"files": len(items), "tables": {}}
     metas = [json.loads((Path(d) / "meta.json").read_text()) for _, d in items]
