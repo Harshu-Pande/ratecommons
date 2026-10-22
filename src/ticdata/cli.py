@@ -116,6 +116,14 @@ def main(argv=None) -> int:
     p.add_argument("--name", required=True, help="payer name as shown, e.g. Cigna")
     p.add_argument("--rows-in", type=int)
 
+    p = sub.add_parser("serve-pack", help="serving pack of one payer (release or reduce wave) -> <payer>/serving")
+    p.add_argument("--payer", required=True)
+    p.add_argument("--source", default="dataset", help="dataset | wave-N")
+    p.add_argument("--release", default="2026-10")
+    p.add_argument("--no-upload", action="store_true")
+    p = sub.add_parser("serve-shared", help="shared serving tables: NPPES lite, Medicare PFS -> identity/serving")
+    p.add_argument("--no-upload", action="store_true")
+
     p = sub.add_parser("fingerprint", help="tail fingerprint of one URL")
     p.add_argument("url")
 
@@ -284,6 +292,12 @@ def main(argv=None) -> int:
         repo = f"{cfg.org}/{a.payer}"
         text = card.publish(a.payer, a.release, repo, a.name, a.rows_in, token=hfio.token_for(hfio.dataset(repo)))
         _write({"repo": repo, "chars": len(text)}, None)
+    elif a.cmd == "serve-pack":
+        from . import serve_jobs
+        print(json.dumps(serve_jobs.pack(a.payer, a.source, a.release, upload=not a.no_upload), default=str))
+    elif a.cmd == "serve-shared":
+        from . import serve_jobs
+        print(json.dumps(serve_jobs.shared(upload=not a.no_upload), default=str))
     elif a.cmd == "fingerprint":
         from .net import resolve, tail_fingerprint
 

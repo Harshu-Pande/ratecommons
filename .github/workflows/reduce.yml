@@ -19,7 +19,7 @@ permissions:
 run-name: "reduce ${{ github.event.inputs.request || github.event.head_commit.message }}"
 
 concurrency:
-  group: reduce
+  group: reduce-${{ contains(github.event.inputs.request || github.event.head_commit.message, 'uhc') && 'uhc' || 'main' }}
   cancel-in-progress: false
 
 jobs:
