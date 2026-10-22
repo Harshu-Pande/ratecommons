@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  actions: write    # the last job starts the next wave (ops/orchestrate.py)
   id-token: write   # Trusted Publishers: work bucket (read), payer dataset and ops (write)
 
 run-name: "reduce ${{ github.event.inputs.request || github.event.head_commit.message }}"
@@ -75,3 +76,20 @@ jobs:
           tail -c 100000 reports/reduce-${{ matrix.part }}.log > reports/reduce-${{ matrix.part }}.tail.log || true
           rm -f reports/reduce-${{ matrix.part }}.log
           ticdata put-report reports/* --prefix "runs/$(date -u +%F)-reduce-${{ needs.args.outputs.payer }}-${GITHUB_RUN_ID}" || true
+
+  next:
+    # GitHub's cron is best-effort (it fired once in ten hours), so each successful reduce
+    # starts the next wave itself when that wave's shards are mapped
+    needs: reduce
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q huggingface_hub==2.2.0
+      - run: python ops/orchestrate.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELF_RUN_ID: ${{ github.run_id }}

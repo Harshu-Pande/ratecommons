@@ -45,7 +45,11 @@ def mapped_shards():
 
 
 def main():
-    runs = gh(f"repos/{REPO}/actions/workflows/reduce.yml/runs?per_page=5")["workflow_runs"]
+    import os
+
+    me = os.environ.get("SELF_RUN_ID")  # when called at the end of a reduce run, ignore that run
+    runs = [r for r in gh(f"repos/{REPO}/actions/workflows/reduce.yml/runs?per_page=5")["workflow_runs"]
+            if str(r["id"]) != me]
     if any(r["status"] != "completed" for r in runs):
         print("a reduce run is in progress; waiting")
         return
