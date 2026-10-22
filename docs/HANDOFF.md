@@ -1,0 +1,68 @@
+# Handoff: RateCommons Explorer (state on 2026-10-22, 15:45 CT)
+
+Written for whoever (human or AI) continues this work. Read `CLAUDE.md` first: its rules still apply
+(no tokens in code/docs/commits, never trust names for identity, a missing rate means "no published
+rate", call the older pipeline "our in-house pipeline").
+
+## What exists
+
+**Data (Hugging Face, org `ratecommons`)**
+- `ratecommons/cigna` release=2026-10: all Cigna in-network files, verified. `serving/`: query pack, 8.1 GB.
+- `ratecommons/uhc` release=2026-10: only 2 files, UHIC Choice Plus C2 and Options PPO P3. `serving/`: 17.5 GB.
+- `ratecommons/aetna`: no release yet (full merge stalled, see below). `serving/`: pack built from reduce
+  wave 1 (140 networks, mostly Choice POS II / Open Access Aetna Select), **Missouri providers only**, 5.0 GB.
+- `ratecommons/identity`: NPPES, DAC, IRS EO; `serving/nppes.parquet` (NPI -> name, place, NUCC taxonomy),
+  `serving/medicare_pfs.parquet` (CY2026 PFS per HCPCS/modifier, national "US" and per state by mean GPCI).
+
+**Pack layout** (`src/ticdata/serving.py`, built by `.github/workflows/serve.yml` via `ops/serve-request.txt`):
+`rate/part-XX` (code, ps_id, ns_id, pt_id; sorted by code), `price_term`, `ps_pli/state=XX`, `pli_pg`,
+`provider_group`, `pg_npi/state=XX`, `ns`, `network`, `pg_network`, `code`. Join path:
+rate -> ps_pli(state) -> pli_pg -> pg_npi(state) -> nppes; rate -> price_term; rate.ns_id -> ns -> network.
+
+**App** (`space/`): `engine.py` (DuckDB over the packs), `app.py` (Gradio 6.29.1 UI + MCP server +
+JSON API `POST /api/tool/<name>`), `ASK.md` (connector instructions). Tools: lookup_rates,
+market_distribution, compare_providers, benchmark_provider, network_breadth, provider_networks,
+find_plans, list_products, search_providers, code_info, medicare_rate, run_sql, data_status.
+Comparisons default to `place="office"`: base rates without amount-changing modifiers (52/55/56/26/TC)
+that apply in an office or anywhere; `facility` and `any` are options. A provider lookup also returns
+flat all-services arrangements (code type CSTM-ALL, e.g. UHC pays Total Access Urgent Care $200/visit).
+
+**Where it runs**: Harshu's Mac, `~/ratecommons-app` (repo clone in `repo/`, venv, `cloudflared`, data in
+`data/`, ~29 GB). `start.sh` starts app + Cloudflare quick tunnel and prints the public link
+(currently https://margin-mainstream-drain-respondent.trycloudflare.com; it changes on every restart).
+`restart-app.sh` pulls the repo and restarts only the app (link stays). `stop.sh` stops both.
+The app keeps >= 10 GB free on the Mac (it refuses downloads that would go below; Harshu's rule).
+It re-checks the datasets every 15 minutes and downloads new packs.
+
+**AI**: users add `<link>/gradio_api/mcp/` as a custom connector in Claude (Settings -> Connectors).
+Other MCP-capable assistants can use the same URL; anything else can call the JSON API.
+
+## Measured
+- 99214 office visit, Missouri, median per provider group: Cigna $124.78 (96% of MO Medicare $130.03),
+  UHC $110.38 (85%), Aetna $93.75 (72%). Counts include NPs/PAs; pass `specialty` to narrow.
+- Single-payer lookups ~5-15 s, all-payer distributions ~30-40 s on the Mac.
+
+## Known gaps / next steps (in priority order for a demo)
+1. **Speed**: every query re-joins parquet files. Ideas: cache per (code, state) results; materialize
+   in-memory tables for `pli_pg`, `pg`, `pg_npi` of the queried state; push the provider-name lookup
+   (`loc` CTE) after the aggregation.
+2. **UI**: plain Gradio tables. No charts, no CPT descriptions (licensed text is withheld; descriptions
+   could be added for HCPCS/DRG, or the AI supplies them). Product labels for Cigna are derived from file
+   names and some are odd ("Cigna AZ Localflex..." appears in every state because the file is national).
+3. **Stable public URL**: the quick-tunnel link changes on restart and dies when the Mac sleeps. Options:
+   HF PRO ($9/mo, deploy `space/` as a Gradio Space unchanged), a free VM, or re-cut the packs into
+   small per-state/per-code files a serverless front end (e.g. Vercel) can fetch.
+4. **Aetna**: full release merge is stuck: reduce wave 6 (`aetna 2026-10 all wave=6 72-87`) failed twice
+   in the dims step; waves 7-16 and the merge wait behind it (`ops/waves.txt`, `ops/orchestrate.py`).
+   Aetna provider sets explode (2.5 billion set->list rows for wave 1 nationally), so any Aetna pack must
+   be state-limited (`aetna:wave-1:MO`).
+5. **UHC**: only 2 of 7,316 files. Add more with `ops/map-request.txt` lines like
+   `uhc 2 0 0-9 match=<name substring>,<name substring>`, then reduce (`uhc 2026-10 all`), then a pack.
+6. Medicare comparison covers the physician fee schedule only (no OPPS/ASC/DRG).
+
+## How to run things
+- GitHub Actions is the orchestrator: append a line to `ops/<stage>-request.txt` and push, or
+  `gh api -X POST repos/Harshu-Pande/ratecommons/actions/workflows/<wf>.yml/dispatches -f ref=main -f "inputs[request]=..."`.
+- Local test of the app against a pack: `RC_NO_AUTOSTART=1 RC_DATA=<dir with identity/serving and <payer>/serving>`
+  then `import engine as E; E.load(download=False)`.
+- Tests: `python -m pytest -q tests`.
