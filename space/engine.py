@@ -268,29 +268,37 @@ def _core_sql(p: str, code_types: str | None, network: str | None, city: str | N
     if specialty:
         loc_f.append("(x.taxonomy ILIKE ? OR x.classification ILIKE ? OR x.specialization ILIKE ? OR x.taxonomy_code = ?)")
         loc_p += [f"%{specialty}%"] * 3 + [specialty.strip()]
-    prov_f, prov_p = "", []
-    if provider:
+    prov_p: list = []
+    pv_cte = ""
+    if provider:  # provider first: its groups -> lists -> sets in the state, then only those sets' facts
         pv = provider.strip()
         if re.fullmatch(r"\d{10}", pv):
-            prov_f = "AND pg_id IN (SELECT pg_id FROM pg_npi_{p} WHERE npi = ?)"; prov_p = [int(pv)]
+            pv_sql = f"SELECT DISTINCT pg_id FROM pg_npi_{p} WHERE state = $state AND npi = {int(pv)}"
         elif re.fullmatch(r"\d{2}-?\d{7}", pv):
-            prov_f = "AND tin_value = ?"; prov_p = [pv.replace("-", "")]
+            pv_sql = f"SELECT pg_id FROM pg_{p} WHERE tin_value = '{pv.replace('-', '')}'"
         else:
-            prov_f = ("AND pg_id IN (SELECT n.pg_id FROM pg_npi_{p} n JOIN nppes x USING (npi) "
-                      "WHERE n.state = $state AND x.state = $state AND x.name ILIKE ?)"); prov_p = [f"%{pv}%"]
+            pv_sql = (f"SELECT DISTINCT n.pg_id FROM pg_npi_{p} n JOIN nppes x USING (npi) "
+                      "WHERE n.state = $state AND x.state = $state AND x.name ILIKE $pvname")
+        pv_cte = f"""pv AS ({pv_sql}),
+    pvl AS (SELECT DISTINCT pli_id FROM pli_pg_{p} WHERE pg_id IN (SELECT pg_id FROM pv)),
+    psx0 AS (SELECT DISTINCT ps_id, pli_id FROM ps_pli_{p} WHERE state = $state AND pli_id IN (SELECT pli_id FROM pvl)),"""
     bc = ""
     if billing_class:
         bc = "AND pt.billing_class = ?"
     loc_where = (" AND " + " AND ".join(loc_f)) if loc_f else ""
     tin_wide_ok = "" if loc_f else " OR n.npi IS NULL"
     sql = f"""
-    WITH f AS (SELECT r.billing_code_type, r.billing_code, r.ps_id, r.pt_id, r.ns_id FROM rate_{p} r
-               WHERE (r.billing_code = $code {ct}) {"OR r.billing_code_type = 'CSTM-ALL'" if provider else ""}),
+    WITH {pv_cte}
+    f AS (SELECT r.billing_code_type, r.billing_code, r.ps_id, r.pt_id, r.ns_id FROM rate_{p} r
+               WHERE ((r.billing_code IN ($code) {ct}) {"OR r.billing_code_type = 'CSTM-ALL'" if provider else ""})
+               {"AND r.ps_id IN (SELECT ps_id FROM psx0)" if provider else ""}),
     nets AS (SELECT DISTINCT n.ns_id, l.product FROM ns_{p} n JOIN netlabel l
              ON l.payer = '{p}' AND l.network_id = n.network_id {nf}),
     f2 AS (SELECT f.*, nets.product FROM f JOIN nets USING (ns_id)),
-    psx AS (SELECT DISTINCT ps_id, pli_id FROM ps_pli_{p} WHERE state = $state AND ps_id IN (SELECT ps_id FROM f2)),
-    g AS (SELECT DISTINCT psx.ps_id, l.pg_id FROM psx JOIN pli_pg_{p} l USING (pli_id)),
+    psx AS (SELECT DISTINCT ps_id, pli_id FROM {"psx0" if provider else f"ps_pli_{p}"}
+            WHERE {"true" if provider else "state = $state"} AND ps_id IN (SELECT ps_id FROM f2)),
+    g AS (SELECT DISTINCT psx.ps_id, l.pg_id FROM psx JOIN pli_pg_{p} l USING (pli_id)
+          {"WHERE l.pg_id IN (SELECT pg_id FROM pv)" if provider else ""}),
     loc AS (SELECT n.pg_id, count(DISTINCT n.npi) n_npi,
                    CASE WHEN bool_or(x.entity_type = '2') THEN arg_max(x.name, CASE WHEN x.entity_type = '2' THEN 1 ELSE 0 END)
                         WHEN count(DISTINCT n.npi) > 1 THEN min(x.name) || ' +' || (count(DISTINCT n.npi) - 1) || ' clinicians'
@@ -309,7 +317,7 @@ def _core_sql(p: str, code_types: str | None, network: str | None, city: str | N
            array_to_string(pt.billing_code_modifier, ',') AS modifiers, array_to_string(pt.service_code, ',') AS place_of_service,
            pt.expiration_date, hex(rows.pg_id) AS pg_id
     FROM rows JOIN loc USING (pg_id) JOIN pg_{p} pg USING (pg_id) JOIN pt_{p} pt USING (pt_id)
-    WHERE true {bc} {prov_f.replace('{p}', p)}
+    WHERE true {bc}
     """
     # DuckDB positional parameters in order of appearance; $code/$state are named, so use named for all
     return sql, params, loc_p, prov_p, nf, bc
@@ -320,16 +328,21 @@ def _run_core(code: str, state: str, payer: str | None = None, code_type: str | 
               provider: str | None = None, billing_class: str | None = None, wrap: str | None = None,
               medicare: bool = True) -> pd.DataFrame:
     """`wrap` is a SQL template over the base rows ({base}); it runs inside DuckDB (aggregates, limits)."""
-    code, state = _code(code), _st(state)
+    codes = [_code(c) for c in str(code).split(",") if c.strip()][:50]
+    if not codes:
+        raise ValueError("give at least one billing code")
+    state = _st(state)
     frames = []
     for p in _payers(payer):
         sql, ct_p, loc_p, prov_p, nf, bc = _core_sql(p, code_type, network, city, zip_prefix, specialty, provider,
                                                       billing_class)
         # turn every ? into a named parameter in order of appearance
         # code and state are validated above; inlined so DuckDB prunes partitions and row groups
-        sql = sql.replace("$code", f"'{code}'").replace("$state", f"'{state}'")
+        sql = sql.replace("$code", ", ".join(f"'{c}'" for c in codes)).replace("$state", f"'{state}'")
         named: dict = {}
-        order = list(ct_p) + ([f"%{network}%"] * 4 if nf else []) + loc_p + ([billing_class.lower()] if bc else []) + prov_p
+        if "$pvname" in sql:
+            named["pvname"] = f"%{provider.strip()}%"
+        order = list(ct_p) + ([f"%{network}%"] * 4 if nf else []) + loc_p + ([billing_class.lower()] if bc else [])
         i = 0
 
         def repl(_m):
@@ -423,10 +436,14 @@ def _place_mask(df: pd.DataFrame, place: str) -> pd.Series:
     return mods & (sets.map(lambda xs: "11" in xs) | anyplace)
 
 
-def per_pg(place: str = "office") -> str:
+def per_pg(place: str = "office", modifier: str = "") -> str:
+    cond = _place_sql(place)
+    m = re.sub(r"[^A-Z0-9]", "", (modifier or "").upper())[:2]
+    if m:  # e.g. 26 (professional reading) or TC (technical) instead of the unmodified rate
+        cond = cond.replace("coalesce(modifiers, '') = ''", f"modifiers = '{m}'") if cond != "true" else f"modifiers = '{m}'"
     return ("SELECT payer, product, billing_class, setting, pg_id, code, median(rate) AS rate FROM {base} "
             "WHERE negotiated_type IN ('negotiated', 'fee schedule', 'derived') AND rate IS NOT NULL AND "
-            + _place_sql(place) + " GROUP BY ALL")
+            + cond + " GROUP BY ALL")
 
 
 PER_PG = per_pg("office")
@@ -434,30 +451,32 @@ PER_PG = per_pg("office")
 
 def market_distribution(code: str, state: str, payer: str = "all", network: str = "", city: str = "",
                         zip_prefix: str = "", specialty: str = "", billing_class: str = "professional",
-                        group_by: str = "payer", place: str = "office") -> pd.DataFrame:
+                        group_by: str = "payer", place: str = "office", modifier: str = "") -> pd.DataFrame:
     keys = {"payer": ["payer"], "product": ["payer", "product"], "network": ["payer", "product"],
             "setting": ["payer", "billing_class", "setting"], "none": []}.get(group_by or "payer", ["payer"])
     k = ", ".join(keys)
     wrap = (f"SELECT {k + ', ' if k else ''}code, count(DISTINCT pg_id) AS provider_groups, min(rate) AS min, "
             "quantile_cont(rate, 0.1) AS p10, quantile_cont(rate, 0.25) AS p25, median(rate) AS median, "
             "quantile_cont(rate, 0.75) AS p75, quantile_cont(rate, 0.9) AS p90, max(rate) AS max, avg(rate) AS mean "
-            f"FROM ({per_pg(place)}) GROUP BY ALL")
+            f"FROM ({per_pg(place, modifier)}) GROUP BY ALL")
     df = _run_core(code, state, payer, None, network or None, city or None, zip_prefix or None, specialty or None,
                    None, billing_class or None, wrap=wrap)
     if df.empty:
         return df
     if group_by == "none" and len(df) > 1:  # several payers: recompute over the union
         per = _run_core(code, state, payer, None, network or None, city or None, zip_prefix or None,
-                        specialty or None, None, billing_class or None, wrap=per_pg(place), medicare=False)
+                        specialty or None, None, billing_class or None, wrap=per_pg(place, modifier), medicare=False)
         r = per["rate"]
         df = pd.DataFrame([{"code": code.upper(), "provider_groups": per["pg_id"].nunique(), "min": r.min(),
                             "p10": r.quantile(.1), "p25": r.quantile(.25), "median": r.median(), "p75": r.quantile(.75),
                             "p90": r.quantile(.9), "max": r.max(), "mean": r.mean()}])
         df = _with_medicare(df, state.upper())
-    if place == "facility":
+    mod = re.sub(r"[^A-Z0-9]", "", (modifier or "").upper())[:2]
+    if place == "facility" or mod:
         m = _mcr([code.upper()], state.upper())
-        f = m[m["mod"] == ""]["facility_amount"]
+        f = m[m["mod"] == mod]["facility_amount" if place == "facility" else "nonfacility_amount"]
         df["medicare"] = f.iloc[0] if len(f) else None
+    df["modifier"] = mod or "none"
     df.insert(0, "state", state.upper())
     df["place"] = place
     for c in ("min", "p10", "p25", "median", "p75", "p90", "max", "mean"):
@@ -465,6 +484,21 @@ def market_distribution(code: str, state: str, payer: str = "all", network: str 
     df["medicare"] = pd.to_numeric(df.get("medicare"), errors="coerce")
     df["median_pct_of_medicare"] = (100 * df["median"] / df["medicare"]).round(0)
     return df
+
+
+def provider_rates(provider: str, codes: str, state: str, payer: str = "all", network: str = "") -> pd.DataFrame:
+    """One provider's published rates for many codes in one call, collapsed across networks that pay the same."""
+    df = _run_core(codes, state, payer, None, network or None, None, None, None, provider, None)
+    if df.empty:
+        return df
+    df = df[df["negotiated_type"].isin(DOLLAR_TYPES + ("per diem",))]
+    keys = ["payer", "tin", "code_type", "code", "modifiers", "negotiated_type", "billing_class", "rate"]
+    out = (df.groupby(keys, dropna=False)
+             .agg(provider=("provider", "first"), place_of_service=("place_of_service", "first"),
+                  medicare=("medicare", "first"), pct_of_medicare=("pct_of_medicare", "first"),
+                  networks=("product", "nunique"), example_networks=("product", lambda x: ", ".join(sorted(set(x))[:3])))
+             .reset_index().sort_values(["code", "payer", "modifiers", "rate"]))
+    return out.head(MAX_ROWS)
 
 
 def compare_providers(codes: str, state: str, providers: str, payer: str = "all", network: str = "",

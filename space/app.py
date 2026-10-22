@@ -51,8 +51,8 @@ def lookup_rates(code: str, state: str, payer: str = "all", network: str = "", c
     """Negotiated rates for one billing code in one US state, one row per payer product, provider group (TIN) and price.
 
     Args:
-        code: billing code, e.g. CPT/HCPCS "99213", "70553", MS-DRG "470", revenue code
-        state: two-letter state where the provider practices, e.g. "TX"
+        code: billing code, e.g. CPT/HCPCS "99213", "70553", MS-DRG "470"; a comma list works too
+        state: two-letter state where the provider practices, e.g. "TX" (Aetna data covers Missouri only)
         payer: "cigna", "aetna", "uhc", a comma list, or "all"
         network: optional filter on product/network/plan/employer name, e.g. "Choice Plus", "OAP", "UNITED AIRLINES"
         city: optional practice city (NPPES), e.g. "Austin"
@@ -72,7 +72,7 @@ def lookup_rates(code: str, state: str, payer: str = "all", network: str = "", c
 
 def market_distribution(code: str, state: str, payer: str = "all", network: str = "", city: str = "",
                         zip_prefix: str = "", specialty: str = "", billing_class: str = "professional",
-                        group_by: str = "payer", place: str = "office") -> list[dict]:
+                        group_by: str = "payer", place: str = "office", modifier: str = "") -> list[dict]:
     """Distribution of negotiated rates for a code in a state: provider-group count, min/p10/p25/median/p75/p90/max,
     mean, Medicare amount and median % of Medicare. Each provider group counts once (its median published amount).
 
@@ -88,9 +88,27 @@ def market_distribution(code: str, state: str, payer: str = "all", network: str 
         group_by: "payer" (default), "product", "setting" or "none"
         place: "office" (default: base rates with no modifiers that apply in an office or anywhere),
             "facility" (facility places of service) or "any" (every published amount, incl. modifiers 52/55/56/26/TC)
+        modifier: "" (unmodified/global rate, default), "26" (professional reading) or "TC" (technical component);
+            use this rather than run_sql for component-level distributions
     """
     return _records(E.market_distribution(code, state, payer, network, city, zip_prefix, specialty, billing_class, group_by,
-                                          place))
+                                          place, modifier))
+
+
+def provider_rates(provider: str, codes: str, state: str, payer: str = "all", network: str = "") -> list[dict]:
+    """FASTEST way to get one provider's rates for many codes (one call; use it instead of looping lookup_rates).
+    Rows collapse networks that pay the same amount; each row has payer, tin, code, modifiers (26 = professional
+    reading, TC = technical, blank = global), negotiated_type, rate, medicare, pct_of_medicare, networks count.
+    Also returns the provider's flat all-services arrangements (code_type CSTM-ALL) if the payer uses one.
+
+    Args:
+        provider: NPI (10 digits), TIN (9 digits) or name; resolve names with search_providers first if unsure
+        codes: comma-separated billing codes (up to 50), e.g. "70450,70460,70551,71046"
+        state: two-letter state where the provider practices
+        payer: "cigna", "aetna", "uhc", comma list, or "all" (Aetna is loaded for Missouri only)
+        network: optional product/network filter
+    """
+    return _records(E.provider_rates(provider, codes, state, payer, network), 1000)
 
 
 def compare_providers(codes: str, state: str, providers: str, payer: str = "all", network: str = "",
@@ -232,7 +250,7 @@ def data_status() -> dict:
     return json.loads(json.dumps(E.data_status(), default=str))
 
 
-TOOLS = [lookup_rates, market_distribution, compare_providers, benchmark_provider, network_breadth, provider_networks,
+TOOLS = [provider_rates, lookup_rates, market_distribution, compare_providers, benchmark_provider, network_breadth, provider_networks,
          find_plans, list_products, search_providers, code_info, medicare_rate, run_sql, data_status]
 
 
@@ -396,6 +414,7 @@ async def api_tool(name: str, request: Request):
         return JSONResponse({"ok": False, "error": str(e)}, 200)
 
 
+demo.queue(default_concurrency_limit=6)  # AI clients call several tools at once
 app = gr.mount_gradio_app(app, demo, path="/", mcp_server=True, theme=gr.themes.Soft(), css=CSS, ssr_mode=False)
 
 if __name__ == "__main__":
