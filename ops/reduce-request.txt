@@ -7,3 +7,4 @@ cigna 2026-10
 aetna 2026-10 all wave=1 0-7
 aetna 2026-10 all wave=1 0-7
 aetna 2026-10 facts wave=1 0-7
+aetna 2026-10 all wave=2 8-23
