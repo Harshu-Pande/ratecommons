@@ -3,6 +3,15 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-22
+
+- **Aetna wave 1 mapped: 143 of 143 files, shards 0-7 (the largest files).** 3.29 TB of JSON,
+  5,043,986,639 negotiated rates, 261 GB of gzip in; 140 GB of map output (0.54x the gzip
+  size, down from 1.3x before shard-level dimension seen-sets), so all of Aetna should need
+  about 4.3 TB of shuffle space, inside the 7.8 TB limit. 35-45 minutes per 33 GB shard on
+  one runner. Peak RSS 14 GB on the 14-file shard (DuckDB in the consolidation step now
+  capped at 6 GB). Wave 2 (shards 8-39) launched while wave 1 reduces.
+
 ## 2026-10-21
 
 - **Aetna wave 1, first try: parsing fine, consolidation ran out of disk.** All 8 jobs parsed
