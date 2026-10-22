@@ -236,25 +236,36 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
         con.execute("""CREATE TABLE bn AS
                        SELECT b.block_id, bit_xor(n.h1) x1, bit_xor(n.h2) x2, count(*)::INTEGER n_net
                        FROM bnet b JOIN nets n USING (net) GROUP BY b.block_id""")
-        con.execute(f"""
-            COPY (SELECT fact_id, {ANY_COLS}, min(block_id) b_min, max(block_id) b_max
-                  FROM read_parquet({files!r}) GROUP BY fact_id)
-            TO '{local}/fx.parquet' (FORMAT parquet, COMPRESSION zstd)""")
-        fx = f"read_parquet('{local}/fx.parquet')"
-        con.execute(f"""CREATE TABLE multi AS
-                        SELECT DISTINCT r.fact_id, b.net
-                        FROM read_parquet({files!r}) r JOIN bnet b USING (block_id)
-                        WHERE r.fact_id IN (SELECT fact_id FROM {fx} WHERE b_min <> b_max)""")
-        con.execute(f"""
-            COPY (
-              SELECT f.{FACT_COLS.replace(', ', ', f.')}, bn.x1, bn.x2, bn.n_net
-              FROM {fx} f JOIN bn ON bn.block_id = f.b_min WHERE f.b_min = f.b_max
-              UNION ALL
-              SELECT f.{FACT_COLS.replace(', ', ', f.')}, u.x1, u.x2, u.n_net
-              FROM {fx} f JOIN (SELECT m.fact_id, bit_xor(n.h1) x1, bit_xor(n.h2) x2, count(*)::INTEGER n_net
-                                FROM multi m JOIN nets n USING (net) GROUP BY m.fact_id) u USING (fact_id)
-            ) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)""")
-        res["multi_block_facts"] = con.execute("SELECT count(DISTINCT fact_id) FROM multi").fetchone()[0]
+        # facts are grouped in slices by hash(fact_id): BLOB/VARCHAR aggregate states do not spill,
+        # so each slice must fit in memory (about 15 million input rows per slice)
+        k = max(1, res["rows_in"] // int(os.environ.get("RC_SLICE_ROWS", "15000000")) + 1)
+        res["slices"] = k
+        os.makedirs(f"{local}/facts_tmp", exist_ok=True)
+        multi_n = 0
+        for i in range(k):
+            sl = f"hash(fact_id) % {k} = {i}"
+            con.execute(f"""
+                COPY (SELECT fact_id, {ANY_COLS}, min(block_id) b_min, max(block_id) b_max
+                      FROM read_parquet({files!r}) WHERE {sl} GROUP BY fact_id)
+                TO '{local}/fx.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+            fx = f"read_parquet('{local}/fx.parquet')"
+            con.execute(f"""CREATE OR REPLACE TABLE multi AS
+                            SELECT DISTINCT r.fact_id, b.net
+                            FROM (SELECT fact_id, block_id FROM read_parquet({files!r}) WHERE {sl}) r
+                            JOIN bnet b USING (block_id)
+                            WHERE r.fact_id IN (SELECT fact_id FROM {fx} WHERE b_min <> b_max)""")
+            con.execute(f"""
+                COPY (
+                  SELECT f.{FACT_COLS.replace(', ', ', f.')}, bn.x1, bn.x2, bn.n_net
+                  FROM {fx} f JOIN bn ON bn.block_id = f.b_min WHERE f.b_min = f.b_max
+                  UNION ALL
+                  SELECT f.{FACT_COLS.replace(', ', ', f.')}, u.x1, u.x2, u.n_net
+                  FROM {fx} f JOIN (SELECT m.fact_id, bit_xor(n.h1) x1, bit_xor(n.h2) x2, count(*)::INTEGER n_net
+                                    FROM multi m JOIN nets n USING (net) GROUP BY m.fact_id) u USING (fact_id)
+                ) TO '{local}/facts_tmp/slice-{i:04d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+            multi_n += con.execute("SELECT count(DISTINCT fact_id) FROM multi").fetchone()[0]
+        tmp = f"{local}/facts_tmp/*.parquet"
+        res["multi_block_facts"] = multi_n
         res["block_sets"] = _ns_map(con, "SELECT x1, x2, n_net, any_value(block_id) rep FROM bn GROUP BY ALL",
                                     "SELECT block_id rep, net FROM bnet", "bns")
         con.execute(f"""
@@ -298,7 +309,12 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
     res["facts"] = con.execute(f"SELECT count(*) FROM read_parquet('{out}/rate_fact/part-{part:02d}.parquet')").fetchone()[0]
     if res["facts"] != con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]:
         raise RuntimeError("facts lost joining to their network sets")
-    os.remove(tmp)
+    if "*" in tmp:
+        import shutil
+
+        shutil.rmtree(os.path.dirname(tmp), ignore_errors=True)
+    else:
+        os.remove(tmp)
     res["seconds"] = round(time.time() - t0, 1)
     return res
 
