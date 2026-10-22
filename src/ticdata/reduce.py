@@ -194,12 +194,12 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
     res["rows_in"] = sum(pq.ParquetFile(f).metadata.num_rows for f in files)
     _log(f"part {part}: {len(files)} fact files, {res['rows_in']:,} rows, "
          f"{sum(os.path.getsize(f) for f in files) / 1e9:.1f} GB")
-    con = _duck(local)
-    _ex = con.execute
+    raw_con = _duck(local)
+    _ex = raw_con.execute
 
     class _Logged:  # log every statement's duration
         def __getattr__(self, n):
-            return getattr(con, n)
+            return getattr(raw_con, n)
 
         def execute(self, sql, *a):
             t = time.time()
