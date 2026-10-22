@@ -267,7 +267,7 @@ def _core_sql(p: str, code_types: str | None, network: str | None, city: str | N
     tin_wide_ok = "" if loc_f else " OR n.npi IS NULL"
     sql = f"""
     WITH f AS (SELECT r.billing_code_type, r.billing_code, r.ps_id, r.pt_id, r.ns_id FROM rate_{p} r
-               WHERE r.billing_code = $code {ct}),
+               WHERE (r.billing_code = $code {ct}) {"OR r.billing_code_type = 'CSTM-ALL'" if provider else ""}),
     nets AS (SELECT DISTINCT n.ns_id, l.product FROM ns_{p} n JOIN netlabel l
              ON l.payer = '{p}' AND l.network_id = n.network_id {nf}),
     f2 AS (SELECT f.*, nets.product FROM f JOIN nets USING (ns_id)),

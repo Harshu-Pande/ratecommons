@@ -63,6 +63,9 @@ def lookup_rates(code: str, state: str, payer: str = "all", network: str = "", c
         limit: max rows (default 200)
     Returns rows with payer, product, tin, provider, npis_in_area, rate, negotiated_type, billing_class, setting,
     modifiers, place_of_service, medicare, pct_of_medicare.
+    When `provider` is given, the provider's flat "all services" arrangements (code type CSTM-ALL, e.g. UHC's
+    per-visit "PRO" rate for some urgent care groups) are included too. Radiology and other split services carry
+    modifier 26 (professional) / TC (technical) rows next to the global rate.
     """
     return _records(E.lookup_rates(code, state, payer, network, city, zip_prefix, specialty, provider, billing_class, limit), 2000)
 
