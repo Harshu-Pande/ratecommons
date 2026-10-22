@@ -104,6 +104,15 @@ def reduce_part(payer: str, release: str, part: int, bucket: str, out: str, toke
     return res
 
 
+def _log(msg: str) -> None:
+    """Progress with RSS on stderr, so a job killed for memory still shows its last step."""
+    import resource
+    import sys
+
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
+    print(f"[reduce {time.strftime('%H:%M:%S')}] {msg} (peak rss {rss} MB)", file=sys.stderr, flush=True)
+
+
 def _duck(workdir: str):
     """A DuckDB on disk with spilling, sized for a 16 GB / 4 vCPU runner."""
     import duckdb
@@ -183,7 +192,21 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
     if not files:
         return res
     res["rows_in"] = sum(pq.ParquetFile(f).metadata.num_rows for f in files)
+    _log(f"part {part}: {len(files)} fact files, {res['rows_in']:,} rows, "
+         f"{sum(os.path.getsize(f) for f in files) / 1e9:.1f} GB")
     con = _duck(local)
+    _ex = con.execute
+
+    class _Logged:  # log every statement's duration
+        def __getattr__(self, n):
+            return getattr(con, n)
+
+        def execute(self, sql, *a):
+            t = time.time()
+            r = _ex(sql, *a)
+            _log(f"{' '.join(sql.split())[:90]} ... {time.time() - t:.0f}s")
+            return r
+    con = _Logged()
     net_of = _nets_table(con, nets)
     key = lambda p: Path(p).parts[-3]  # <file key>/rate_fact/part-XX.parquet
     tmp = f"{local}/facts_tmp.parquet"
