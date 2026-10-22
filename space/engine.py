@@ -358,8 +358,8 @@ def _run_core(code: str, state: str, payer: str | None = None, code_type: str | 
         jobs.append((sql2, named or None))
     from concurrent.futures import ThreadPoolExecutor
 
-    with ThreadPoolExecutor(max(1, len(jobs))) as ex:  # payers in parallel (one DuckDB cursor each)
-        frames = list(ex.map(lambda j: _q(*j), jobs))
+    # one payer at a time: in parallel they were slower on an 8 GB laptop (memory contention)
+    frames = [_q(*j) for j in jobs]
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)
