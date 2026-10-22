@@ -201,9 +201,13 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
                           USING (pg_id)) TO '{out}/provider_group.parquet' {W}""")
     con.execute("""CREATE TABLE pli_state AS SELECT DISTINCT l.pli_id, p.state
                    FROM pli_pg l JOIN (SELECT DISTINCT pg_id, state FROM pg_npi) p USING (pg_id)""")
-    con.execute(f"""COPY (SELECT s.state, p.ps_id, p.pli_id FROM ps_pli p JOIN pli_state s USING (pli_id)
-                          ORDER BY s.state, p.ps_id) TO '{out}/ps_pli'
-                    (FORMAT parquet, COMPRESSION zstd, PARTITION_BY (state), ROW_GROUP_SIZE 50000)""")
+    # one state at a time and unsorted: a sorted partitioned write of Aetna's 0.7 billion rows filled the disk
+    for (st_,) in con.execute("SELECT DISTINCT state FROM pli_state ORDER BY 1").fetchall():
+        os.makedirs(f"{out}/ps_pli/state={st_}", exist_ok=True)
+        con.execute(f"""COPY (SELECT p.ps_id, p.pli_id FROM ps_pli p
+                              SEMI JOIN (SELECT pli_id FROM pli_state WHERE state = ?) s USING (pli_id))
+                        TO '{out}/ps_pli/state={st_}/data_0.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100000)""",
+                    [st_])
     for t in ("pg", "ps_pli", "pli_pg", "pg_npi", "pli_state"):
         res[t] = con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
     con.close()
