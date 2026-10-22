@@ -402,12 +402,12 @@ def reduce_dims(payer: str, release: str, bucket: str, out: str, token=None, wor
         want = [p for p in allp if p.endswith(f"/{table}.parquet") or is_meta(p)]
     local = os.path.join(workdir, f"dims-{table}")
     _fetch(bucket, want, local, prefix, token)
-    res = reduce_dims_local(local, payer, out, table)
+    res = reduce_dims_local(local, payer, out, table, delete_inputs=True)
     res["download_seconds"] = round(time.time() - t0, 1) - res["seconds"]
     return res
 
 
-def reduce_dims_local(local: str, payer: str, out: str, table: str = "all") -> dict:
+def reduce_dims_local(local: str, payer: str, out: str, table: str = "all", delete_inputs: bool = False) -> dict:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -438,37 +438,52 @@ def reduce_dims_local(local: str, payer: str, out: str, table: str = "all") -> d
         src = f"read_parquet({files!r}, union_by_name = true)"
         cols = {d[0] for d in con.execute(f"SELECT * FROM {src} LIMIT 0").description}
         n_in = con.execute(f"SELECT count(*) FROM {src}").fetchone()[0]
-        if name == "provider_group":
-            sel = f"""SELECT pg_id, any_value(tin_type) tin_type, any_value(tin_value) tin_value,
-                             {"list_distinct(flatten(list(coalesce(tin_raws, [tin_raw]))))" if "tin_raws" in cols and "tin_raw" in cols
-                              else "list_distinct(flatten(list(tin_raws)))" if "tin_raws" in cols
-                              else "list(DISTINCT tin_raw)"} tin_raws, any_value(npis) npis, any_value(npi_count) npi_count,
-                             any_value(tin_wide) tin_wide, list_distinct(flatten(list(business_names))) business_names
-                      FROM {src} GROUP BY pg_id"""
-            con.execute(f"COPY ({sel}) TO '{out}/{name}.parquet' (FORMAT parquet, COMPRESSION zstd)")
-            n_out = con.execute(f"SELECT count(*) FROM read_parquet('{out}/{name}.parquet')").fetchone()[0]
-        elif name in DIM_SLICES:
-            # about 300 MB of compressed input per slice: list columns do not spill well
-            k = max(DIM_SLICES[name], sum(os.path.getsize(f) for f in files) // (300 << 20) + 1)
-            os.makedirs(f"{out}/{name}", exist_ok=True)
-            n_out = 0
+        tin = ("list_distinct(flatten(list(coalesce(tin_raws, [tin_raw]))))" if "tin_raws" in cols and "tin_raw" in cols
+               else "list_distinct(flatten(list(tin_raws)))" if "tin_raws" in cols else "list(DISTINCT tin_raw)")
+
+        def dedup(source: str) -> str:
+            if name == "provider_group":
+                return f"""SELECT pg_id, any_value(tin_type) tin_type, any_value(tin_value) tin_value, {tin} tin_raws,
+                                  any_value(npis) npis, any_value(npi_count) npi_count, any_value(tin_wide) tin_wide,
+                                  list_distinct(flatten(list(business_names))) business_names
+                           FROM {source} GROUP BY pg_id"""
+            return f"SELECT DISTINCT ON ({key}) * FROM {source}"
+
+        # list columns and list aggregates do not spill well: about 300 MB of compressed input per slice
+        k = max(DIM_SLICES.get(name, 1),
+                sum(os.path.getsize(f) for f in files) // int(os.environ.get("RC_DIM_SLICE_BYTES", 300 << 20)) + 1)
+        single = name not in DIM_SLICES  # published as one file
+        if k == 1:
+            dest = f"{out}/{name}.parquet" if single else f"{out}/{name}/part-00.parquet"
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            con.execute(f"COPY ({dedup(src)}) TO '{dest}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)")
+            n_out = con.execute(f"SELECT count(*) FROM read_parquet('{dest}')").fetchone()[0]
+        else:
+            import shutil
+
             # one streaming pass splits the input by slice; then each slice is deduplicated alone
             split = f"{local}/split-{name}"
             con.execute(f"""COPY (SELECT *, (hash({key}) % {k})::INTEGER AS _slice FROM {src})
                             TO '{split}' (FORMAT parquet, PARTITION_BY (_slice), OVERWRITE_OR_IGNORE true)""")
+            if delete_inputs:  # the split copy replaces the downloaded input on disk
+                for f in files:
+                    os.remove(f)
+            parts_dir = f"{local}/parts-{name}" if single else f"{out}/{name}"
+            os.makedirs(parts_dir, exist_ok=True)
             width = 2 if k < 100 else 3
+            n_out = 0
             for i in range(k):
-                dest = f"{out}/{name}/part-{i:0{width}d}.parquet"
                 if not os.path.isdir(f"{split}/_slice={i}"):
                     continue
-                con.execute(f"""COPY (SELECT DISTINCT ON ({key}) * EXCLUDE (_slice)
-                                      FROM read_parquet('{split}/_slice={i}/*.parquet', union_by_name = true))
-                                TO '{dest}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)""")
+                dest = f"{parts_dir}/part-{i:0{width}d}.parquet"
+                piece = f"(SELECT * EXCLUDE (_slice) FROM read_parquet('{split}/_slice={i}/*.parquet', union_by_name = true))"
+                con.execute(f"COPY ({dedup(piece)}) TO '{dest}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)")
                 n_out += con.execute(f"SELECT count(*) FROM read_parquet('{dest}')").fetchone()[0]
-        else:
-            con.execute(f"COPY (SELECT DISTINCT ON ({key}) * FROM {src}) TO '{out}/{name}.parquet' "
-                        "(FORMAT parquet, COMPRESSION zstd)")
-            n_out = con.execute(f"SELECT count(*) FROM read_parquet('{out}/{name}.parquet')").fetchone()[0]
+            shutil.rmtree(split, ignore_errors=True)
+            if single:
+                con.execute(f"""COPY (SELECT * FROM read_parquet('{parts_dir}/*.parquet')) TO '{out}/{name}.parquet'
+                                (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)""")
+                shutil.rmtree(parts_dir, ignore_errors=True)
         res["tables"][name] = {"rows_in": n_in, "rows_out": n_out}
         if name == "code":  # never publish licensed descriptor text (licensing.py); keep it privately
             from .licensing import redact_code_file
