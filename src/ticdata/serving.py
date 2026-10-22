@@ -220,45 +220,48 @@ def build_nppes(src: str, out: str, nucc_csv: str | None = None, work: str = "/t
 
 
 def build_medicare(zip_path: str, out: str, year: str) -> dict:
-    """National physician fee schedule amounts: total RVUs x conversion factor (no locality GPCI).
-    Descriptors are AMA text, so they are not kept."""
+    """Physician fee schedule amounts per HCPCS/modifier: national (total RVUs x conversion factor) and per state
+    (each component RVU x the state's mean locality GPCI). Descriptors are AMA text, so they are not kept.
+    Columns of PPRRVU (fixed by CMS): 0 HCPCS, 1 MOD, 3 STATUS, 5 WORK, 6 NF PE, 8 F PE, 10 MP, 11 NF TOTAL,
+    12 F TOTAL, 25 CONV FACTOR."""
     z = zipfile.ZipFile(zip_path)
-    name = next(n for n in z.namelist() if re.search(r"PPRRVU.*\.csv$", n, re.I) and "nonqp" in n.lower()) \
-        if any("nonqp" in n.lower() for n in z.namelist()) else \
-        next(n for n in z.namelist() if re.search(r"PPRRVU.*\.csv$", n, re.I))
+    names = z.namelist()
+    name = next((n for n in names if re.search(r"PPRRVU.*nonQP.*\.csv$", n, re.I)), None) or \
+        next(n for n in names if re.search(r"PPRRVU.*\.csv$", n, re.I))
     rows = list(csv.reader(io.TextIOWrapper(z.open(name), encoding="latin-1")))
-    data = [r for r in rows if r and re.fullmatch(r"[0-9A-Z]{4}[0-9A-Z]", r[0].strip())]
-    # header rows: find the column titles by joining the lines above the first data row
-    first = rows.index(data[0])
-    heads = [" ".join(h[i].strip() for h in rows[max(0, first - 4):first] if i < len(h)).upper()
-             for i in range(max(len(r) for r in rows[first - 4:first + 1]))]
+    hdr = next(i for i, r in enumerate(rows) if r and r[0].strip() == "HCPCS")
+    assert rows[hdr][1].strip() == "MOD" and "FACTOR" in rows[hdr][25].upper(), rows[hdr][:30]
 
-    def col(*keys, avoid=()):
-        for i, h in enumerate(heads):
-            if all(k in h for k in keys) and not any(a in h for a in avoid):
-                return i
-        raise KeyError(keys)
-
-    ci = {"mod": col("MOD"), "status": col("STATUS"), "work": col("WORK"),
-          "nf_total": col("NON-FAC", "TOTAL"), "f_total": col("FACILITY TOTAL", avoid=("NON",)),
-          "cf": col("CONV")}
+    def f(x):
+        try:
+            return float(x)
+        except ValueError:
+            return None
+    gname = next(n for n in names if re.search(r"GPCI.*\.csv$", n, re.I))
+    grows = list(csv.reader(io.TextIOWrapper(z.open(gname), encoding="latin-1")))
+    gh = next(i for i, r in enumerate(grows) if any("PW GPCI" in c for c in r))
+    loc: dict[str, list] = {}
+    for r in grows[gh + 1:]:
+        if len(r) >= 7 and re.fullmatch(r"[A-Z]{2}", r[1].strip()) and f(r[4]) is not None:
+            loc.setdefault(r[1].strip(), []).append((f(r[4]), f(r[5]), f(r[6])))
+    gpci = {st: tuple(sum(x[i] for x in v) / len(v) for i in range(3)) for st, v in loc.items()}
+    gpci["US"] = (1.0, 1.0, 1.0)
     out_rows = []
-    for r in data:
-        def num(k):
-            try:
-                return float(r[ci[k]])
-            except (ValueError, IndexError):
-                return None
-        cf, nf, f = num("cf"), num("nf_total"), num("f_total")
-        out_rows.append({"hcpcs": r[0].strip(), "modifier": r[ci["mod"]].strip() or None,
-                         "status": r[ci["status"]].strip(), "nonfacility_rvu": nf, "facility_rvu": f,
-                         "conversion_factor": cf,
-                         "nonfacility_amount": round(nf * cf, 2) if nf is not None and cf else None,
-                         "facility_amount": round(f * cf, 2) if f is not None and cf else None,
-                         "year": year, "source_file": name})
+    for r in rows[hdr + 1:]:
+        if len(r) < 26 or not re.fullmatch(r"[0-9A-Z]{5}", r[0].strip()):
+            continue
+        w, nfpe, fpe, mp, cf = f(r[5]), f(r[6]), f(r[8]), f(r[10]), f(r[25])
+        if cf is None or w is None:
+            continue
+        for st, (gw, gpe, gmp) in gpci.items():
+            nf = (w * gw + (nfpe or 0) * gpe + (mp or 0) * gmp) * cf
+            fa = (w * gw + (fpe or 0) * gpe + (mp or 0) * gmp) * cf
+            out_rows.append({"hcpcs": r[0].strip(), "modifier": r[1].strip() or None, "status": r[3].strip(),
+                             "state": st, "nonfacility_amount": round(nf, 2), "facility_amount": round(fa, 2),
+                             "conversion_factor": cf, "year": year})
     import pyarrow as pa
     import pyarrow.parquet as pq
 
     pq.write_table(pa.Table.from_pylist(out_rows), out, compression="zstd")
-    s = next((x for x in out_rows if x["hcpcs"] == "99213" and not x["modifier"]), None)
-    return {"rows": len(out_rows), "file": name, "columns": ci, "sample_99213": s}
+    s = [x for x in out_rows if x["hcpcs"] == "99213" and not x["modifier"] and x["state"] in ("US", "TX", "NY")]
+    return {"rows": len(out_rows), "file": name, "gpci_file": gname, "states": len(gpci), "sample_99213": s}
