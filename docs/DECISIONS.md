@@ -5,6 +5,12 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-22
 
+- **Aetna waves reduce well.** Wave 1 (shards 0-7, 143 files): 4.62 billion map fact rows to
+  242,692,818 distinct facts (19x), 17.6 GB reduced. Wave 2 (shards 8-23, 304 files): 6.08
+  billion to 127,100,097 (48x), 9.1 GB, about 10 minutes per part. Fixes on the way: facts are
+  grouped in hash slices of about 15 million rows after one streaming split pass (BLOB and
+  VARCHAR aggregate states do not spill), DuckDB at 7 GB and 2 threads, dimension slices
+  sized to about 300 MB. Waves of about 16 shards keep each reduce job's input near 25 GB.
 - **Aetna wave 1 mapped: 143 of 143 files, shards 0-7 (the largest files).** 3.29 TB of JSON,
   5,043,986,639 negotiated rates, 261 GB of gzip in; 140 GB of map output (0.54x the gzip
   size, down from 1.3x before shard-level dimension seen-sets), so all of Aetna should need
