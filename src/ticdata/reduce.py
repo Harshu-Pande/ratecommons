@@ -118,7 +118,7 @@ def _duck(workdir: str):
     import duckdb
 
     os.makedirs(f"{workdir}/duck_tmp", exist_ok=True)
-    path = f"{workdir}/duck.db"
+    path = f"{workdir}/duck-{time.time_ns()}.db"  # a fresh database per call (connections may linger)
     if os.path.exists(path):
         os.remove(path)
     con = duckdb.connect(path)
