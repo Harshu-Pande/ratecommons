@@ -114,7 +114,10 @@ def _duck(workdir: str):
         os.remove(path)
     con = duckdb.connect(path)
     con.execute(f"SET temp_directory = '{workdir}/duck_tmp'")
-    con.execute(f"SET memory_limit = '{os.environ.get('RC_DUCK_MEMORY', '11GB')}'")
+    # GitHub kills a runner that nears its 16 GB, and DuckDB's limit does not count everything
+    # (Parquet readers, list states), so stay well under it and spill instead
+    con.execute(f"SET memory_limit = '{os.environ.get('RC_DUCK_MEMORY', '7GB')}'")
+    con.execute(f"SET threads = {int(os.environ.get('RC_DUCK_THREADS', '2'))}")
     con.execute("SET preserve_insertion_order = false")
     return con
 
@@ -393,12 +396,21 @@ def reduce_dims_local(local: str, payer: str, out: str, table: str = "all") -> d
             con.execute(f"COPY ({sel}) TO '{out}/{name}.parquet' (FORMAT parquet, COMPRESSION zstd)")
             n_out = con.execute(f"SELECT count(*) FROM read_parquet('{out}/{name}.parquet')").fetchone()[0]
         elif name in DIM_SLICES:
-            k = DIM_SLICES[name]
+            # about 300 MB of compressed input per slice: list columns do not spill well
+            k = max(DIM_SLICES[name], sum(os.path.getsize(f) for f in files) // (300 << 20) + 1)
             os.makedirs(f"{out}/{name}", exist_ok=True)
             n_out = 0
+            # one streaming pass splits the input by slice; then each slice is deduplicated alone
+            split = f"{local}/split-{name}"
+            con.execute(f"""COPY (SELECT *, (hash({key}) % {k})::INTEGER AS _slice FROM {src})
+                            TO '{split}' (FORMAT parquet, PARTITION_BY (_slice), OVERWRITE_OR_IGNORE true)""")
+            width = 2 if k < 100 else 3
             for i in range(k):
-                dest = f"{out}/{name}/part-{i:02d}.parquet"
-                con.execute(f"""COPY (SELECT DISTINCT ON ({key}) * FROM {src} WHERE hash({key}) % {k} = {i})
+                dest = f"{out}/{name}/part-{i:0{width}d}.parquet"
+                if not os.path.isdir(f"{split}/_slice={i}"):
+                    continue
+                con.execute(f"""COPY (SELECT DISTINCT ON ({key}) * EXCLUDE (_slice)
+                                      FROM read_parquet('{split}/_slice={i}/*.parquet', union_by_name = true))
                                 TO '{dest}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)""")
                 n_out += con.execute(f"SELECT count(*) FROM read_parquet('{dest}')").fetchone()[0]
         else:
