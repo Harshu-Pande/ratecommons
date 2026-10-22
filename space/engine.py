@@ -333,6 +333,7 @@ def _run_core(code: str, state: str, payer: str | None = None, code_type: str | 
         raise ValueError("give at least one billing code")
     state = _st(state)
     frames = []
+    jobs = []
     for p in _payers(payer):
         sql, ct_p, loc_p, prov_p, nf, bc = _core_sql(p, code_type, network, city, zip_prefix, specialty, provider,
                                                       billing_class)
@@ -354,7 +355,11 @@ def _run_core(code: str, state: str, payer: str | None = None, code_type: str | 
             named[f"p{k}"] = v
         if wrap:
             sql2 = wrap.replace("{base}", f"({sql2})")
-        frames.append(_q(sql2, named or None))
+        jobs.append((sql2, named or None))
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max(1, len(jobs))) as ex:  # payers in parallel (one DuckDB cursor each)
+        frames = list(ex.map(lambda j: _q(*j), jobs))
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)
@@ -498,7 +503,8 @@ def provider_rates(provider: str, codes: str, state: str, payer: str = "all", ne
                   medicare=("medicare", "first"), pct_of_medicare=("pct_of_medicare", "first"),
                   networks=("product", "nunique"), example_networks=("product", lambda x: ", ".join(sorted(set(x))[:3])))
              .reset_index().sort_values(["code", "payer", "modifiers", "rate"]))
-    return out.head(MAX_ROWS)
+    out["place_of_service"] = out["place_of_service"].fillna("").str.slice(0, 24)
+    return out.head(400)
 
 
 def compare_providers(codes: str, state: str, providers: str, payer: str = "all", network: str = "",
