@@ -5,6 +5,10 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-22
 
+- **Overnight check-in (09:36 UTC).** Map run for shards 40-251: 109 of 212 shards done, 0
+  failed, 12 running. Reduce waves 3 (shards 24-39: 5.69 billion map fact rows to 79,590,344
+  facts, 6.5 GB) and 4 (shards 40-55, dispatched by the orchestrator: 6.07 billion to
+  93,049,737, 7.4 GB) succeeded. Reduced so far: 40.6 GB for waves 1-4 (751 files).
 - **Overnight orchestration without a chat session.** `orchestrate.yml` runs every 30 minutes:
   it dispatches the next reduce wave from `ops/waves.txt` once every shard of the wave has a
   successful map job, then the merge once every wave is in `reduced/`. It waits while a
