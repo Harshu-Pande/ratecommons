@@ -359,7 +359,7 @@ def _with_medicare(df: pd.DataFrame, state: str = "US") -> pd.DataFrame:
     df = df.merge(m, on=["code", "mod"], how="left")
     prof = (df["billing_class"] == "professional") & df["negotiated_type"].isin(DOLLAR_TYPES)
     fac = df["setting"].eq("inpatient") | df["place_of_service"].fillna("").str.contains(r"\b(?:19|21|22|23|24)\b")
-    med = df["nonfacility_amount"].where(~fac, df["facility_amount"])
+    med = pd.to_numeric(df["nonfacility_amount"], errors="coerce").where(~fac, pd.to_numeric(df["facility_amount"], errors="coerce"))
     df["medicare"] = med.where(prof)
     df["pct_of_medicare"] = (100 * df["rate"] / df["medicare"]).round(0).where(prof & (df["medicare"] > 0))
     return df.drop(columns=["nonfacility_amount", "facility_amount", "mod"])
@@ -407,6 +407,7 @@ def market_distribution(code: str, state: str, payer: str = "all", network: str 
     df.insert(0, "state", state.upper())
     for c in ("min", "p10", "p25", "median", "p75", "p90", "max", "mean"):
         df[c] = df[c].astype(float).round(2)
+    df["medicare"] = pd.to_numeric(df.get("medicare"), errors="coerce")
     df["median_pct_of_medicare"] = (100 * df["median"] / df["medicare"]).round(0)
     return df
 
