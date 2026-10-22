@@ -75,7 +75,8 @@ def main():
                 return
             req = f"{payer} {release} all wave={w[2]} {w[3]}"
         print("dispatching:", req)
-        subprocess.check_call(["gh", "workflow", "run", "reduce.yml", "-R", REPO, "-f", f"request={req}"])
+        subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/workflows/reduce.yml/dispatches",
+                               "-f", "ref=main", "-f", f"inputs[request]={req}"])
         return
     print("nothing to do")
 
