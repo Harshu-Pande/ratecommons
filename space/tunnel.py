@@ -30,7 +30,12 @@ for _ in range(120):
 if not url:
     p.kill()
     sys.exit(1)
+old = open(f"{HOME}/public_url.txt").read().strip() if os.path.exists(f"{HOME}/public_url.txt") else ""
 open(f"{HOME}/public_url.txt", "w").write(url + "\n")
+if old and old != url:
+    # Gradio's MCP server calls the app at the root URL it first saw (the old tunnel host, which no longer
+    # resolves: "[Errno 8] nodename nor servname"), so restart the app on every new address.
+    subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/org.ratecommons.app"])
 
 
 def announce():
