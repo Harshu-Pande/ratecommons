@@ -43,10 +43,26 @@ def announce():
         print("announce failed", e, flush=True)
 
 
+def healthy() -> bool:
+    try:
+        urllib.request.urlopen(f"{url}/gradio_api/info", timeout=20, context=CTX).read(1)
+        return True
+    except Exception:
+        return False
+
+
+# Quick tunnels can expire server-side ("Tunnel not found") while cloudflared keeps retrying forever, so
+# check the public address every minute and restart (launchd) after three failures in a row.
+fails, n = 0, 0
+time.sleep(20)
 while p.poll() is None:
-    announce()
-    for _ in range(240):  # every 4 minutes
-        if p.poll() is not None:
-            break
-        time.sleep(1)
+    if n % 4 == 0:
+        announce()
+    fails = 0 if healthy() else fails + 1
+    if fails >= 3:
+        print("public address stopped answering; restarting the tunnel", flush=True)
+        p.kill()
+        break
+    n += 1
+    time.sleep(60)
 sys.exit(1)
