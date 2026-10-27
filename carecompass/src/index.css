@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body { @apply bg-canvas text-ink antialiased font-sans; }
+  h1, h2, h3 { @apply font-display tracking-tight; }
+  :focus-visible { outline: 2px solid #4f8fe3; outline-offset: 2px; }
+}
+
+@layer components {
+  .field { @apply h-12 rounded-xl border border-line bg-white px-3.5 text-[15px] text-ink shadow-sm outline-none transition
+                  placeholder:text-ink-mute/70 hover:border-brand-200 focus:border-brand-400 focus:ring-4 focus:ring-brand-100; }
+  .btn-primary { @apply inline-flex items-center justify-center gap-2 rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-semibold
+                        text-white shadow-sm transition hover:bg-brand-700 focus:outline-none focus-visible:ring-4
+                        focus-visible:ring-brand-200 disabled:cursor-not-allowed disabled:opacity-50; }
+  .btn-cta { @apply inline-flex items-center justify-center gap-2 rounded-xl bg-mint-600 px-6 py-3.5 text-base font-bold
+                    text-white shadow-sm transition hover:bg-mint-700 focus:outline-none focus-visible:ring-4 focus-visible:ring-mint-200; }
+  .btn-ghost { @apply inline-flex items-center justify-center gap-2 rounded-xl border border-line bg-white px-4 py-2.5 text-sm
+                      font-semibold text-ink-soft transition hover:border-brand-200 hover:text-brand-700; }
+  .card { @apply rounded-2xl border border-line bg-white shadow-card; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold; }
+  .eyebrow { @apply text-xs font-bold uppercase tracking-[0.14em] text-brand-600; }
+  .prose-cc p { @apply mt-3 leading-relaxed text-ink-soft; }
+  .prose-cc ul { @apply mt-3 list-disc space-y-1.5 pl-5 text-ink-soft; }
+  .prose-cc li::marker { @apply text-brand-400; }
+  .prose-cc a { @apply font-medium text-brand-600 underline decoration-brand-200 underline-offset-2 hover:text-brand-800; }
+}
+
+/* map pins */
+.price-pin { background: none; border: 0; }
+.price-pin > div { position: relative; display: inline-flex; align-items: center; white-space: nowrap; color: #fff;
+  cursor: pointer; border: 2px solid #fff; border-radius: 999px; padding: 4px 9px; font-size: 12.5px; font-weight: 700;
+  line-height: 1; transition: transform .12s; transform: translate(-50%, -100%); box-shadow: 0 2px 8px #0f1f3347; }
+.price-pin > div:after { content: ""; position: absolute; bottom: -7px; left: 50%; transform: translate(-50%);
+  border: 6px solid transparent; border-bottom: 0; border-top-color: inherit; filter: drop-shadow(0 1px #fff); }
+.price-pin.low > div { background: #059669; border-top-color: #059669; }
+.price-pin.mid > div { background: #2a6fd0; }
+.price-pin.high > div { background: #b45309; }
+.price-pin.none > div { background: #6b7c93; }
+.price-pin.low > div:after { border-top-color: #059669; }
+.price-pin.mid > div:after { border-top-color: #2a6fd0; }
+.price-pin.high > div:after { border-top-color: #b45309; }
+.price-pin.none > div:after { border-top-color: #6b7c93; }
+.price-pin.active > div { z-index: 1000; transform: translate(-50%, -100%) scale(1.18);
+  box-shadow: 0 0 0 4px #fbbf24b3, 0 4px 14px #0f1f3359; }
+.home-pin > div { width: 18px; height: 18px; border: 3px solid #fff; border-radius: 999px; background: #143a73;
+  transform: translate(-50%, -50%); box-shadow: 0 0 0 6px #143a732e; }

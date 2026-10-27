@@ -5,6 +5,23 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-27
 
+- **CareCompass v2 data: places, qualified clinicians, and Medicare evidence (`shop.py`).** The patient app needs
+  prices per place, not per contract, and contracts carry no addresses. A place is a normalized practice address
+  (street without suite/floor + ZIP5) from NPPES and Medicare's clinician directory. A contract's price shows at a
+  place when one of its clinicians *whose specialty does that care* practices there (radiologists for readings,
+  therapists for therapy...). This drops "ghost" rates (NPs and counselors carrying a group's CT fee schedule).
+  Badges: confirmed (a qualified clinician billed the code or its 4-character family to Medicare), likely
+  (qualified, no Medicare record: common in pediatrics), hidden (outside 0.15x-15x of the state's Medicare PFS),
+  percentage (no dollar amount). Hospitals' reading groups come from CMS facility affiliations (radiologist ->
+  CCN). Flat all-services contracts (UHC $200 per diem urgent care) are kept as a `FLAT` visit price.
+- **No OR in big join conditions.** `JOIN ... ON a.code = b.code OR b.code = 'FLAT'` made DuckDB fall back to a
+  nested-loop join and spilled 10 GB of temp files for one state. Flat contracts now join through a separate
+  `qx` table (`UNION ALL` of per-code rows and one `FLAT` row per group/place/procedure).
+- **Place x contract joins run one procedure at a time.** Tennessee's offers are 5-14M rows per payer before
+  grouping (largest groups have 1,200 places); a single `GROUP BY ALL` with list columns ran out of 4 GB.
+  Looping over the 56 procedures and inserting keeps each step small.
+- **data.cms.gov rejects a browser-like User-Agent from our hosts (403)**; the default `requests` UA works.
+
 - **The wave orchestrator now reads the bucket, not run history.** It found mapped shards by scanning the
   last 10 map runs' job names: UHC experiments pushed Aetna's map runs out of that window and mixed payers,
   and one failed page (HTTP 502) killed it. Mapped shards are now the shard folders with a `metas.json`

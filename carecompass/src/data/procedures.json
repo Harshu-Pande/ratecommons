@@ -1,0 +1,882 @@
+[
+ {
+  "id": "ct-head",
+  "name": "CT scan of the head (no contrast)",
+  "short": "Head CT",
+  "cat": "Imaging",
+  "keywords": "ct cat head brain scan concussion injury bleeding fall child",
+  "about": "A fast X-ray based scan of the head, often after a head injury or a sudden severe headache.",
+  "time": "5\u201310 min",
+  "kind": "imaging",
+  "codes": [
+   "70450"
+  ],
+  "modality": "CT",
+  "body": "Head",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "ct-sinus",
+  "name": "CT scan of the sinuses (no contrast)",
+  "short": "Sinus CT",
+  "cat": "Imaging",
+  "keywords": "ct sinus sinusitis face",
+  "about": "A CT of the sinuses, usually for long-lasting sinus infections or before sinus surgery.",
+  "time": "5\u201310 min",
+  "kind": "imaging",
+  "codes": [
+   "70486"
+  ],
+  "modality": "CT",
+  "body": "Head",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "ct-chest",
+  "name": "CT scan of the chest (no contrast)",
+  "short": "Chest CT",
+  "cat": "Imaging",
+  "keywords": "ct chest lung nodule cough",
+  "about": "A detailed scan of the lungs and chest, for example to follow a lung nodule.",
+  "time": "5\u201310 min",
+  "kind": "imaging",
+  "codes": [
+   "71250"
+  ],
+  "modality": "CT",
+  "body": "Chest",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "ct-lung-screen",
+  "name": "Low-dose CT lung cancer screening",
+  "short": "Lung screening CT",
+  "cat": "Imaging",
+  "keywords": "lung cancer screening low dose ct smoker",
+  "about": "A yearly low-dose chest CT for people at high risk of lung cancer. Often covered at $0 as preventive care.",
+  "time": "5 min",
+  "kind": "imaging",
+  "codes": [
+   "71271"
+  ],
+  "modality": "CT",
+  "body": "Chest",
+  "peds": true,
+  "preventive": true
+ },
+ {
+  "id": "ct-abd-pel-noncon",
+  "name": "CT scan of the abdomen & pelvis (no contrast)",
+  "short": "Abdomen CT (no contrast)",
+  "cat": "Imaging",
+  "keywords": "ct abdomen pelvis kidney stone flank pain no contrast",
+  "about": "A CT of the belly and pelvis without dye, commonly used to look for kidney stones.",
+  "time": "5\u201310 min",
+  "kind": "imaging",
+  "codes": [
+   "74176"
+  ],
+  "modality": "CT",
+  "body": "Abdomen",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "ct-abd-pel",
+  "name": "CT scan of the abdomen & pelvis (with contrast)",
+  "short": "Abdomen & pelvis CT",
+  "cat": "Imaging",
+  "keywords": "ct cat abdomen pelvis belly stomach appendicitis contrast",
+  "about": "A CT of the belly and pelvis with IV dye, for abdominal pain, infections or cancer staging.",
+  "time": "10\u201315 min",
+  "kind": "imaging",
+  "codes": [
+   "74177"
+  ],
+  "modality": "CT",
+  "body": "Abdomen",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "ct-neck-spine",
+  "name": "CT scan of the neck spine (no contrast)",
+  "short": "Neck spine CT",
+  "cat": "Imaging",
+  "keywords": "ct cervical spine neck injury",
+  "about": "A CT of the bones of the neck, often after an accident.",
+  "time": "5\u201310 min",
+  "kind": "imaging",
+  "codes": [
+   "72125"
+  ],
+  "modality": "CT",
+  "body": "Spine",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "mri-brain",
+  "name": "MRI of the brain (no contrast)",
+  "short": "Brain MRI (no contrast)",
+  "cat": "Imaging",
+  "keywords": "mri brain head neuro headache",
+  "about": "A magnetic scan of the brain without dye.",
+  "time": "30\u201345 min",
+  "kind": "imaging",
+  "codes": [
+   "70551"
+  ],
+  "modality": "MRI",
+  "body": "Head",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "mri-brain-contrast",
+  "name": "MRI of the brain (without & with contrast)",
+  "short": "Brain MRI",
+  "cat": "Imaging",
+  "keywords": "mri brain head contrast neuro headache ms stroke seizure tumor",
+  "about": "A detailed magnetic scan of the brain, before and after an IV dye. Common for seizures, MS or tumors.",
+  "time": "45\u201360 min",
+  "kind": "imaging",
+  "codes": [
+   "70553"
+  ],
+  "modality": "MRI",
+  "body": "Head",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "mri-neck-spine",
+  "name": "MRI of the neck spine (no contrast)",
+  "short": "Neck spine MRI",
+  "cat": "Imaging",
+  "keywords": "mri cervical spine neck pain arm numbness",
+  "about": "A magnetic scan of the neck spine, discs and nerves.",
+  "time": "30\u201345 min",
+  "kind": "imaging",
+  "codes": [
+   "72141"
+  ],
+  "modality": "MRI",
+  "body": "Spine",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "mri-low-back",
+  "name": "MRI of the lower back (no contrast)",
+  "short": "Lower back MRI",
+  "cat": "Imaging",
+  "keywords": "mri lumbar spine lower back sciatica disc herniation back pain",
+  "about": "A magnetic scan of the lower spine for back pain with leg symptoms (sciatica).",
+  "time": "30\u201345 min",
+  "kind": "imaging",
+  "codes": [
+   "72148"
+  ],
+  "modality": "MRI",
+  "body": "Spine",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "mri-knee",
+  "name": "MRI of the knee, ankle or hip joint (no contrast)",
+  "short": "Knee / leg joint MRI",
+  "cat": "Imaging",
+  "keywords": "mri knee ankle hip joint leg acl meniscus sports injury",
+  "about": "A magnetic scan of one leg joint (most often the knee) for torn ligaments or cartilage.",
+  "time": "30\u201345 min",
+  "kind": "imaging",
+  "codes": [
+   "73721"
+  ],
+  "modality": "MRI",
+  "body": "Leg",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "mri-shoulder",
+  "name": "MRI of the shoulder, elbow or wrist joint (no contrast)",
+  "short": "Shoulder / arm joint MRI",
+  "cat": "Imaging",
+  "keywords": "mri shoulder rotator cuff elbow wrist joint arm",
+  "about": "A magnetic scan of one arm joint, often the shoulder for rotator cuff injuries.",
+  "time": "30\u201345 min",
+  "kind": "imaging",
+  "codes": [
+   "73221"
+  ],
+  "modality": "MRI",
+  "body": "Arm",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "mri-abdomen",
+  "name": "MRI of the abdomen (without & with contrast)",
+  "short": "Abdomen MRI",
+  "cat": "Imaging",
+  "keywords": "mri abdomen liver pancreas kidney",
+  "about": "A magnetic scan of the liver, pancreas and kidneys with IV dye.",
+  "time": "45\u201360 min",
+  "kind": "imaging",
+  "codes": [
+   "74183"
+  ],
+  "modality": "MRI",
+  "body": "Abdomen",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "us-abdomen",
+  "name": "Ultrasound of the abdomen (complete)",
+  "short": "Abdominal ultrasound",
+  "cat": "Imaging",
+  "keywords": "ultrasound sonogram abdomen liver gallbladder gallstones kidney",
+  "about": "A painless sound-wave scan of the liver, gallbladder, pancreas, spleen and kidneys. No radiation.",
+  "time": "20\u201330 min",
+  "kind": "imaging",
+  "codes": [
+   "76700"
+  ],
+  "modality": "Ultrasound",
+  "body": "Abdomen",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "us-abdomen-limited",
+  "name": "Ultrasound of the abdomen (limited, e.g. gallbladder)",
+  "short": "Gallbladder ultrasound",
+  "cat": "Imaging",
+  "keywords": "ultrasound gallbladder right upper quadrant limited",
+  "about": "A focused ultrasound of one area, most often the gallbladder.",
+  "time": "15\u201320 min",
+  "kind": "imaging",
+  "codes": [
+   "76705"
+  ],
+  "modality": "Ultrasound",
+  "body": "Abdomen",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "us-pelvis",
+  "name": "Pelvic ultrasound (through the belly, non-pregnancy)",
+  "short": "Pelvic ultrasound",
+  "cat": "Imaging",
+  "keywords": "ultrasound pelvis uterus ovaries bladder",
+  "about": "A sound-wave scan of the pelvis through the belly.",
+  "time": "20\u201330 min",
+  "kind": "imaging",
+  "codes": [
+   "76856"
+  ],
+  "modality": "Ultrasound",
+  "body": "Pelvis",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "us-transvaginal",
+  "name": "Transvaginal ultrasound (non-pregnancy)",
+  "short": "Transvaginal ultrasound",
+  "cat": "Imaging",
+  "keywords": "ultrasound transvaginal pelvic uterus ovaries gynecology",
+  "about": "An internal ultrasound of the uterus and ovaries, often for pelvic pain or bleeding.",
+  "time": "15\u201330 min",
+  "kind": "imaging",
+  "codes": [
+   "76830"
+  ],
+  "modality": "Ultrasound",
+  "body": "Pelvis",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "us-pregnancy",
+  "name": "Pregnancy ultrasound (after 14 weeks, one baby)",
+  "short": "Pregnancy ultrasound",
+  "cat": "Imaging",
+  "keywords": "ultrasound pregnancy ob obstetric anatomy scan baby prenatal sonogram",
+  "about": "A standard ultrasound in the 2nd or 3rd trimester to check the baby's growth and anatomy.",
+  "time": "30\u201345 min",
+  "kind": "imaging",
+  "codes": [
+   "76805"
+  ],
+  "modality": "Ultrasound",
+  "body": "Pelvis",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "us-thyroid",
+  "name": "Ultrasound of the thyroid / neck",
+  "short": "Thyroid ultrasound",
+  "cat": "Imaging",
+  "keywords": "ultrasound thyroid neck nodule",
+  "about": "A sound-wave scan of the thyroid and neck.",
+  "time": "15\u201320 min",
+  "kind": "imaging",
+  "codes": [
+   "76536"
+  ],
+  "modality": "Ultrasound",
+  "body": "Neck",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "us-breast",
+  "name": "Breast ultrasound (one breast, limited)",
+  "short": "Breast ultrasound",
+  "cat": "Imaging",
+  "keywords": "ultrasound breast lump",
+  "about": "A focused ultrasound of a breast lump or a spot seen on a mammogram.",
+  "time": "15\u201320 min",
+  "kind": "imaging",
+  "codes": [
+   "76642"
+  ],
+  "modality": "Ultrasound",
+  "body": "Breast",
+  "peds": false,
+  "preventive": false
+ },
+ {
+  "id": "us-carotid",
+  "name": "Ultrasound of the neck arteries (carotid)",
+  "short": "Carotid ultrasound",
+  "cat": "Imaging",
+  "keywords": "carotid ultrasound duplex stroke neck arteries",
+  "about": "Checks the neck arteries for narrowing.",
+  "time": "30 min",
+  "kind": "imaging",
+  "codes": [
+   "93880"
+  ],
+  "modality": "Ultrasound",
+  "body": "Neck",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "mammo-diag-one",
+  "name": "Diagnostic mammogram (one breast)",
+  "short": "Diagnostic mammogram (one side)",
+  "cat": "Imaging",
+  "keywords": "mammogram mammography breast diagnostic lump",
+  "about": "A detailed mammogram of one breast to follow up a lump, a symptom or an abnormal screening.",
+  "time": "20\u201330 min",
+  "kind": "imaging",
+  "codes": [
+   "77065"
+  ],
+  "modality": "Mammogram",
+  "body": "Breast",
+  "peds": false,
+  "preventive": false
+ },
+ {
+  "id": "mammo-diag-both",
+  "name": "Diagnostic mammogram (both breasts)",
+  "short": "Diagnostic mammogram (both)",
+  "cat": "Imaging",
+  "keywords": "mammogram mammography breast diagnostic both",
+  "about": "A detailed mammogram of both breasts after a symptom or an abnormal screening.",
+  "time": "20\u201330 min",
+  "kind": "imaging",
+  "codes": [
+   "77066"
+  ],
+  "modality": "Mammogram",
+  "body": "Breast",
+  "peds": false,
+  "preventive": false
+ },
+ {
+  "id": "mammo-screen",
+  "name": "Screening mammogram (both breasts)",
+  "short": "Screening mammogram",
+  "cat": "Imaging",
+  "keywords": "mammogram screening yearly breast cancer",
+  "about": "The routine yearly mammogram for people with no symptoms. Usually covered at $0 as preventive care.",
+  "time": "15\u201320 min",
+  "kind": "imaging",
+  "codes": [
+   "77067"
+  ],
+  "modality": "Mammogram",
+  "body": "Breast",
+  "peds": false,
+  "preventive": true
+ },
+ {
+  "id": "dexa",
+  "name": "Bone density scan (DEXA)",
+  "short": "Bone density (DEXA)",
+  "cat": "Imaging",
+  "keywords": "dexa bone density osteoporosis dxa",
+  "about": "A low-dose X-ray that measures bone strength.",
+  "time": "10\u201320 min",
+  "kind": "imaging",
+  "codes": [
+   "77080"
+  ],
+  "modality": "X-ray",
+  "body": "Hip/spine",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "xr-chest",
+  "name": "Chest X-ray (2 views)",
+  "short": "Chest X-ray",
+  "cat": "Imaging",
+  "keywords": "xray x-ray chest pneumonia cough lungs",
+  "about": "Two standard X-ray pictures of the chest.",
+  "time": "5\u201310 min",
+  "kind": "imaging",
+  "codes": [
+   "71046"
+  ],
+  "modality": "X-ray",
+  "body": "Chest",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "xr-low-back",
+  "name": "X-ray of the lower back (4+ views)",
+  "short": "Lower back X-ray",
+  "cat": "Imaging",
+  "keywords": "xray x-ray lumbar spine lower back radiograph",
+  "about": "X-ray pictures of the lower spine from at least four angles.",
+  "time": "10\u201315 min",
+  "kind": "imaging",
+  "codes": [
+   "72110"
+  ],
+  "modality": "X-ray",
+  "body": "Spine",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "xr-knee",
+  "name": "X-ray of the knee (3 views)",
+  "short": "Knee X-ray",
+  "cat": "Imaging",
+  "keywords": "xray x-ray knee injury arthritis",
+  "about": "Three X-ray pictures of the knee.",
+  "time": "5\u201310 min",
+  "kind": "imaging",
+  "codes": [
+   "73562"
+  ],
+  "modality": "X-ray",
+  "body": "Leg",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "xr-shoulder",
+  "name": "X-ray of the shoulder (2+ views)",
+  "short": "Shoulder X-ray",
+  "cat": "Imaging",
+  "keywords": "xray x-ray shoulder injury",
+  "about": "X-ray pictures of the shoulder.",
+  "time": "5\u201310 min",
+  "kind": "imaging",
+  "codes": [
+   "73030"
+  ],
+  "modality": "X-ray",
+  "body": "Arm",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "xr-ankle",
+  "name": "X-ray of the ankle (3+ views)",
+  "short": "Ankle X-ray",
+  "cat": "Imaging",
+  "keywords": "xray x-ray ankle sprain fracture",
+  "about": "X-ray pictures of the ankle, often after a twist or fall.",
+  "time": "5\u201310 min",
+  "kind": "imaging",
+  "codes": [
+   "73610"
+  ],
+  "modality": "X-ray",
+  "body": "Leg",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "xr-hand",
+  "name": "X-ray of the hand (3+ views)",
+  "short": "Hand X-ray",
+  "cat": "Imaging",
+  "keywords": "xray x-ray hand finger fracture",
+  "about": "X-ray pictures of the hand.",
+  "time": "5\u201310 min",
+  "kind": "imaging",
+  "codes": [
+   "73130"
+  ],
+  "modality": "X-ray",
+  "body": "Arm",
+  "peds": true,
+  "preventive": false
+ },
+ {
+  "id": "pet-ct",
+  "name": "PET/CT scan (skull base to mid-thigh)",
+  "short": "PET/CT",
+  "cat": "Imaging",
+  "keywords": "pet ct cancer staging scan",
+  "about": "A scan that shows how active tissues are, mostly for cancer staging.",
+  "time": "1.5\u20132 hours",
+  "kind": "imaging",
+  "codes": [
+   "78815"
+  ],
+  "modality": "PET",
+  "body": "Body",
+  "peds": false,
+  "preventive": false
+ },
+ {
+  "id": "office-new",
+  "name": "Office visit \u2014 new patient (moderate)",
+  "short": "New-patient visit",
+  "cat": "Visits",
+  "keywords": "doctor visit new patient primary care checkup sick visit appointment",
+  "about": "A first visit with a doctor or nurse practitioner for a new problem, at a typical (moderate) level.",
+  "time": "30\u201345 min",
+  "kind": "visit",
+  "codes": [
+   "99203"
+  ],
+  "alt": [
+   "99204"
+  ]
+ },
+ {
+  "id": "office-return",
+  "name": "Office visit \u2014 returning patient (moderate)",
+  "short": "Returning-patient visit",
+  "cat": "Visits",
+  "keywords": "doctor visit follow up established primary care sick visit appointment",
+  "about": "A visit with your own doctor or nurse practitioner for a problem, at the most common level.",
+  "time": "15\u201330 min",
+  "kind": "visit",
+  "codes": [
+   "99213"
+  ],
+  "alt": [
+   "99214"
+  ]
+ },
+ {
+  "id": "urgent-care",
+  "name": "Urgent care visit",
+  "short": "Urgent care visit",
+  "cat": "Visits",
+  "keywords": "urgent care walk in clinic sick visit flu strep cold",
+  "about": "A walk-in visit at an urgent care clinic. Some insurers pay these clinics one flat amount per visit; others pay a visit code plus an urgent-care fee.",
+  "time": "30\u201360 min",
+  "kind": "visit",
+  "codes": [
+   "99213",
+   "99203"
+  ],
+  "addon": [
+   "S9083",
+   "S9088"
+  ],
+  "place_kind": "urgent"
+ },
+ {
+  "id": "physical-adult",
+  "name": "Yearly physical (adult, 40\u201364)",
+  "short": "Adult physical",
+  "cat": "Visits",
+  "keywords": "annual physical wellness preventive checkup",
+  "about": "A yearly preventive checkup. Usually covered at $0 in-network under ACA preventive-care rules.",
+  "time": "30\u201345 min",
+  "kind": "visit",
+  "codes": [
+   "99396"
+  ],
+  "alt": [
+   "99386"
+  ],
+  "preventive": true
+ },
+ {
+  "id": "psych-eval",
+  "name": "Psychiatric evaluation (first visit)",
+  "short": "Psychiatry first visit",
+  "cat": "Mental health",
+  "keywords": "psychiatrist evaluation mental health depression anxiety adhd medication",
+  "about": "A first visit with a psychiatrist or psychiatric nurse practitioner, including a medical evaluation.",
+  "time": "60\u201390 min",
+  "kind": "visit",
+  "codes": [
+   "90792"
+  ]
+ },
+ {
+  "id": "psych-followup",
+  "name": "Psychiatry follow-up (medication management)",
+  "short": "Psychiatry follow-up",
+  "cat": "Mental health",
+  "keywords": "psychiatrist follow up medication management mental health",
+  "about": "A returning visit with a psychiatrist or psychiatric NP to review medications, at the most common level.",
+  "time": "20\u201330 min",
+  "kind": "visit",
+  "codes": [
+   "99214"
+  ]
+ },
+ {
+  "id": "therapy-60",
+  "name": "Talk therapy session (53+ minutes)",
+  "short": "Therapy (60 min)",
+  "cat": "Mental health",
+  "keywords": "therapy counseling psychotherapy therapist counselor mental health",
+  "about": "One individual psychotherapy session of about an hour with a therapist, counselor or psychologist.",
+  "time": "53\u201360 min",
+  "kind": "service",
+  "codes": [
+   "90837"
+  ]
+ },
+ {
+  "id": "therapy-45",
+  "name": "Talk therapy session (38\u201352 minutes)",
+  "short": "Therapy (45 min)",
+  "cat": "Mental health",
+  "keywords": "therapy counseling psychotherapy therapist counselor mental health",
+  "about": "One individual psychotherapy session of about 45 minutes.",
+  "time": "45 min",
+  "kind": "service",
+  "codes": [
+   "90834"
+  ]
+ },
+ {
+  "id": "therapy-intake",
+  "name": "Therapy intake evaluation",
+  "short": "Therapy intake",
+  "cat": "Mental health",
+  "keywords": "therapy intake first session psychological evaluation counselor",
+  "about": "The first session with a therapist, counselor or psychologist to understand what you need.",
+  "time": "60 min",
+  "kind": "service",
+  "codes": [
+   "90791"
+  ]
+ },
+ {
+  "id": "tms",
+  "name": "TMS therapy for depression (per treatment session)",
+  "short": "TMS session",
+  "cat": "Mental health",
+  "keywords": "tms transcranial magnetic stimulation depression neuromodulation",
+  "about": "Transcranial magnetic stimulation: a non-drug depression treatment given in daily sessions over several weeks. The first session (with motor-threshold mapping) is billed differently.",
+  "time": "20\u201340 min",
+  "kind": "service",
+  "codes": [
+   "90868",
+   "90867"
+  ]
+ },
+ {
+  "id": "lab-cmp",
+  "name": "Comprehensive metabolic panel (blood test)",
+  "short": "CMP blood test",
+  "cat": "Lab",
+  "keywords": "blood test cmp metabolic panel kidney liver electrolytes lab",
+  "about": "A common blood test for kidney and liver function, blood sugar and electrolytes.",
+  "time": "5 min",
+  "kind": "service",
+  "codes": [
+   "80053"
+  ]
+ },
+ {
+  "id": "lab-lipid",
+  "name": "Cholesterol panel (blood test)",
+  "short": "Cholesterol test",
+  "cat": "Lab",
+  "keywords": "cholesterol lipid panel blood test lab",
+  "about": "Measures cholesterol and triglycerides.",
+  "time": "5 min",
+  "kind": "service",
+  "codes": [
+   "80061"
+  ]
+ },
+ {
+  "id": "lab-cbc",
+  "name": "Complete blood count (blood test)",
+  "short": "CBC blood test",
+  "cat": "Lab",
+  "keywords": "cbc complete blood count anemia blood test lab",
+  "about": "Counts red cells, white cells and platelets.",
+  "time": "5 min",
+  "kind": "service",
+  "codes": [
+   "85025"
+  ]
+ },
+ {
+  "id": "lab-a1c",
+  "name": "Hemoglobin A1c (diabetes blood test)",
+  "short": "A1c test",
+  "cat": "Lab",
+  "keywords": "a1c hemoglobin diabetes sugar blood test lab",
+  "about": "Shows average blood sugar over about three months.",
+  "time": "5 min",
+  "kind": "service",
+  "codes": [
+   "83036"
+  ]
+ },
+ {
+  "id": "lab-tsh",
+  "name": "Thyroid test (TSH)",
+  "short": "TSH thyroid test",
+  "cat": "Lab",
+  "keywords": "thyroid tsh blood test lab",
+  "about": "Checks how well the thyroid is working.",
+  "time": "5 min",
+  "kind": "service",
+  "codes": [
+   "84443"
+  ]
+ },
+ {
+  "id": "pt-eval",
+  "name": "Physical therapy evaluation",
+  "short": "PT evaluation",
+  "cat": "Therapy",
+  "keywords": "physical therapy pt evaluation rehab back knee shoulder",
+  "about": "The first physical therapy visit, where the therapist assesses you and plans treatment.",
+  "time": "45\u201360 min",
+  "kind": "service",
+  "codes": [
+   "97162",
+   "97161"
+  ]
+ },
+ {
+  "id": "pt-exercise",
+  "name": "Physical therapy exercise (per 15 minutes)",
+  "short": "PT exercise (15 min)",
+  "cat": "Therapy",
+  "keywords": "physical therapy pt exercise rehab",
+  "about": "Therapeutic exercise with a physical therapist, billed per 15 minutes. A visit is usually 2\u20134 units.",
+  "time": "15 min unit",
+  "kind": "service",
+  "codes": [
+   "97110"
+  ]
+ },
+ {
+  "id": "ecg",
+  "name": "Electrocardiogram (ECG/EKG)",
+  "short": "ECG",
+  "cat": "Heart",
+  "keywords": "ecg ekg heart rhythm electrocardiogram",
+  "about": "A quick recording of the heart's rhythm.",
+  "time": "10 min",
+  "kind": "service",
+  "codes": [
+   "93000"
+  ]
+ },
+ {
+  "id": "echo",
+  "name": "Heart ultrasound (echocardiogram)",
+  "short": "Echocardiogram",
+  "cat": "Heart",
+  "keywords": "echo echocardiogram heart ultrasound murmur heart failure",
+  "about": "An ultrasound of the heart's chambers and valves.",
+  "time": "45\u201360 min",
+  "kind": "imaging",
+  "codes": [
+   "93306"
+  ]
+ },
+ {
+  "id": "stress-test",
+  "name": "Treadmill stress test",
+  "short": "Stress test",
+  "cat": "Heart",
+  "keywords": "stress test treadmill exercise heart chest pain",
+  "about": "An ECG recorded while you walk on a treadmill.",
+  "time": "45\u201360 min",
+  "kind": "service",
+  "codes": [
+   "93015"
+  ]
+ },
+ {
+  "id": "sleep-study",
+  "name": "Sleep study in a sleep lab",
+  "short": "Sleep study",
+  "cat": "Other",
+  "keywords": "sleep study apnea polysomnography snoring",
+  "about": "An overnight study in a sleep lab to diagnose sleep apnea.",
+  "time": "Overnight",
+  "kind": "imaging",
+  "codes": [
+   "95810"
+  ]
+ },
+ {
+  "id": "colonoscopy-screen",
+  "name": "Screening colonoscopy (doctor's fee)",
+  "short": "Screening colonoscopy",
+  "cat": "Procedures",
+  "keywords": "colonoscopy screening colon cancer gi",
+  "about": "The gastroenterologist's fee for a screening colonoscopy. Usually $0 as preventive care; the facility and anesthesia bill separately.",
+  "time": "30\u201360 min",
+  "kind": "service",
+  "codes": [
+   "G0121",
+   "45378"
+  ],
+  "preventive": true
+ },
+ {
+  "id": "joint-injection",
+  "name": "Joint injection (large joint, e.g. knee or shoulder)",
+  "short": "Joint injection",
+  "cat": "Procedures",
+  "keywords": "joint injection cortisone steroid knee shoulder",
+  "about": "A steroid or other injection into a large joint, without imaging guidance.",
+  "time": "15 min",
+  "kind": "service",
+  "codes": [
+   "20610"
+  ]
+ }
+]

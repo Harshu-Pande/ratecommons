@@ -280,7 +280,7 @@ def _setup(con, work: str) -> dict:
     union = " UNION ALL ".join(f"""SELECT c.npi, g.grp FROM (SELECT npi, unnest(taxonomies) AS tax FROM read_parquet('{src["clin"]}')) c
                                    JOIN taxgrp g ON g.n = {n} AND left(c.tax, {n}) = g.prefix""" for n in lens)
     con.execute(f"CREATE TABLE npigrp AS SELECT DISTINCT * FROM ({union})")
-    codes = sorted({r[0] for r in rows})
+    codes = sorted({r[2] for r in rows})
     con.execute(f"""CREATE TABLE ev AS SELECT npi, hcpcs, sum(services) AS services, max(avg_charge) AS avg_charge
                     FROM read_parquet('{src["medicare"]}') WHERE hcpcs IN ({", ".join(f"'{c}'" for c in codes)})
                     GROUP BY 1, 2""")
@@ -403,11 +403,13 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
                             JOIN read_parquet('{d}/plipg.parquet') l USING (pli) JOIN prod_{p} pr USING (ns)
                             GROUP BY ALL""")
         con.execute(f"""CREATE OR REPLACE TABLE ogr AS
-            SELECT og.*, m.proc, m.role, m.addon FROM og JOIN rolemap m ON (m.code = og.code AND (
+            SELECT og.*, m.proc, m.role, m.addon FROM og JOIN rolemap m ON m.code = og.code AND (
                    (m.kind = 'imaging' AND ((m.role = 'global' AND og.mods = '') OR (m.role = 'pro' AND og.mods = '26')
                                            OR (m.role = 'tc' AND og.mods = 'TC')))
-                   OR (m.kind <> 'imaging' AND m.role = 'any' AND og.mods = '')))
-               OR (og.code = 'FLAT' AND m.kind = 'visit' AND m.role = 'any' AND NOT m.addon)""")
+                   OR (m.kind <> 'imaging' AND m.role = 'any' AND og.mods = ''))
+            UNION ALL
+            SELECT og.*, m.proc, m.role, false AS addon FROM og
+            JOIN (SELECT DISTINCT proc, role FROM rolemap WHERE kind = 'visit' AND role = 'any' AND NOT addon) m ON og.code = 'FLAT'""")
         # groups' clinicians in this state, at their practice addresses
         con.execute(f"""CREATE OR REPLACE TABLE gp AS SELECT DISTINCT n.pg, n.npi, a.place_key
                         FROM read_parquet('{d}/pgnpi.parquet') n JOIN addr_s a USING (npi)
@@ -420,15 +422,24 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
             LEFT JOIN ev ON ev.npi = gp.npi AND ev.hcpcs = c.code
             LEFT JOIN evfam ef ON ef.npi = gp.npi AND ef.fam = left(c.code, 4)
             GROUP BY ALL""")
+        # a flat all-services contract applies to the visit whatever its code: match it to the group's best code
+        con.execute("""CREATE OR REPLACE TABLE qx AS SELECT * FROM q UNION ALL
+                       SELECT pg, place_key, proc, role, 'FLAT' AS code, max(nq), max(nev) FROM q GROUP BY ALL""")
         con.execute(f"""CREATE OR REPLACE TABLE pgs AS SELECT pg, tin,
                                coalesce(business_names[1], name) AS gname FROM read_parquet('{d}/pg.parquet')""")
         po_parts.append(f"po_{p}")
-        con.execute(f"""CREATE OR REPLACE TABLE po_{p} AS
-            SELECT q.place_key, '{p}' AS payer, o.proc, o.role, o.code, o.ntype, o.rate, o.bclass, o.office, o.prods,
-                   list(DISTINCT g.tin) AS tins, list(DISTINCT g.gname)[1:3] AS gnames, sum(q.nq) AS nq, sum(q.nev) AS nev
-            FROM ogr o JOIN q ON q.pg = o.pg AND q.proc = o.proc AND q.role = o.role AND (q.code = o.code OR o.code = 'FLAT')
-            JOIN pgs g ON g.pg = o.pg
-            GROUP BY ALL""")
+        # one procedure at a time: the place x contract join is tens of millions of rows for a big state
+        procs = [r[0] for r in con.execute("SELECT DISTINCT proc FROM ogr ORDER BY 1").fetchall()]
+        for k, proc in enumerate(procs):
+            con.execute(f"""{'CREATE OR REPLACE TABLE po_' + p + ' AS' if k == 0 else 'INSERT INTO po_' + p}
+                SELECT q.place_key, '{p}' AS payer, o.proc, o.role, o.code, o.ntype, o.rate, o.bclass, o.office, o.prods,
+                       list(DISTINCT g.tin) AS tins, list(DISTINCT g.gname)[1:3] AS gnames, sum(q.nq) AS nq, sum(q.nev) AS nev
+                FROM (SELECT * FROM ogr WHERE proc = $proc) o
+                JOIN (SELECT * FROM qx WHERE proc = $proc) q ON q.pg = o.pg AND q.role = o.role AND q.code = o.code
+                JOIN pgs g ON g.pg = o.pg
+                GROUP BY ALL""", {"proc": proc})
+        _log(json.dumps({"state": s, "payer": p, **{t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+                                                    for t in ("og", "ogr", "gp", "q", f"po_{p}")}}))
         # reading groups at hospitals: radiologists affiliated with a hospital (CMS facility affiliations)
         team_parts.append(f"team_{p}")
         con.execute(f"""CREATE OR REPLACE TABLE team_{p} AS
@@ -536,3 +547,46 @@ def _write_state(con, s: str, out: str) -> dict:
     os.makedirs(f"{out}/summary", exist_ok=True)
     json.dump([list(r) for r in summ], open(f"{out}/summary/{s}.json", "w"))
     return {"places": len(places), "files": len(files), "offers_written": n}
+
+def meta(work: str = "/tmp/shop-meta", out: str = "/tmp/shop-meta-out", upload_to: str | None = "ratecommons/work",
+         prefix: str = "shop/v1") -> dict:
+    """App lookups: meta/products.json (plan names per payer, same order as offer indexes), meta/zip3.json
+    (ZIP3 -> [lat, lng, radius_mi, states]) and meta/zip/<zip3>.json (ZIP -> [lat, lng, state])."""
+    os.makedirs(work, exist_ok=True)
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(f"{out}/meta/zip")
+    from .serving import US_STATES
+
+    con = _duck(f"{work}/duck")
+    src = {f: f"{work}/src/{f}.parquet" for f in ("addr", "zip")}
+    _fetch_many([(f"{SRC}/{f}.parquet", d) for f, d in src.items()], 2)
+    prods = {}
+    for p in PAYERS:
+        m = json.load(open(_fetch(f"{CLOUD}/{p}/meta.json", f"{work}/{p}/meta.json")))
+        prods[p] = _products(p, m)[0]
+    json.dump(prods, open(f"{out}/meta/products.json", "w"), separators=(",", ":"))
+    # a ZIP's state: where most clinicians with that ZIP practice (ZCTA files carry no state)
+    con.execute(f"""CREATE TABLE zs AS SELECT zip5, mode(state) AS state, count(*) AS n FROM read_parquet('{src["addr"]}')
+                    WHERE zip5 IS NOT NULL GROUP BY 1""")
+    con.execute(f"""CREATE TABLE z AS SELECT z.zip5, round(z.lat, 4) AS lat, round(z.lon, 4) AS lng, zs.state
+                    FROM read_parquet('{src["zip"]}') z JOIN zs USING (zip5) WHERE z.lat IS NOT NULL""")
+    by3: dict = {}
+    for zip5, lat, lng, st in con.execute("SELECT zip5, lat, lng, state FROM z ORDER BY 1").fetchall():
+        by3.setdefault(zip5[:3], {})[zip5] = [lat, lng, st]
+    for z3, d in by3.items():
+        json.dump(d, open(f"{out}/meta/zip/{z3}.json", "w"), separators=(",", ":"))
+    rows = con.execute("""WITH c AS (SELECT left(zip5, 3) AS z3, avg(lat) AS clat, avg(lng) AS clng FROM z GROUP BY 1),
+        r AS (SELECT c.z3, c.clat, c.clng, max(3958.8 * 2 * asin(sqrt(pow(sin(radians(z.lat - c.clat) / 2), 2)
+                     + cos(radians(c.clat)) * cos(radians(z.lat)) * pow(sin(radians(z.lng - c.clng) / 2), 2)))) AS rad
+              FROM z JOIN c ON left(z.zip5, 3) = c.z3 GROUP BY ALL),
+        s AS (SELECT left(zip5, 3) AS z3, list(DISTINCT state ORDER BY state) AS states FROM zs WHERE n >= 5 AND state IN (SELECT unnest(?)) GROUP BY 1)
+        SELECT r.z3, round(clat, 4), round(clng, 4), least(ceil(rad), 250), coalesce(s.states, []) FROM r LEFT JOIN s USING (z3)""",
+        [sorted(US_STATES)]).fetchall()
+    json.dump({z3: [lat, lng, int(rad or 0), sts] for z3, lat, lng, rad, sts in rows}, open(f"{out}/meta/zip3.json", "w"),
+              separators=(",", ":"))
+    res = {"zip3": len(rows), "zips": sum(len(d) for d in by3.values()), "products": {p: len(v) for p, v in prods.items()}}
+    if upload_to:
+        from .cloudpack import upload
+
+        res["uploaded"] = upload(out, prefix, upload_to)
+    return res
