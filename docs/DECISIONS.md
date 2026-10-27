@@ -5,6 +5,13 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-27
 
+- **UHC products share most of their price facts (bottom-k sketch, k=20,000, 6 product files).** Normalized
+  price facts of the mapped parts: Choice Plus C2 is 99% contained in a 0L Choice Plus file; two 0L/Select Plus
+  TPA files have Jaccard 0.83; the Behavioral Health P3 file is 91% inside a 0L file; every small file is 68-99%
+  inside some bigger one, while pairs of different networks overlap 36-64%. So storing each file as "its base +
+  added facts - removed facts" (base = the most-containing file by sketch) should cut stored facts by well over
+  half; whole-file dedup (4 TB of 93.8 TB) cannot. Next: fact-level store with per-file membership.
+
 - **CareCompass v2 data: places, qualified clinicians, and Medicare evidence (`shop.py`).** The patient app needs
   prices per place, not per contract, and contracts carry no addresses. A place is a normalized practice address
   (street without suite/floor + ZIP5) from NPPES and Medicare's clinician directory. A contract's price shows at a

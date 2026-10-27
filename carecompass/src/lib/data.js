@@ -35,13 +35,13 @@ export async function loadPlaces(procId, origin, radius) {
   }
   const files = await Promise.all(want.slice(0, 160).map(getJSON))
   const out = []
-  for (const f of files) if (f) for (const p of f.places) out.push(p)
+  for (const f of files) if (f) for (const p of f.places) { p.g = f.g || {}; out.push(p) }
   return out
 }
 
 // offer tuple fields
 const PAYER = 0, ROLE = 1, CODE = 2, NTYPE = 3, RATE = 4, INST = 5, OFFICE = 6, BADGE = 7, PRODS = 8, TINS = 9,
-  GNAMES = 10, NQ = 11, NEV = 12
+  GNAMES = 10, NQ = 11, NEV = 12, LO = 13, HI = 14, N = 15
 export const BADGE_RANK = { c: 3, l: 2, h: 1, x: 0 }
 const DOLLAR = (o) => o[BADGE] !== 'x'
 
@@ -51,14 +51,18 @@ const median = (xs) => {
   return s[Math.floor((s.length - 1) / 2)]
 }
 
-function pick(offers, filter) {
-  const xs = offers.filter(filter)
+function pick(offers, filter, g = {}) {
+  let xs = offers.filter(filter)
   if (!xs.length) return null
+  // prefer the strongest evidence: confirmed over likely over hidden
+  const top = Math.max(...xs.map((o) => BADGE_RANK[o[BADGE]]))
+  xs = xs.filter((o) => BADGE_RANK[o[BADGE]] === top)
   const rates = xs.map((o) => o[RATE])
   const best = xs.reduce((b, o) => (BADGE_RANK[o[BADGE]] > BADGE_RANK[b[BADGE]] ? o : b), xs[0])
-  const groups = [...new Set(xs.flatMap((o) => o[GNAMES] || []))]
+  const groups = [...new Set(xs.flatMap((o) => o[GNAMES] || (o[TINS] || []).map((t) => g[t]).filter(Boolean)))]
   return {
-    rate: median(rates), lo: Math.min(...rates), hi: Math.max(...rates), n: xs.length, badge: best[BADGE],
+    rate: median(rates), lo: Math.min(...xs.map((o) => o[LO] ?? o[RATE])), hi: Math.max(...xs.map((o) => o[HI] ?? o[RATE])),
+    n: xs.reduce((s, o) => s + (o[N] || 1), 0), badge: best[BADGE],
     groups, tins: [...new Set(xs.flatMap((o) => o[TINS] || []))], nq: Math.max(...xs.map((o) => o[NQ] || 0)),
     nev: Math.max(...xs.map((o) => o[NEV] || 0)), offers: xs,
   }
@@ -83,19 +87,20 @@ function priceAt0(place, proc, sel) {
   const ok = (o) => o[PAYER] === payer && (product == null || (o[PRODS] || []).includes(product))
     && (o[BADGE] === 'c' || o[BADGE] === 'l' || (showHidden && o[BADGE] === 'h'))
   const offers = (place.o || []).filter(ok)
+  const P = (f) => pick(offers, f, place.g)
   const pct = (place.o || []).filter((o) => o[PAYER] === payer && o[BADGE] === 'x' && o[NTYPE] === 'percentage'
     && (product == null || (o[PRODS] || []).includes(product)))
   const notes = []
   if (proc.kind === 'imaging') {
     const code = proc.codes[0]
-    const complete = pick(offers, (o) => o[ROLE] === 'global' && !o[INST] && o[CODE] === code)
-    const facility = pick(offers, (o) => o[CODE] === code && (o[ROLE] === 'tc' || (o[ROLE] === 'global' && o[INST])))
-    let reading = pick(offers, (o) => o[ROLE] === 'pro' && o[CODE] === code)
+    const complete = P((o) => o[ROLE] === 'global' && !o[INST] && o[CODE] === code)
+    const facility = P((o) => o[CODE] === code && (o[ROLE] === 'tc' || (o[ROLE] === 'global' && o[INST])))
+    let reading = P((o) => o[ROLE] === 'pro' && o[CODE] === code)
     let readers = null
     const team = (place.t || []).filter((t) => t[0] === payer && (product == null || (t[4] || []).includes(product)) && t[1] === code)
     if (team.length) {
       const byTin = {}
-      for (const t of team) (byTin[t[5]] ||= { tin: t[5], name: t[6], nrad: t[7], rates: [] }).rates.push(t[3])
+      for (const t of team) (byTin[t[5]] ||= { tin: t[5], name: t[6] || place.g?.[t[5]] || `Tax ID ${t[5]}`, nrad: t[7], rates: [] }).rates.push(t[3])
       readers = Object.values(byTin).map((r) => ({ ...r, rate: median(r.rates) })).sort((a, b) => b.nrad - a.nrad)
       if (!reading) reading = { rate: readers[0].rate, lo: Math.min(...readers.map((r) => r.rate)),
         hi: Math.max(...readers.map((r) => r.rate)), badge: 'l', groups: readers.map((r) => r.name), fromTeam: true }
@@ -125,11 +130,11 @@ function priceAt0(place, proc, sel) {
   }
   // visits and services
   const main = proc.codes.length > 1 && proc.kind === 'visit' && patient === 'new' ? proc.codes[1] : proc.codes[0]
-  const flat = pick(offers, (o) => o[CODE] === 'FLAT' && DOLLAR(o))
-  const base = pick(offers, (o) => o[CODE] === main)
-  const addon = (proc.addon || []).length ? pick(offers, (o) => proc.addon.includes(o[CODE])) : null
-  const alt = (proc.alt || []).length ? pick(offers, (o) => proc.alt.includes(o[CODE])) : null
-  const second = proc.codes.length > 1 && proc.kind === 'service' ? pick(offers, (o) => o[CODE] === proc.codes[1]) : null
+  const flat = P((o) => o[CODE] === 'FLAT' && DOLLAR(o))
+  const base = P((o) => o[CODE] === main)
+  const addon = (proc.addon || []).length ? P((o) => proc.addon.includes(o[CODE])) : null
+  const alt = (proc.alt || []).length ? P((o) => proc.alt.includes(o[CODE])) : null
+  const second = proc.codes.length > 1 && proc.kind === 'service' ? P((o) => o[CODE] === proc.codes[1]) : null
   if (flat && proc.kind === 'visit') {
     return { kind: 'flat', total: flat.rate, lo: flat.lo, hi: flat.hi, badge: flat.badge, flat, base, addon, alt,
       bills: [{ key: 'flat', label: 'Flat per-visit amount', short: 'flat visit fee', allowed: flat.rate, from: flat.groups[0] }],

@@ -68,9 +68,17 @@ jobs:
         with: { python-version: "3.12" }
       - run: pip install -q -e .
       - name: build ${{ matrix.states }}
-        run: ticdata shop-build --states "${{ matrix.states }}" --prefix "${{ needs.args.outputs.prefix }}"
+        run: |
+          mkdir -p reports
+          set -o pipefail
+          ticdata shop-build --states "${{ matrix.states }}" --prefix "${{ needs.args.outputs.prefix }}" 2>&1 | tee reports/output.log
       - if: always()
-        run: df -h / | tail -1
+        name: report to the ops dataset
+        run: |
+          df -h / | tail -1
+          tail -c 200000 reports/output.log > reports/output.tail.log || true
+          rm -f reports/output.log
+          ticdata put-report reports/* --prefix "runs/$(date -u +%F)-shop-${GITHUB_RUN_ID}-$(echo '${{ matrix.states }}' | tr ',' '-')" || true
 
   meta:
     needs: args
@@ -85,4 +93,8 @@ jobs:
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - run: pip install -q -e .
-      - run: ticdata shop-meta --prefix "${{ needs.args.outputs.prefix }}"
+      - run: |
+          mkdir -p reports
+          ticdata shop-meta --prefix "${{ needs.args.outputs.prefix }}" 2>&1 | tee reports/output.log
+      - if: always()
+        run: ticdata put-report reports/* --prefix "runs/$(date -u +%F)-shop-${GITHUB_RUN_ID}-meta" || true

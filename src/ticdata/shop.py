@@ -428,22 +428,45 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
         con.execute(f"""CREATE OR REPLACE TABLE pgs AS SELECT pg, tin,
                                coalesce(business_names[1], name) AS gname FROM read_parquet('{d}/pg.parquet')""")
         po_parts.append(f"po_{p}")
-        # one procedure at a time: the place x contract join is tens of millions of rows for a big state
+        con.execute("CREATE TABLE IF NOT EXISTS tn (tin VARCHAR, gname VARCHAR)")
+        con.execute("INSERT INTO tn SELECT tin, mode(gname) FROM pgs WHERE tin NOT IN (SELECT tin FROM tn) GROUP BY tin")
+        # price sanity per row: Medicare PFS for the state (office = non-facility amount), else this payer's own spread
+        con.execute(f"""CREATE OR REPLACE TABLE chk AS
+            WITH d AS (SELECT proc, role, code, quantile_cont(rate, 0.02) AS p02, quantile_cont(rate, 0.98) AS p98
+                       FROM ogr WHERE ntype IN ('negotiated', 'fee schedule', 'derived') GROUP BY ALL)
+            SELECT DISTINCT o.proc, o.role, o.code, o.office, m.mcr, d.p02, d.p98 FROM (SELECT DISTINCT proc, role, code, office FROM ogr) o
+            LEFT JOIN (SELECT hcpcs, m, nf, coalesce(fa, nf) AS fa FROM pfs WHERE state = '{s}') m0
+                   ON m0.hcpcs = o.code AND m0.m = CASE WHEN o.role = 'pro' THEN '26' WHEN o.role = 'tc' THEN 'TC' ELSE '' END
+            CROSS JOIN LATERAL (SELECT CASE WHEN o.office THEN m0.nf ELSE m0.fa END AS mcr) m
+            LEFT JOIN d USING (proc, role, code)""")
+        # one procedure at a time (the place x contract join is tens of millions of rows for a big state), then
+        # collapsed: a hospital campus can carry 2,000 provider groups with 2,500 distinct rates for one visit code
         procs = [r[0] for r in con.execute("SELECT DISTINCT proc FROM ogr ORDER BY 1").fetchall()]
         for k, proc in enumerate(procs):
             con.execute(f"""{'CREATE OR REPLACE TABLE po_' + p + ' AS' if k == 0 else 'INSERT INTO po_' + p}
-                SELECT q.place_key, '{p}' AS payer, o.proc, o.role, o.code, o.ntype, o.rate, o.bclass, o.office, o.prods,
-                       list(DISTINCT g.tin) AS tins, list(DISTINCT g.gname)[1:3] AS gnames, sum(q.nq) AS nq, sum(q.nev) AS nev
-                FROM (SELECT * FROM ogr WHERE proc = $proc) o
-                JOIN (SELECT * FROM qx WHERE proc = $proc) q ON q.pg = o.pg AND q.role = o.role AND q.code = o.code
-                JOIN pgs g ON g.pg = o.pg
-                GROUP BY ALL""", {"proc": proc})
+                WITH x AS (
+                    SELECT q.place_key, o.proc, o.role, o.code, o.ntype, o.rate, o.bclass, o.office, o.prods, g.tin, g.gname,
+                           q.nq, q.nev,
+                           CASE WHEN o.ntype NOT IN ('negotiated', 'fee schedule', 'derived', 'per diem') THEN 'x'
+                                WHEN c.mcr > 0 AND (o.rate < 0.15 * c.mcr OR o.rate > 15 * c.mcr) THEN 'h'
+                                WHEN (c.mcr IS NULL OR c.mcr <= 0) AND o.code <> 'FLAT' AND c.p98 IS NOT NULL
+                                     AND (o.rate < c.p02 / 3 OR o.rate > c.p98 * 3) THEN 'h'
+                                WHEN q.nev > 0 THEN 'c' ELSE 'l' END AS badge
+                    FROM (SELECT * FROM ogr WHERE proc = $proc) o
+                    JOIN (SELECT * FROM qx WHERE proc = $proc) q ON q.pg = o.pg AND q.role = o.role AND q.code = o.code
+                    JOIN pgs g ON g.pg = o.pg
+                    LEFT JOIN chk c ON c.proc = o.proc AND c.role = o.role AND c.code = o.code AND c.office = o.office)
+                SELECT place_key, '{p}' AS payer, proc, role, code, ntype, median(rate) AS rate, min(rate) AS lo, max(rate) AS hi,
+                       count(*) AS n, bclass, office, prods, badge,
+                       (list(tin ORDER BY nq DESC))[1:12] AS tins, NULL::VARCHAR[] AS gnames,
+                       max(nq) AS nq, max(nev) AS nev
+                FROM x GROUP BY place_key, proc, role, code, ntype, bclass, office, prods, badge""", {"proc": proc})
         _log(json.dumps({"state": s, "payer": p, **{t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-                                                    for t in ("og", "ogr", "gp", "q", f"po_{p}")}}))
+                                                    for t in ("ogr", "q", f"po_{p}")}}))
         # reading groups at hospitals: radiologists affiliated with a hospital (CMS facility affiliations)
         team_parts.append(f"team_{p}")
         con.execute(f"""CREATE OR REPLACE TABLE team_{p} AS
-            SELECT a.ccn, '{p}' AS payer, o.proc, o.code, o.ntype, o.rate, o.office, o.prods, g.tin,
+            SELECT a.ccn, '{p}' AS payer, o.proc, o.code, o.ntype, median(o.rate) AS rate, o.office, o.prods, g.tin,
                    any_value(g.gname) AS gname, count(DISTINCT n.npi) AS nrad
             FROM read_parquet('{src["affil"]}') a JOIN npigrp r ON r.npi = a.npi AND r.grp = 'radiology'
             JOIN read_parquet('{d}/pgnpi.parquet') n ON n.npi = a.npi
@@ -451,25 +474,14 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
             JOIN pgs g ON g.pg = o.pg
             WHERE a.ccn IN (SELECT ccn FROM read_parquet('{src["hospitals"]}') WHERE state = '{s}')
             GROUP BY ALL""")
+        con.execute("CHECKPOINT")
     if not po_parts:
         return {"places": 0}
-    con.execute("CREATE OR REPLACE TABLE po AS " + " UNION ALL ".join(f"SELECT * FROM {t}" for t in po_parts))
+    con.execute("CREATE OR REPLACE TABLE offers AS " + " UNION ALL ".join(f"SELECT * FROM {t}" for t in po_parts))
     con.execute("CREATE OR REPLACE TABLE team AS " + " UNION ALL ".join(f"SELECT * FROM {t}" for t in team_parts))
-    # price sanity: Medicare PFS for the state (office = non-facility amount), else the state's own spread
-    con.execute(f"""CREATE OR REPLACE TABLE po2 AS
-        WITH m AS (SELECT hcpcs, m, nf, fa FROM pfs WHERE state = '{s}'),
-        d AS (SELECT proc, role, code, quantile_cont(rate, 0.02) AS p02, quantile_cont(rate, 0.98) AS p98
-              FROM po WHERE ntype IN ('negotiated', 'fee schedule', 'derived') GROUP BY ALL)
-        SELECT po.*, CASE WHEN po.office THEN m.nf ELSE coalesce(m.fa, m.nf) END AS mcr, d.p02, d.p98
-        FROM po LEFT JOIN m ON m.hcpcs = po.code AND m.m = CASE WHEN po.role = 'pro' THEN '26'
-                                                               WHEN po.role = 'tc' THEN 'TC' ELSE '' END
-        LEFT JOIN d USING (proc, role, code)""")
-    con.execute("""CREATE OR REPLACE TABLE offers AS SELECT *,
-        CASE WHEN ntype NOT IN ('negotiated', 'fee schedule', 'derived', 'per diem') THEN 'x'
-             WHEN mcr > 0 AND (rate < 0.15 * mcr OR rate > 15 * mcr) THEN 'h'
-             WHEN (mcr IS NULL OR mcr <= 0) AND code <> 'FLAT' AND p98 IS NOT NULL AND (rate < p02 / 3 OR rate > p98 * 3) THEN 'h'
-             WHEN nev > 0 THEN 'c' ELSE 'l' END AS badge
-        FROM po2""")
+    for t in po_parts + team_parts + ["og", "ogr", "gp", "q", "qx", "psg", "chk"]:
+        con.execute(f"DROP TABLE IF EXISTS {t}")
+    con.execute("CHECKPOINT")
     # places
     con.execute(f"""CREATE OR REPLACE TABLE pl AS
         WITH a AS (SELECT place_key, any_value(line1) AS line1, any_value(city) AS city, any_value(zip5) AS zip5,
@@ -497,6 +509,7 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
                z.lon + ((hash(a.place_key || 'x') % 1000) / 1000.0 - 0.5) * 0.015 AS lng
         FROM a LEFT JOIN h USING (place_key) LEFT JOIN o USING (place_key) LEFT JOIN g USING (place_key)
         LEFT JOIN doc USING (place_key) LEFT JOIN zipc z ON z.zip5 = a.zip5""")
+    _log(f"{s}: places and offers ready, writing")
     stats = _write_state(con, s, out)
     stats["seconds"] = round(time.time() - t0)
     stats["offers"] = con.execute("SELECT badge, count(*) FROM offers GROUP BY 1 ORDER BY 1").fetchall()
@@ -511,34 +524,48 @@ def _write_state(con, s: str, out: str) -> dict:
     for ccn, payer, proc, code, ntype, rate, office, prods, tin, gname, nrad in con.execute(
             "SELECT ccn, payer, proc, code, ntype, rate, office, prods, tin, gname, nrad FROM team "
             "WHERE ntype IN ('negotiated', 'fee schedule', 'derived')").fetchall():
-        teams.setdefault((ccn, proc), []).append([payer, code, ntype[0], rate, prods, tin, gname, nrad])
-    files: dict = {}
-    n = 0
-    for (place_key, payer, proc, role, code, ntype, rate, bclass, office, prods, tins, gnames, nq, nev, badge) in con.execute(
-            """SELECT place_key, payer, proc, role, code, ntype, rate, bclass, office, prods, tins, gnames, nq, nev, badge
-               FROM offers ORDER BY proc, place_key""").fetchall():
-        pl = places.get(place_key)
-        if not pl or pl[6] is None:
-            continue
-        key = (proc, (pl[4] or "000")[:3])
-        f = files.setdefault(key, {})
-        e = f.get(place_key)
-        if e is None:
-            e = f[place_key] = {"k": place_key, "n": pl[1], "a": pl[2], "c": pl[3], "s": s, "z": pl[4], "ph": pl[5],
-                                "lat": round(pl[6], 5), "lng": round(pl[7], 5), "kind": pl[8], "kids": bool(pl[9]),
-                                "o": []}
-            if pl[10]:
-                e["ccn"] = pl[10]
-                e["er"] = pl[11] == "Yes"
-                if (pl[10], proc) in teams:
-                    e["t"] = teams[(pl[10], proc)]
-        e["o"].append([payer, role, code, ntype, rate, 1 if bclass == "institutional" else 0, 1 if office else 0, badge,
-                       prods, tins[:4], gnames, nq, nev])
-        n += 1
-    for (proc, z3), f in files.items():
+        teams.setdefault((ccn, proc), []).append([payer, code, ntype[0], round(rate, 2), prods, tin, None, nrad])
+    names = dict(con.execute("SELECT tin, gname FROM tn").fetchall()) if con.execute(
+        "SELECT count(*) FROM duckdb_tables() WHERE table_name = 'tn'").fetchone()[0] else {}
+    n = nfiles = 0
+    procs = [r[0] for r in con.execute("SELECT DISTINCT proc FROM offers ORDER BY 1").fetchall()]
+    for proc in procs:  # one procedure at a time, streamed: a state has millions of offers
+        files: dict = {}
+        cur = con.execute("""SELECT place_key, payer, proc, role, code, ntype, round(rate, 2), bclass, office, prods, tins,
+                                    gnames, nq, nev, badge, round(lo, 2), round(hi, 2), n FROM offers WHERE proc = ?
+                             ORDER BY place_key""", [proc])
+        while True:
+            rows = cur.fetchmany(50000)
+            if not rows:
+                break
+            for (place_key, payer, proc, role, code, ntype, rate, bclass, office, prods, tins, gnames, nq, nev, badge, lo,
+                 hi, cnt) in rows:
+                pl = places.get(place_key)
+                if not pl or pl[6] is None:
+                    continue
+                f = files.setdefault((pl[4] or "000")[:3], {})
+                e = f.get(place_key)
+                if e is None:
+                    e = f[place_key] = {"k": place_key, "n": pl[1], "a": pl[2], "c": pl[3], "s": s, "z": pl[4], "ph": pl[5],
+                                        "lat": round(pl[6], 5), "lng": round(pl[7], 5), "kind": pl[8], "kids": bool(pl[9]),
+                                        "o": []}
+                    if pl[10]:
+                        e["ccn"] = pl[10]
+                        e["er"] = pl[11] == "Yes"
+                        if (pl[10], proc) in teams:
+                            e["t"] = teams[(pl[10], proc)]
+                tins = list(dict.fromkeys(tins))[:4]
+                e["o"].append([payer, role, code, ntype, rate, 1 if bclass == "institutional" else 0, 1 if office else 0,
+                               badge, prods, tins, None, nq, nev, lo, hi, cnt])
+                n += 1
         os.makedirs(f"{out}/offers/{proc}", exist_ok=True)
-        json.dump({"proc": proc, "zip3": z3, "state": s, "places": list(f.values())},
-                  open(f"{out}/offers/{proc}/{z3}-{s}.json", "w"), separators=(",", ":"))
+        for z3, f in files.items():
+            used = {t for e in f.values() for o in e["o"] for t in o[9]} | {t[5] for e in f.values() for t in e.get("t", [])}
+            with open(f"{out}/offers/{proc}/{z3}-{s}.json", "w") as fh:
+                json.dump({"proc": proc, "zip3": z3, "state": s, "g": {t: names.get(t) for t in sorted(used)},
+                           "places": list(f.values())}, fh, separators=(",", ":"))
+        nfiles += len(files)
+        del files
     # summary: per procedure, the spread of confirmed/likely dollar totals (global or any) for this state
     summ = con.execute("""SELECT proc, payer, count(DISTINCT place_key), quantile_cont(rate, 0.1), median(rate),
                                  quantile_cont(rate, 0.9)
@@ -546,7 +573,7 @@ def _write_state(con, s: str, out: str) -> dict:
                           GROUP BY ALL""").fetchall()
     os.makedirs(f"{out}/summary", exist_ok=True)
     json.dump([list(r) for r in summ], open(f"{out}/summary/{s}.json", "w"))
-    return {"places": len(places), "files": len(files), "offers_written": n}
+    return {"places": len(places), "files": nfiles, "offers_written": n}
 
 def meta(work: str = "/tmp/shop-meta", out: str = "/tmp/shop-meta-out", upload_to: str | None = "ratecommons/work",
          prefix: str = "shop/v1") -> dict:
