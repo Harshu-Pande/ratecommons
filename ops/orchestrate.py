@@ -63,7 +63,8 @@ def main():
     if any(r["status"] != "completed" for r in runs):
         print("a reduce run is in progress; waiting")
         return
-    if runs and runs[0]["conclusion"] != "success":
+    # called at the end of a successful reduce run (SELF_RUN_ID), an older failure is not a reason to stop
+    if runs and runs[0]["conclusion"] != "success" and not me:
         print(f"last reduce run {runs[0]['id']} ended {runs[0]['conclusion']}; stopping until someone looks")
         return
     waves = [l.split() for l in open("ops/waves.txt") if l.strip() and not l.startswith("#")]
