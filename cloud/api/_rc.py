@@ -103,10 +103,10 @@ def con() -> duckdb.DuckDBPyConnection:
         if _con is None:
             c = duckdb.connect()
             c.execute("SET enable_progress_bar = false")
-            c.execute(f"SET memory_limit = '{os.environ.get('RC_MEMORY', '1500MB')}'")
+            c.execute(f"SET memory_limit = '{os.environ.get('RC_MEMORY', '1700MB')}'")
             c.execute("SET threads = 4")
             c.execute("SET temp_directory = '/tmp/rc-duck'")  # the function's working directory is read-only
-            c.execute("SET max_temp_directory_size = '100MB'")
+            c.execute("SET max_temp_directory_size = '150MB'")
             _con = c
         return _con.cursor()
 
@@ -240,7 +240,7 @@ def _place_mask_sql(place: str, modifier: str = "") -> str:
 
 def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, city=None, zip_prefix=None,
           specialty=None, provider=None, billing_class=None, where: str = "true", select: str | None = None,
-          group: str | None = None, limit: int | None = None) -> list[dict]:
+          group: str | None = None, limit: int | None = None, pg_where: str | None = None) -> list[dict]:
     """Rows (product, provider group, price) for codes in one state for one payer, optionally aggregated."""
     if not meta(p):
         return []
@@ -296,7 +296,8 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
     {"lq AS (" + locq + ")," if locq else ""}
     g AS (SELECT DISTINCT s.ps, l.pg FROM {S['pspli']} s JOIN {S['plipg']} l USING (pli)
           WHERE s.ps IN (SELECT ps FROM f) {"AND l.pg IN (SELECT pg FROM pv)" if pv else ""}
-          {"AND l.pg IN (SELECT pg FROM lq)" if locq else ""}),
+          {"AND l.pg IN (SELECT pg FROM lq)" if locq else ""}
+          {f"AND l.pg IN (SELECT pg FROM {S['pg']} WHERE {pg_where})" if pg_where else ""}),
     base AS (SELECT DISTINCT '{p}' AS payer, nets.product, g.pg, f.code, f.negotiated_type, round(f.rate, 2) AS rate,
                     f.rate_raw, f.billing_class, f.setting, f.modifiers, f.pos, f.expiration
              FROM f JOIN nets USING (ns) JOIN g USING (ps)),
@@ -445,24 +446,22 @@ def rank_providers(codes, state="US", payer="cigna,uhc", specialty="", weights="
     # placeholder amounts payers publish ($0.01, $99,999.xx, $999,999.xx) would top any ranking
     where = (f"negotiated_type IN {DOLLAR_TYPES} AND rate > 0.01 AND rate < 99999 AND rate_raw NOT LIKE '9999%' AND "
              + _place_mask_sql(place, modifier))
-    if specialty:
-        sp = _lit(f"%{specialty.strip()}%")
-        where += f" AND specialty ILIKE {sp}"
+    pg_where = f"specialty ILIKE {_lit('%' + specialty.strip() + '%')}" if specialty else None
     payers = _payers(payer)
     jobs = [(p, s) for p in payers for s in states]
     t0 = time.time()
 
     def one(job):
         p, s = job
-        if time.time() - t0 > 90:
+        if time.time() - t0 > 100:
             return [{"_skipped": f"{p}/{s}"}]
         try:
-            return _rows(p, cs, s, where=where,
+            return _rows(p, cs, s, where=where, pg_where=pg_where,
                          select="payer, tin, any_value(provider) AS provider, any_value(specialty) AS specialty, code, "
                                 "median(rate) AS rate", group="payer, tin, code")
         except Exception as e:
             return [{"_skipped": f"{p}/{s}: {e}"}]
-    with ThreadPoolExecutor(8) as ex:
+    with ThreadPoolExecutor(4) as ex:
         parts = list(ex.map(one, jobs))
     skipped = [r["_skipped"] for part in parts for r in part if "_skipped" in r]
     per: dict = {}
