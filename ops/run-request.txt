@@ -18,3 +18,5 @@ uhc-probe --head-mb 256 --sample 40 --full 2 --out reports/uhc-probe.json
 uhc-probe --head-mb 64 --sample 40 --full 0 --out reports/uhc-probe.json
 uhc-probe --head-mb 64 --sample 40 --full 0 --out reports/uhc-probe.json
 uhc-diff --match UMR--Inc-_Third-Party-Administrator --n 5 --head-mb 512
+uhc-diff --match _0L_in-network --n 5 --head-mb 512
+uhc-diff --match _PHC3_in-network --n 5 --head-mb 512

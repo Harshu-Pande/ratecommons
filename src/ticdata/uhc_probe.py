@@ -180,9 +180,11 @@ def diff(match: str = "_0L_", n: int = 4, head_mb: int = 256) -> dict:
     res = {"files": [e["name"] for e in es], "pairs": []}
     recs = []
     for h in heads:
-        parts = h.split(b'{"provider_group_id":')[1:-1]  # the last one may be cut off
+        parts = re.split(rb'\{\s*"provider_groups"\s*:', h)[1:-1]  # the last one may be cut off
         ids = [hashlib.md5(p).hexdigest() for p in parts]
-        noid = [hashlib.md5(re.sub(rb"^\s*\d+", b"", p)).hexdigest() for p in parts]
+        # without the per-file fields: the group number and the network (plan) label
+        noid = [hashlib.md5(re.sub(rb'"network_name"\s*:\s*\[[^\]]*\]', b"",
+                                   re.sub(rb'"provider_group_id"\s*:\s*\d+', b"", p))).hexdigest() for p in parts]
         recs.append((ids, noid, len(parts)))
     for i in range(1, len(heads)):
         a, b = heads[0], heads[i]
@@ -195,6 +197,9 @@ def diff(match: str = "_0L_", n: int = 4, head_mb: int = 256) -> dict:
             "b_context": b[max(0, (k or 0) - 300):(k or 0) + 300].decode("utf-8", "replace") if k is not None else None,
             "records": [recs[0][2], recs[i][2]],
             "same_records_with_ids": len(sa & sb), "same_records_without_ids": len(na & nb),
-            "union_without_ids": len(na | nb)})
+            "union_without_ids": len(na | nb),
+            "network_names": [sorted(set(re.findall(rb'"network_name"\s*:\s*\[([^\]]*)\]', heads[0][:50_000_000])))[:3],
+                              sorted(set(re.findall(rb'"network_name"\s*:\s*\[([^\]]*)\]', heads[i][:50_000_000])))[:3]]})
+        res["pairs"][-1]["network_names"] = [[x.decode("utf-8", "replace") for x in y] for y in res["pairs"][-1]["network_names"]]
         print(json.dumps(res["pairs"][-1])[:3000], flush=True)
     return res
