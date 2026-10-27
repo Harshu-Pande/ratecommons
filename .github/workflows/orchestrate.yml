@@ -7,7 +7,8 @@ on:
 
 permissions:
   contents: read
-  actions: write   # dispatch reduce.yml
+  actions: write   # dispatch reduce.yml and map.yml
+  id-token: write  # delete finished waves' map output from the work bucket
 
 concurrency:
   group: orchestrate
@@ -21,7 +22,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
-      - run: pip install -q huggingface_hub==2.2.0
+      - run: pip install -q -e .
       - run: python ops/orchestrate.py
         env:
           GH_TOKEN: ${{ github.token }}

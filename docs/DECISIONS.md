@@ -5,6 +5,15 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-27
 
+- **UHC flows map -> reduce -> delete, wave by wave (bucket has ~7.8 TB free).** The 256-shard map run
+  would have written ~20 TB. Now `ops/waves.txt` lists 86 UHC waves of 12 shards (~1 TB of map output each);
+  the orchestrator (`PIPELINE` in `ops/orchestrate.py`) starts a wave's map run itself (map.yml `range`
+  input) when no map run is going and fewer than 2 mapped waves wait for reduce, and deletes every finished
+  wave's map output (Aetna's too: 7,318 files of waves 1-9 at once). It runs on cron and at the end of
+  every map and reduce run (cron alone fired once in ten hours). map.yml now cancels a running map when a new
+  one starts, which only happens when a person pushes a map request over it. Reduced waves are small
+  (Aetna: 18-47 GB per wave).
+
 - **Full UHC map started (2026-10-27 evening).** Facts are content-hashed, so the reduce already stores a fact
   shared by many near-copy files once (with its network set); the real cost is parsing ~2,300 runner-hours.
   Plan: 1,024 shards (~90 GB gzip, ~2 h each) in size order, biggest first, run as four map runs of 256

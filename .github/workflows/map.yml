@@ -10,6 +10,7 @@ on:
       payer: { description: "cigna | aetna | uhc", required: true, default: "cigna" }
       shards: { description: "number of shards (<= 256)", required: true, default: "40" }
       limit: { description: "only the first N files (testing)", required: false, default: "" }
+      range: { description: "only shards a-b of the plan", required: false, default: "" }
   push:
     branches: [main]
     paths: ["ops/map-request.txt"]
@@ -20,7 +21,9 @@ permissions:
 
 concurrency:
   group: map
-  cancel-in-progress: false
+  # a new map run replaces a running one: the orchestrator starts UHC waves one at a time and only when
+  # no map run is going, so this only bites when a person pushes a request over a running map
+  cancel-in-progress: true
 
 jobs:
   plan:
@@ -39,6 +42,7 @@ jobs:
           read payer shards limit range match <<< "$(grep -v '^#' ops/map-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
           [ "$limit" = "0" ] && limit=""
           [ -n "${{ github.event.inputs.payer }}" ] && payer="${{ github.event.inputs.payer }}" && shards="${{ github.event.inputs.shards }}" && limit="${{ github.event.inputs.limit }}"
+          [ -n "${{ github.event.inputs.payer }}" ] && range="${{ github.event.inputs.range }}" && match=""
           echo "payer=$payer shards=$shards limit=$limit"
           # UHC: parse one file per identical-content group (gzip trailer fingerprints from uhc-tails)
           [ "$payer" = uhc ] && export TIC_DUP_TAILS="runs/2026-10-27-gha-run-40546293263/uhc-tails.json"
@@ -93,3 +97,24 @@ jobs:
                   print(f"- {'ok' if r['ok'] else 'FAILED'} {r.get('parser')} {r['name']} {r.get('wall_seconds')}s rss {r.get('max_rss_mb')} MB {r.get('error','')[:200]}")
           PY
           ticdata put-report reports/* --prefix "runs/$(date -u +%F)-map-${{ needs.plan.outputs.payer }}-${GITHUB_RUN_ID}" || true
+
+  next:
+    # start the next wave's map (PIPELINE payers) or reduce when this run's shards are in
+    needs: parse
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e .
+      - run: python ops/orchestrate.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELF_RUN_ID: ${{ github.run_id }}
+          SELF_KIND: map

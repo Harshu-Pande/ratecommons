@@ -11,6 +11,12 @@ import sys
 from huggingface_hub import HfApi, list_bucket_tree
 
 REPO = "Harshu-Pande/ratecommons"
+BUCKET = "ratecommons/work"
+# payers whose map runs the orchestrator starts itself, one wave at a time (value: shards in the map plan).
+# Map output is ~1 GB per GB of gzip and the bucket has a few TB free, so UHC (93.8 TB) must flow
+# map -> reduce -> delete map output wave by wave.
+PIPELINE = {"uhc": 1024}
+MAX_WAVES_IN_FLIGHT = 2
 
 
 def gh(path, tries=4):
@@ -54,20 +60,97 @@ def mapped_shards(payer, release):
     return done
 
 
+def map_folders(payer, release):
+    """{shard: [file paths]} of map output in the work bucket."""
+    import re
+
+    out = {}
+    for i in list_bucket_tree(BUCKET, prefix=f"map/{release}/{payer}/", recursive=True):
+        m = re.search(r"/shard-(\d+)-\d+/", i.path)
+        if m and getattr(i, "size", None) is not None:
+            out.setdefault(int(m.group(1)), []).append(i.path)
+    return out
+
+
+def clean(waves):
+    """Delete the map output of every finished wave (its facts and dims are in reduced/<release>/<payer>/wave-N)."""
+    from huggingface_hub import batch_bucket_files
+
+    from ticdata import hfio
+
+    folders = {}
+    for w in waves:
+        if w[2] == "merge" or not wave_done(w[0], w[1], w[2]):
+            continue
+        key = (w[0], w[1])
+        folders[key] = folders.get(key) or map_folders(*key)
+        a, b = map(int, w[3].split("-"))
+        paths = [p for s in range(a, b + 1) for p in folders[key].get(s, [])]
+        if paths:
+            print(f"deleting map output of {w[0]} wave {w[2]} (shards {w[3]}): {len(paths)} files")
+            token = hfio.token_for(hfio.bucket(BUCKET))
+            for i in range(0, len(paths), 500):
+                batch_bucket_files(BUCKET, delete=paths[i:i + 500], token=token)
+            for s in range(a, b + 1):
+                folders[key].pop(s, None)
+
+
+def start_maps(waves):
+    """For PIPELINE payers: start the next wave's map run when no map run is going and few waves wait."""
+    import os
+
+    me = os.environ.get("SELF_RUN_ID")
+    runs = [r for r in gh(f"repos/{REPO}/actions/workflows/map.yml/runs?per_page=5")["workflow_runs"]
+            if str(r["id"]) != me]
+    if any(r["status"] != "completed" for r in runs):
+        print("a map run is in progress")
+        return
+    for payer, shards in PIPELINE.items():
+        mine = [w for w in waves if w[0] == payer and w[2] != "merge"]
+        if not mine:
+            continue
+        mapped = mapped_shards(payer, mine[0][1])
+        in_flight, nxt = 0, None
+        for w in mine:
+            a, b = map(int, w[3].split("-"))
+            if wave_done(payer, w[1], w[2]):
+                continue
+            got = sum(1 for s in range(a, b + 1) if s in mapped)
+            if got == b - a + 1:
+                in_flight += 1
+            elif nxt is None:
+                nxt = w  # partly or not mapped: (re)run its whole range; finished shards are just rewritten
+                break
+        if nxt and in_flight < MAX_WAVES_IN_FLIGHT:
+            print(f"starting map of {payer} wave {nxt[2]} (shards {nxt[3]})")
+            subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/workflows/map.yml/dispatches",
+                                   "-f", "ref=main", "-f", f"inputs[payer]={payer}", "-f", f"inputs[shards]={shards}",
+                                   "-f", "inputs[limit]=", "-f", f"inputs[range]={nxt[3]}"])
+            return
+        print(f"{payer}: {in_flight} mapped wave(s) wait for reduce; next map: {nxt and nxt[2]}")
+
+
 def main():
     import os
 
     me = os.environ.get("SELF_RUN_ID")  # when called at the end of a reduce run, ignore that run
+    waves = [l.split() for l in open("ops/waves.txt") if l.strip() and not l.startswith("#")]
+    for step in (clean, start_maps):  # independent of the reduce chain below; a failure here must not stop it
+        try:
+            step(waves)
+        except Exception as e:
+            print(f"{step.__name__} failed: {e!r}")
     runs = [r for r in gh(f"repos/{REPO}/actions/workflows/reduce.yml/runs?per_page=5")["workflow_runs"]
             if str(r["id"]) != me]
     if any(r["status"] != "completed" for r in runs):
         print("a reduce run is in progress; waiting")
         return
     # called at the end of a successful reduce run (SELF_RUN_ID), an older failure is not a reason to stop
-    if runs and runs[0]["conclusion"] != "success" and not me:
+    from_reduce = me and os.environ.get("SELF_KIND", "reduce") == "reduce"
+    if runs and runs[0]["conclusion"] != "success" and not from_reduce:
         print(f"last reduce run {runs[0]['id']} ended {runs[0]['conclusion']}; stopping until someone looks")
         return
-    waves = [l.split() for l in open("ops/waves.txt") if l.strip() and not l.startswith("#")]
+
     mapped = None
     for w in waves:
         payer, release = w[0], w[1]
