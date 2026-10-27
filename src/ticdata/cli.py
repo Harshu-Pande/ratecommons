@@ -123,6 +123,11 @@ def main(argv=None) -> int:
     p.add_argument("--match", default="", help="comma-separated file/plan name substrings: only those networks")
     p.add_argument("--release", default="2026-10")
     p.add_argument("--no-upload", action="store_true")
+    p = sub.add_parser("uhc-probe", help="hash UHC file bodies (after the plan header) to find near-copies")
+    p.add_argument("--head-mb", type=int, default=256)
+    p.add_argument("--sample", type=int, default=40)
+    p.add_argument("--full", type=int, default=2)
+    p.add_argument("--out", default="reports/uhc-probe.json")
     p = sub.add_parser("cloud-pack", help="cloud pack (small files per code/state) of one payer -> work bucket serve/v1")
     p.add_argument("--payer", required=True)
     p = sub.add_parser("cloud-shared", help="cloud shared files (NPPES by state, NPI index, Medicare) -> serve/v1/shared")
@@ -300,6 +305,9 @@ def main(argv=None) -> int:
     elif a.cmd == "serve-pack":
         from . import serve_jobs
         print(json.dumps(serve_jobs.pack(a.payer, a.source, a.release, upload=not a.no_upload, states=[x.strip().upper() for x in a.states.split(',') if x.strip()] or None, match=[x.strip() for x in a.match.split(',') if x.strip()] or None), default=str))
+    elif a.cmd == "uhc-probe":
+        from . import uhc_probe
+        _write(uhc_probe.probe(a.head_mb, a.full, a.sample), a.out)
     elif a.cmd == "cloud-pack":
         from . import cloudpack
         print(json.dumps(cloudpack.job(a.payer), default=str))
