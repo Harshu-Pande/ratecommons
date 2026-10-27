@@ -5,6 +5,15 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-27
 
+- **Full UHC map started (2026-10-27 evening).** Facts are content-hashed, so the reduce already stores a fact
+  shared by many near-copy files once (with its network set); the real cost is parsing ~2,300 runner-hours.
+  Plan: 1,024 shards (~90 GB gzip, ~2 h each) in size order, biggest first, run as four map runs of 256
+  shards (`uhc 1024 0 0-255`, then 256-511, ...). Files with the same gzip trailer CRC32 + ISIZE (identical
+  decompressed content, 555 of 6,824 files) are parsed once; the plan records `duplicates` {file: parsed twin}
+  so their plan membership can be attached at merge. Old probe map folders (shards 0-7) are overwritten, not
+  deleted; any leftover probe chunk holds facts of the same files, so reduce dedups them. Watch: map output
+  is ~1 GB per GB gzip; reduce waves for UHC must be sized before the first wave line goes in `waves.txt`.
+
 - **UHC products share most of their price facts (bottom-k sketch, k=20,000, 6 product files).** Normalized
   price facts of the mapped parts: Choice Plus C2 is 99% contained in a 0L Choice Plus file; two 0L/Select Plus
   TPA files have Jaccard 0.83; the Behavioral Health P3 file is 91% inside a 0L file; every small file is 68-99%
