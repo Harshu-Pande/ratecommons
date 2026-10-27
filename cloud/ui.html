@@ -22,6 +22,9 @@ nav button.on{background:var(--accent);color:var(--accent-ink);font-weight:600}
 .card .desc{color:var(--muted);margin:0 0 14px;font-size:14px;white-space:pre-line}
 form{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px 14px;align-items:end}
 label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+textarea{font:13px/1.45 ui-monospace,Menlo,Consolas,monospace;width:100%;box-sizing:border-box;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;resize:vertical}
+label.wide{grid-column:1/-1;flex-basis:100%;width:100%}
+.hint{display:block;font-size:12px;color:var(--muted,#777);margin-top:4px;text-transform:none;letter-spacing:0}
 input,select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;text-transform:none;letter-spacing:0}
 input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
 .go{grid-column:1/-1;display:flex;gap:10px;align-items:center}
@@ -68,6 +71,8 @@ const VIEWS = [
   ["network_breadth", "Network breadth", {state:"MO", specialty:"Cardiovascular Disease"}],
   ["find_plans", "Plans & networks", {query:"Choice"}],
   ["search_providers", "Find providers", {state:"MO", city:"Saint Louis"}],
+  ["rank_providers", "Rank groups (national)", {codes:"70450,71250,74177,72148", state:"US", specialty:"Radiology"}],
+  ["run_sql", "Custom SQL", {sql:"SELECT payer, count(DISTINCT tin) AS groups, median(rate) AS median_rate\nFROM rc_rates('all', 'MO', '99213', '', 'office')\nWHERE negotiated_type = 'negotiated' AND rate > 0.01 AND rate < 99999\nGROUP BY payer ORDER BY payer"}],
   ["code_info", "Code info", {code:"70553"}],
   ["medicare_rate", "Medicare fee schedule", {codes:"99213,99214", state:"MO"}],
   ["data_status", "Data status", {}],
@@ -101,6 +106,7 @@ function show(name){
     const val = v[2][k] ?? p.default ?? "";
     const tip = esc(p.description || "");
     if (CHOICES[k]) html += `<label title="${tip}">${nice(k)}<select name="${k}">${CHOICES[k].map(o=>`<option ${o==val?"selected":""}>${o}</option>`).join("")}</select></label>`;
+    else if (k === "sql") html += `<label class="wide">${nice(k)} *<textarea name="sql" rows="9" spellcheck="false">${esc(val)}</textarea><span class="hint">Table functions: rc_rates, rc_rates_by_product, rc_medicare, rc_groups, rc_group_npis, rc_nppes, rc_codes, rc_products (details in the tool description)</span></label>`;
     else html += `<label title="${tip}">${nice(k)}${req.includes(k)?" *":""}<input name="${k}" value="${esc(val)}" placeholder="${tip.slice(0,60)}"></label>`;
   }
   html += `<div class="go"><button>Run</button><button type="button" class="sec" id="csv" disabled>Download CSV</button><span class="status" id="st"></span></div></form><div id="out"></div>`;
@@ -119,7 +125,7 @@ async function run(){
     const secs = ((performance.now()-t0)/1000).toFixed(1);
     if (!d.ok){ $("#st").className = "status err"; $("#st").textContent = d.error; return; }
     let rows = d.rows; if (!rows){ const {ok, seconds, ...rest} = d; rows = [rest]; }
-    lastRows = rows; $("#st").textContent = `${rows.length.toLocaleString()} rows · ${secs}s`; $("#csv").disabled = !rows.length;
+    lastRows = rows; $("#st").textContent = `${rows.length.toLocaleString()} rows · ${secs}s` + (d.notes && d.notes.length ? ` · ${d.notes.length} note(s): ${d.notes.slice(0,3).join("; ")}` : "") + (d.truncated ? " · truncated" : ""); $("#csv").disabled = !rows.length;
     $("#out").innerHTML = rows.length ? table(rows) : '<p class="note">No published rates match. (No published rate is not the same as out of network.)</p>';
     document.querySelectorAll("#out th").forEach((th,i) => th.onclick = () => sortBy(i));
   } catch(e){ $("#st").className = "status err"; $("#st").textContent = "Request failed: " + e; }
