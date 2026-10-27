@@ -5,6 +5,12 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-27
 
+- **The wave orchestrator now reads the bucket, not run history.** It found mapped shards by scanning the
+  last 10 map runs' job names: UHC experiments pushed Aetna's map runs out of that window and mixed payers,
+  and one failed page (HTTP 502) killed it. Mapped shards are now the shard folders with a `metas.json`
+  in the work bucket. It also stopped the chain after any earlier failed run, even when called from a
+  later successful one; a successful run now continues. Aetna's plan has 248 shards (0-247), not 252.
+
 - **Cloud pack v2: provider sets split by code prefix.** A query needs only the provider sets priced for its
   codes, but `state/<ST>/pspli.parquet` held all of them (Aetna TX: 127 MB, 54.6M rows, for 3 networks;
   one code touches ~10k of 980k sets). Per-code files would total 5x the rows (275M for TX); per
