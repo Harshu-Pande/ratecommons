@@ -1,3 +1,9 @@
+> **Update 2026-10-27:** the app now runs serverless at https://ratecommons-cloud.vercel.app (code in
+> `cloud/`, data in the public work bucket under `serve/v1/`, built by `.github/workflows/cloud.yml`). The
+> old address https://ratecommons-atticusfinch.vercel.app forwards there. The Mac setup below is retired.
+> To release app code: push to main, set the Vercel env `RC_CODE_REF` (project `ratecommons-cloud`) to the
+> commit, redeploy. To refresh data: rebuild serving packs (serve.yml), then cloud packs (cloud.yml).
+
 # Handoff: RateCommons Explorer (state on 2026-10-22, 15:45 CT)
 
 Written for whoever (human or AI) continues this work. Read `CLAUDE.md` first: its rules still apply

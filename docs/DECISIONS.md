@@ -3,6 +3,27 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-27
+
+- **The app runs in the cloud; the Mac is out of the loop.** Pre-joining rates to providers is not an
+  option (a Cigna sample: one sixteenth of the codes in Missouri alone is 32.8 million provider-level
+  rows, about 30 billion for all of Cigna). Instead `cloudpack.py` re-cuts each serving pack into small
+  files in the public work bucket (`serve/v1/`): one Parquet per billing code (price fields inline, dense
+  integer ids; most under 1 MB), five per state (set -> list, list -> group, group display, group -> NPI,
+  group -> network), shared NPPES by state, an NPI -> state index and Medicare. Sizes: Cigna 75,130 files
+  / 4.0 GB, Aetna (3 networks) 100,954 / 3.9 GB, UHC (2 files) 19,352 / 7.1 GB; builds 10-26 minutes.
+- **Serverless app (`cloud/`)**: FastAPI on Vercel (`ratecommons-cloud.vercel.app`; the old
+  `ratecommons-atticusfinch.vercel.app` now rewrites to it, MCP at `/mcp` and the old `/gradio_api/mcp/`).
+  It fetches only the files a question needs from the bucket, caches them on the instance, and joins them
+  with DuckDB. MCP is a small stateless JSON-RPC handler (no SSE). The deployed `api/index.py` is a loader
+  that pulls `cloud/api/*` from GitHub at the commit in env `RC_CODE_REF`, so a release is: push, set the
+  env var, redeploy. Measured from outside: 0.3-6.5 s per tool call (cold files), 1-3 s warm.
+- **Vercel traps**: a Python project auto-detected as "fastapi" ignored `api/` and 404ed everything (set
+  framework to null and use `api/index.py` + rewrites); `/:path*` rewrites drop trailing slashes.
+- **UHC is 7,316 in-network files, 93.8 TB gzip** (mostly 15 GB files: 4,558 UMR files of ~14.9 GB,
+  465 files of network "0L" at 15.0-15.1 GB). They look like near-copies; full parsing would be ~2 PB of
+  JSON, so the plan is to fingerprint and cluster first and parse one representative per cluster.
+
 ## 2026-10-22
 
 - **National Aetna by choosing networks, not states.** Facts of a few networks reference far fewer provider
