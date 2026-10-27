@@ -46,7 +46,14 @@ def _fetch(bucket: str, paths: list[str], dest: str, prefix: str, token) -> list
     for _, local in files:
         os.makedirs(os.path.dirname(local), exist_ok=True)
     for i in range(0, len(files), 200):
-        download_bucket_files(bucket, files=files[i:i + 200], token=token)
+        for attempt in range(4):  # transient CAS/xet errors ("error decoding response body") happen
+            try:
+                download_bucket_files(bucket, files=files[i:i + 200], token=token)
+                break
+            except Exception:
+                if attempt == 3:
+                    raise
+                time.sleep(15 * (attempt + 1))
     return [local for _, local in files]
 
 
