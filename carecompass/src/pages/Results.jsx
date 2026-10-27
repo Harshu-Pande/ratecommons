@@ -106,8 +106,8 @@ export default function Results() {
     })
     const key = (r) => (r.est ? r.est.patient : Infinity)
     const cmp = {
-      cost: (a, b) => (kid ? (b.place.kids - a.place.kids) : 0) || key(a) - key(b) || (a.price.total ?? 1e12) - (b.price.total ?? 1e12),
-      total: (a, b) => (a.price.total ?? 1e12) - (b.price.total ?? 1e12),
+      cost: (a, b) => (kid ? (b.place.kids - a.place.kids) : 0) || !!a.price.partial - !!b.price.partial || key(a) - key(b) || (a.price.total ?? 1e12) - (b.price.total ?? 1e12),
+      total: (a, b) => !!a.price.partial - !!b.price.partial || (a.price.total ?? 1e12) - (b.price.total ?? 1e12),
       distance: (a, b) => a.distance - b.distance,
     }[sort]
     return xs.sort(cmp)
@@ -244,7 +244,7 @@ export default function Results() {
             <ul className="space-y-3">
               {rows.map((r, i) => (
                 <li data-id={r.id} key={r.id}>
-                  <Row r={r} rank={i + 1} median={stats?.median} sort={sort} active={r.id === active || r.id === hover}
+                  <Row r={r} proc={proc} rank={i + 1} median={stats?.median} sort={sort} active={r.id === active || r.id === hover}
                     onClick={() => setActive(r.id)} onHover={(on) => setHover(on ? r.id : null)} />
                 </li>
               ))}
@@ -313,7 +313,7 @@ function Empty({ radius, hidden, onWiden, onShowHidden, payerName, planName, onA
   )
 }
 
-function Row({ r, rank, median, active, onClick, onHover, sort }) {
+function Row({ r, rank, median, active, onClick, onHover, sort, proc }) {
   const { place, price, est, distance } = r
   const diff = median && price.total != null && !price.partial ? median - price.total : 0
   return (
@@ -345,9 +345,9 @@ function Row({ r, rank, median, active, onClick, onHover, sort }) {
         <div className="shrink-0 text-right">
           {est ? (
             <>
-              <div className="text-[11px] font-medium text-ink-mute">{est.personalized ? 'You pay' : 'Up to'}{price.partial ? '*' : ''}</div>
+              <div className="text-[11px] font-medium text-ink-mute">{price.partial ? (proc.kind === 'imaging' ? 'Reading fee only' : 'Partial') : est.personalized ? 'You pay' : 'Up to'}</div>
               <div className="font-display text-2xl font-extrabold leading-none text-ink">{moneyRound(est.patient)}</div>
-              <div className="mt-1 text-[11px] text-ink-mute">of {moneyRound(price.total)}{price.partial ? ' + more' : ''}</div>
+              <div className="mt-1 text-[11px] text-ink-mute">{price.partial ? '+ facility fee' : `of ${moneyRound(price.total)}`}</div>
             </>
           ) : (
             <>
