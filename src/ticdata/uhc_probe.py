@@ -292,3 +292,56 @@ def compare_mapped(shards: str = "0,1,2", release: str = "2026-10", payer: str =
         res["pairs"].append(row)
         print(json.dumps(row, default=str), flush=True)
     return res
+
+
+def sketch(shards: str, k: int = 20000, release: str = "2026-10", payer: str = "uhc") -> dict:
+    """Bottom-k sketch of each mapped shard's distinct rate facts (hash of code, provider set, price list),
+    one rate_fact part on disk at a time, then pairwise Jaccard and containment estimates."""
+    import os
+    import shutil
+
+    import duckdb
+
+    from .config import load
+    from .hfio import bucket as bk, token_for
+    from .reduce import _fetch, _list
+
+    b = load().work_bucket
+    prefix = f"map/{release}/{payer}/"
+    allp = _list(b, prefix, token_for(bk(b)))
+    con = duckdb.connect()
+    con.execute("SET memory_limit = '12GB'; SET threads = 4; SET preserve_insertion_order = false")
+    out = {"k": k, "files": {}}
+    for n in [int(x) for x in shards.split(",")]:
+        sp = [p for p in allp if f"/shard-{n:03d}-" in p]
+        meta = [p for p in sp if p.endswith("metas.json")]
+        if not meta:
+            continue
+        local = f"/tmp/uhc-sketch/{n}"
+        _fetch(b, meta, local, prefix, token_for(bk(b)))
+        name = [(m.get("source") or {}).get("name") for m in json.load(open(next(
+            os.path.join(r, f) for r, _, fs in os.walk(local) for f in fs if f == "metas.json")))]
+        hs, total = [], 0
+        for part in sorted(p for p in sp if "/rate_fact/" in p):
+            _fetch(b, [part], local, prefix, token_for(bk(b)))
+            f = os.path.join(local, os.path.relpath(part, prefix))
+            total += con.execute(f"SELECT count(DISTINCT hash(code_id, ps_id, pl_id)) FROM read_parquet('{f}')").fetchone()[0]
+            hs += [r[0] for r in con.execute(f"SELECT DISTINCT hash(code_id, ps_id, pl_id) h FROM read_parquet('{f}') ORDER BY h LIMIT {k}").fetchall()]
+            os.remove(f)
+        shutil.rmtree(local, ignore_errors=True)
+        out["files"][str(n)] = {"name": name, "facts": total, "sketch": sorted(hs)[:k]}
+        print(json.dumps({"shard": n, "name": name, "facts": total}), flush=True)
+    keys = sorted(out["files"])
+    out["pairs"] = []
+    for i, a in enumerate(keys):
+        for bkey in keys[i + 1:]:
+            A, B = out["files"][a], out["files"][bkey]
+            sa, sb = set(A["sketch"]), set(B["sketch"])
+            u = sorted(sa | sb)[:k]
+            j = sum(1 for h in u if h in sa and h in sb) / max(1, len(u))
+            inter = j / (1 + j) * (A["facts"] + B["facts"])
+            row = {"a": A["name"], "b": B["name"], "jaccard": round(j, 4),
+                   "a_in_b": round(inter / max(1, A["facts"]), 4), "b_in_a": round(inter / max(1, B["facts"]), 4)}
+            out["pairs"].append(row)
+            print(json.dumps(row), flush=True)
+    return out
