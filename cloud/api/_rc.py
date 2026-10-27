@@ -19,7 +19,7 @@ import httpx
 
 BASE = os.environ.get("RC_DATA_URL", "https://huggingface.co/buckets/ratecommons/work/resolve/serve/v1").rstrip("/")
 CACHE = os.environ.get("RC_CACHE", "/tmp/rc-cache")
-CACHE_MAX = int(float(os.environ.get("RC_CACHE_GB", "1.5")) * 1e9)
+CACHE_MAX = int(float(os.environ.get("RC_CACHE_GB", "0.33")) * 1e9)  # Vercel's /tmp holds 500 MB in all
 PAYERS = ["cigna", "aetna", "uhc"]
 DOLLAR_TYPES = ("negotiated", "fee schedule", "derived")
 MAX_ROWS = 2000
@@ -48,6 +48,7 @@ def fetch(path: str) -> str | None:
         src = os.path.join(BASE, path)
         return src if os.path.exists(src) else None
     os.makedirs(os.path.dirname(dest), exist_ok=True)
+    _evict()
     tmp = f"{dest}.{threading.get_ident()}.part"
     for attempt in range(3):
         try:
@@ -85,8 +86,9 @@ def _evict():
             except OSError:
                 pass
     total = sum(s for _, s, _ in files)
-    for _, s, p in sorted(files):
-        if total <= CACHE_MAX:
+    now = time.time()
+    for at, s, p in sorted(files):
+        if total <= CACHE_MAX or now - at < 20:  # keep files a running query just touched
             break
         try:
             os.remove(p)
@@ -104,6 +106,7 @@ def con() -> duckdb.DuckDBPyConnection:
             c.execute(f"SET memory_limit = '{os.environ.get('RC_MEMORY', '1500MB')}'")
             c.execute("SET threads = 4")
             c.execute("SET temp_directory = '/tmp/rc-duck'")  # the function's working directory is read-only
+            c.execute("SET max_temp_directory_size = '100MB'")
             _con = c
         return _con.cursor()
 
