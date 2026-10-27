@@ -23,8 +23,16 @@ Newest first. One entry per lesson: what we saw, what we changed.
     differently and list records in a different order; in the first 512 MB, about 75% of records are equal
     once the number and label are removed.
   - Grouping by product code and near-equal size gives 1,268 groups whose largest members total 11.8 TB.
-    Whether one parse per group is safe is being tested by mapping three 0L files and comparing their
-    content-hashed facts (`uhc-compare`).
+    Mapping two 0L files (the generic HealthSCOPE Choice Plus file and HealthSCOPE's Tenet-in-Michigan
+    variant, ~297 GB of JSON each, 19 min to parse on one runner) and comparing content-hashed facts
+    (`uhc-compare`): 521.3M and 518.9M distinct (code, provider set, price list) facts, 518.8M shared.
+    The variant lacks 2.5M (0.5%) of the generic file's facts and adds 0.16M, 44,650 of them the same code
+    and provider set at another price (a carve-out). So near-copies are not copies: skipping them would
+    drop real contract differences. Plan: parse every file once (unavoidable for exactness; ~20 min per
+    15 GB file, ~2,000 runner-hours for UHC), but store each file as an exact delta (added and removed
+    facts, new dimension rows) against its most similar already-stored file, chosen by a bottom-k sketch
+    of its facts (`uhc-sketch`). Next measurement: similarity across product codes (0L, 58, TC, C0, SEL,
+    P3, NXDT, C2), which decides whether a few bases can serve all 1,268 groups.
   - The earlier probe hung because it treated the first gzip member as the whole file
     (`decompressobj` stops at a member end); and UHC's Cloudflare front answers a first Range request with
     the whole 15 GB (`r.content` on it killed the runner). Both fixed.
