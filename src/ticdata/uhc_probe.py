@@ -67,8 +67,10 @@ def tail_info(url: str, session, n: int = 8 << 20) -> dict:
     bytes after the last member start. Identical bodies split into independently compressed members end in
     byte-identical members, so equal tails are a cheap duplicate test that needs no download."""
     t0 = time.time()
-    r = session.get(url, headers={"Range": f"bytes=-{n}"}, timeout=300)
-    b = r.content
+    with session.get(url, headers={"Range": f"bytes=-{n}"}, timeout=300, stream=True) as r:
+        if r.status_code != 206:  # Range ignored: the body is the whole 15 GB file, do not read it
+            return {"tail_status": r.status_code, "tail_headers": dict(r.headers), "_tail": b""}
+        b = b"".join(r.iter_content(1 << 20))[-n:]
     starts = [m.start() for m in re.finditer(b"\x1f\x8b\x08", b)]
     last = b[starts[-1]:] if starts else b""
     return {"tail_status": r.status_code, "tail_bytes": len(b), "tail_members": len(starts),
