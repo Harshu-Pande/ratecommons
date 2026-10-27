@@ -22,7 +22,8 @@
 ## How to work
 - Never wait on a running job: start long jobs first, then write code for another track.
 - GitHub Actions is the orchestrator. Start runs by committing an edit to `ops/*-request.txt`;
-  read results from `datasets/ratecommons/ops` on Hugging Face (Actions API is not reachable).
+  read results from `datasets/ratecommons/ops` on Hugging Face. `gh api` reaches the Actions API from
+  Claude sessions too (seen 2026-10-27): list runs, read logs (`gh run view --log`), dispatch workflows.
 - GitHub writes to Hugging Face through Trusted Publishers; a new dataset or bucket needs the
   repo added as a trusted publisher in its settings (browser pane is signed in to HF and GitHub).
 - Kaggle exit region varies per session: workers probe which payers they can reach first.
