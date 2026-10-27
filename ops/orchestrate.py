@@ -13,8 +13,16 @@ from huggingface_hub import HfApi, list_bucket_tree
 REPO = "Harshu-Pande/ratecommons"
 
 
-def gh(path):
-    return json.loads(subprocess.check_output(["gh", "api", path]))
+def gh(path, tries=4):
+    import time
+
+    for i in range(tries):
+        try:
+            return json.loads(subprocess.check_output(["gh", "api", path]))
+        except subprocess.CalledProcessError:
+            if i == tries - 1:
+                raise
+            time.sleep(10 * (i + 1))
 
 
 def wave_done(payer, release, wave):
@@ -32,17 +40,17 @@ def merge_done(payer, release):
         f"release={release}/source_file.parquet" in files
 
 
-def mapped_shards():
-    """Shard numbers whose parse job succeeded in any recent map run."""
+def mapped_shards(payer, release):
+    """Shard numbers whose map output is complete in the work bucket (metas.json is written last).
+    (It used to read recent map runs' job names, which mixed payers and broke when a run page failed.)"""
+    import re
+
+    prefix = f"map/{release}/{payer}/"
     done = set()
-    for run in gh(f"repos/{REPO}/actions/workflows/map.yml/runs?per_page=10")["workflow_runs"]:
-        for page in (1, 2, 3):
-            jobs = gh(f"repos/{REPO}/actions/runs/{run['id']}/jobs?per_page=100&page={page}")["jobs"]
-            for j in jobs:
-                if j["name"].startswith("parse (") and j["conclusion"] == "success":
-                    done.add(int(j["name"][7:-1]))
-            if len(jobs) < 100:
-                break
+    for i in list_bucket_tree("ratecommons/work", prefix=prefix, recursive=True):
+        m = re.search(r"/shard-(\d+)-\d+/metas\.json$", i.path)
+        if m:
+            done.add(int(m.group(1)))
     return done
 
 
@@ -74,7 +82,7 @@ def main():
             if wave_done(payer, release, w[2]):
                 continue
             a, b = map(int, w[3].split("-"))
-            mapped = mapped if mapped is not None else mapped_shards()
+            mapped = mapped if mapped is not None else mapped_shards(payer, release)
             missing = [s for s in range(a, b + 1) if s not in mapped]
             if missing:
                 print(f"wave {w[2]} waits for shards {missing[:10]}{'...' if len(missing) > 10 else ''}")
