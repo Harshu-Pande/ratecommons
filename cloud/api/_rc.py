@@ -103,6 +103,7 @@ def con() -> duckdb.DuckDBPyConnection:
             c.execute("SET enable_progress_bar = false")
             c.execute(f"SET memory_limit = '{os.environ.get('RC_MEMORY', '1500MB')}'")
             c.execute("SET threads = 4")
+            c.execute("SET temp_directory = '/tmp/rc-duck'")  # the function's working directory is read-only
             _con = c
         return _con.cursor()
 
