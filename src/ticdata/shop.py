@@ -58,7 +58,7 @@ def _download(url: str, path: str, tries: int = 4) -> str:
 
     for i in range(tries):
         try:
-            with requests.get(url, stream=True, timeout=600, headers={"User-Agent": "Mozilla/5.0 RateCommons"}) as r:
+            with requests.get(url, stream=True, timeout=600) as r:  # data.cms.gov answers 403 to a browser-like UA
                 r.raise_for_status()
                 with open(path, "wb") as f:
                     for chunk in r.iter_content(8 << 20):
@@ -70,7 +70,8 @@ def _download(url: str, path: str, tries: int = 4) -> str:
     raise RuntimeError(f"could not download {url}")
 
 
-def sources(work: str = "/tmp/shop-src", upload_to: str | None = "ratecommons/work", prefix: str = "shop/sources") -> dict:
+def sources(work: str = "/tmp/shop-src", upload_to: str | None = "ratecommons/work", prefix: str = "shop/sources",
+            cms: bool = True) -> dict:
     from huggingface_hub import hf_hub_download
 
     t0 = time.time()
@@ -95,38 +96,39 @@ def sources(work: str = "/tmp/shop-src", upload_to: str | None = "ratecommons/wo
     res["zips"] = con.execute(f"SELECT count(*) FROM '{work}/out/zip.parquet'").fetchone()[0]
     _log(json.dumps(res))
 
-    # hospitals and affiliations
-    _download(HOSPITALS, f"{work}/hosp.csv")
-    con.execute(f"""COPY (SELECT "Facility ID" AS ccn, "Facility Name" AS name, "Address" AS line1, "City/Town" AS city,
-                                 "State" AS state, left("ZIP Code", 5) AS zip5, "Telephone Number" AS phone,
-                                 "Hospital Type" AS hospital_type, "Emergency Services" AS emergency,
-                                 {place_key_sql('"Address"', '"ZIP Code"')} AS place_key
-                          FROM read_csv('{work}/hosp.csv', header = true, all_varchar = true))
-                    TO '{work}/out/hospitals.parquet' {W}""")
-    res["hospitals"] = con.execute(f"SELECT count(*) FROM '{work}/out/hospitals.parquet'").fetchone()[0]
-    _download(AFFIL, f"{work}/affil.csv")
-    con.execute(f"""COPY (SELECT DISTINCT TRY_CAST("NPI" AS BIGINT) AS npi, facility_type,
-                                 "Facility Affiliations Certification Number" AS ccn
-                          FROM read_csv('{work}/affil.csv', header = true, all_varchar = true))
-                    TO '{work}/out/affil.parquet' {W}""")
-    res["affiliations"] = con.execute(f"SELECT count(*) FROM '{work}/out/affil.parquet'").fetchone()[0]
-    os.remove(f"{work}/affil.csv")
-    _log(json.dumps(res))
+    if cms:
+        # hospitals and affiliations
+        _download(HOSPITALS, f"{work}/hosp.csv")
+        con.execute(f"""COPY (SELECT "Facility ID" AS ccn, "Facility Name" AS name, "Address" AS line1, "City/Town" AS city,
+                                     "State" AS state, left("ZIP Code", 5) AS zip5, "Telephone Number" AS phone,
+                                     "Hospital Type" AS hospital_type, "Emergency Services" AS emergency,
+                                     {place_key_sql('"Address"', '"ZIP Code"')} AS place_key
+                              FROM read_csv('{work}/hosp.csv', header = true, all_varchar = true))
+                        TO '{work}/out/hospitals.parquet' {W}""")
+        res["hospitals"] = con.execute(f"SELECT count(*) FROM '{work}/out/hospitals.parquet'").fetchone()[0]
+        _download(AFFIL, f"{work}/affil.csv")
+        con.execute(f"""COPY (SELECT DISTINCT TRY_CAST("NPI" AS BIGINT) AS npi, facility_type,
+                                     "Facility Affiliations Certification Number" AS ccn
+                              FROM read_csv('{work}/affil.csv', header = true, all_varchar = true))
+                        TO '{work}/out/affil.parquet' {W}""")
+        res["affiliations"] = con.execute(f"SELECT count(*) FROM '{work}/out/affil.parquet'").fetchone()[0]
+        os.remove(f"{work}/affil.csv")
+        _log(json.dumps(res))
 
-    # Medicare provider x service (codes and counts only; CMS's HCPCS text is AMA's and is not kept)
-    _download(MEDICARE_PS, f"{work}/mps.csv")
-    con.execute(f"""COPY (SELECT TRY_CAST(Rndrng_NPI AS BIGINT) AS npi, Rndrng_Prvdr_Ent_Cd AS entity,
-                                 Rndrng_Prvdr_Type AS provider_type, Rndrng_Prvdr_State_Abrvtn AS state,
-                                 Rndrng_Prvdr_Zip5 AS zip5, HCPCS_Cd AS hcpcs, Place_Of_Srvc AS pos,
-                                 TRY_CAST(Tot_Benes AS INTEGER) AS benes, TRY_CAST(Tot_Srvcs AS DOUBLE) AS services,
-                                 TRY_CAST(Avg_Sbmtd_Chrg AS DOUBLE) AS avg_charge,
-                                 TRY_CAST(Avg_Mdcr_Alowd_Amt AS DOUBLE) AS avg_allowed
-                          FROM read_csv('{work}/mps.csv', header = true, all_varchar = true, quote = '"')
-                          ORDER BY hcpcs, npi)
-                    TO '{work}/out/medicare.parquet' {W}""")
-    res["medicare_rows"] = con.execute(f"SELECT count(*) FROM '{work}/out/medicare.parquet'").fetchone()[0]
-    os.remove(f"{work}/mps.csv")
-    _log(json.dumps(res))
+        # Medicare provider x service (codes and counts only; CMS's HCPCS text is AMA's and is not kept)
+        _download(MEDICARE_PS, f"{work}/mps.csv")
+        con.execute(f"""COPY (SELECT TRY_CAST(Rndrng_NPI AS BIGINT) AS npi, Rndrng_Prvdr_Ent_Cd AS entity,
+                                     Rndrng_Prvdr_Type AS provider_type, Rndrng_Prvdr_State_Abrvtn AS state,
+                                     Rndrng_Prvdr_Zip5 AS zip5, HCPCS_Cd AS hcpcs, Place_Of_Srvc AS pos,
+                                     TRY_CAST(Tot_Benes AS INTEGER) AS benes, TRY_CAST(Tot_Srvcs AS DOUBLE) AS services,
+                                     TRY_CAST(Avg_Sbmtd_Chrg AS DOUBLE) AS avg_charge,
+                                     TRY_CAST(Avg_Mdcr_Alowd_Amt AS DOUBLE) AS avg_allowed
+                              FROM read_csv('{work}/mps.csv', header = true, all_varchar = true, quote = '"')
+                              ORDER BY hcpcs, npi)
+                        TO '{work}/out/medicare.parquet' {W}""")
+        res["medicare_rows"] = con.execute(f"SELECT count(*) FROM '{work}/out/medicare.parquet'").fetchone()[0]
+        os.remove(f"{work}/mps.csv")
+        _log(json.dumps(res))
 
     # clinicians and addresses from NPPES + Doctors and Clinicians
     npi = hf_hub_download(IDENTITY, "nppes/release=2026-10/npi.parquet", repo_type="dataset", local_dir=work)
@@ -189,3 +191,348 @@ def sources(work: str = "/tmp/shop-src", upload_to: str | None = "ratecommons/wo
 
         res["uploaded"] = upload(f"{work}/out", prefix, upload_to)
     return res
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Stage 2: cleaned offers per procedure and place
+
+CLOUD = "https://huggingface.co/buckets/ratecommons/work/resolve/serve/v2"
+SRC = "https://huggingface.co/buckets/ratecommons/work/resolve/shop/sources"
+PAYERS = ["cigna", "aetna", "uhc"]
+STATES = ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY",
+          "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH",
+          "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "PR"]
+FACILITY_POS = ("19", "21", "22", "23", "24", "26", "31", "34", "41", "42", "51", "52", "53", "56", "61")
+PLACEHOLDER = "(rate <= 0.01 OR rate >= 99999 OR rate_raw LIKE '9999%')"
+
+
+def _fetch(url: str, dest: str) -> str | None:
+    import requests
+
+    if os.path.exists(dest):
+        return dest
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    for i in range(4):
+        try:
+            with requests.get(url, stream=True, timeout=300) as r:
+                if r.status_code == 404:
+                    return None
+                r.raise_for_status()
+                tmp = dest + ".part"
+                with open(tmp, "wb") as f:
+                    for c in r.iter_content(4 << 20):
+                        f.write(c)
+                os.replace(tmp, dest)
+                return dest
+        except Exception as e:
+            _log(f"fetch retry {i}: {url}: {e!r}")
+            time.sleep(5 * (i + 1))
+    raise RuntimeError(f"could not fetch {url}")
+
+
+def _fetch_many(pairs: list[tuple[str, str]], threads: int = 16) -> dict:
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(threads) as ex:
+        return dict(zip([d for _, d in pairs], ex.map(lambda p: _fetch(*p), pairs)))
+
+
+def _code_key(code: str) -> str:
+    import re
+
+    return re.sub(r"[^A-Za-z0-9._-]", "_", (code or "").strip())[:80] or "_"
+
+
+def _products(payer: str, meta: dict) -> tuple[list[str], dict]:
+    """Friendly product names per payer (sorted) and net -> product index."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("rcapi", os.path.join(os.path.dirname(__file__), "..", "..",
+                                                                         "cloud", "api", "_rc.py"))
+    rc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rc)
+    lab = {n["net"]: rc._label(payer, n.get("file_names") or [], n.get("plan_names") or [])[0] for n in meta["networks"]}
+    names = sorted(set(lab.values()))
+    idx = {p: i for i, p in enumerate(names)}
+    return names, {net: idx[p] for net, p in lab.items()}
+
+
+def _setup(con, work: str) -> dict:
+    """Tables shared by every state: catalog, taxonomy groups, clinicians' groups, Medicare PFS."""
+    from .shopcatalog import TAX, catalog
+
+    cat = catalog()
+    rows = []
+    for p in cat:
+        roles = p["who"]
+        for code in p["codes"] + p.get("alt", []) + p.get("addon", []):
+            for role, grps in roles.items():
+                for g in grps:
+                    rows.append((p["id"], p["kind"], code, role, g, code in p.get("addon", [])))
+    con.execute("CREATE TABLE cat (proc VARCHAR, kind VARCHAR, code VARCHAR, role VARCHAR, grp VARCHAR, addon BOOLEAN)")
+    con.executemany("INSERT INTO cat VALUES (?, ?, ?, ?, ?, ?)", rows)
+    con.execute("CREATE TABLE taxgrp (grp VARCHAR, prefix VARCHAR, n INTEGER)")
+    con.executemany("INSERT INTO taxgrp VALUES (?, ?, ?)", [(g, x, len(x)) for g, xs in TAX.items() for x in xs])
+    src = {f: f"{work}/src/{f}.parquet" for f in ("addr", "clin", "medicare", "affil", "hospitals", "zip", "dac_groups")}
+    _fetch_many([(f"{SRC}/{f}.parquet", d) for f, d in src.items()], 4)
+    _fetch(f"{CLOUD}/shared/medicare.parquet", f"{work}/src/pfs.parquet")
+    lens = [r[0] for r in con.execute("SELECT DISTINCT n FROM taxgrp").fetchall()]
+    union = " UNION ALL ".join(f"""SELECT c.npi, g.grp FROM (SELECT npi, unnest(taxonomies) AS tax FROM read_parquet('{src["clin"]}')) c
+                                   JOIN taxgrp g ON g.n = {n} AND left(c.tax, {n}) = g.prefix""" for n in lens)
+    con.execute(f"CREATE TABLE npigrp AS SELECT DISTINCT * FROM ({union})")
+    codes = sorted({r[0] for r in rows})
+    con.execute(f"""CREATE TABLE ev AS SELECT npi, hcpcs, sum(services) AS services, max(avg_charge) AS avg_charge
+                    FROM read_parquet('{src["medicare"]}') WHERE hcpcs IN ({", ".join(f"'{c}'" for c in codes)})
+                    GROUP BY 1, 2""")
+    # family evidence: the clinician bills a closely related code (same first 4 characters), e.g. 70450 ~ 70460
+    con.execute(f"""CREATE TABLE evfam AS SELECT DISTINCT npi, left(hcpcs, 4) AS fam FROM read_parquet('{src["medicare"]}')
+                    WHERE left(hcpcs, 4) IN ({", ".join(f"'{c[:4]}'" for c in codes)})""")
+    con.execute(f"CREATE TABLE pfs AS SELECT hcpcs, coalesce(modifier, '') AS m, state, nonfacility_amount AS nf, "
+                f"facility_amount AS fa FROM read_parquet('{work}/src/pfs.parquet')")
+    con.execute(f"CREATE TABLE zipc AS SELECT * FROM read_parquet('{src['zip']}')")
+    return {"cat": cat, "codes": codes, "src": src}
+
+
+def _payer_files(payer: str, codes: list[str], states: list[str], work: str) -> dict:
+    meta = json.load(open(_fetch(f"{CLOUD}/{payer}/meta.json", f"{work}/{payer}/meta.json")))
+    _fetch(f"{CLOUD}/{payer}/ns.parquet", f"{work}/{payer}/ns.parquet")
+    _fetch(f"{CLOUD}/{payer}/codes.parquet", f"{work}/{payer}/codes.parquet")
+    import duckdb
+
+    idx = duckdb.connect().execute(f"SELECT DISTINCT t, k, billing_code FROM read_parquet('{work}/{payer}/codes.parquet') "
+                                   f"WHERE billing_code IN ({', '.join(repr(c) for c in codes)})").fetchall()
+    pairs = [(f"{CLOUD}/{payer}/code/{t}/{k}.parquet", f"{work}/{payer}/code/{t}/{k}.parquet") for t, k, _ in idx]
+    pairs.append((f"{CLOUD}/{payer}/cstm_all.parquet", f"{work}/{payer}/cstm_all.parquet"))
+    got = _fetch_many(pairs)
+    buckets = sorted({(t, k[:3]) for t, k, _ in idx})
+    st = []
+    for s in states:
+        for f in ("pg", "pgnpi", "plipg"):
+            st.append((f"{CLOUD}/{payer}/state/{s}/{f}.parquet", f"{work}/{payer}/state/{s}/{f}.parquet"))
+        for t, b in buckets:
+            st.append((f"{CLOUD}/{payer}/state/{s}/pspli/{t}/{b}.parquet", f"{work}/{payer}/state/{s}/pspli/{t}/{b}.parquet"))
+        st.append((f"{CLOUD}/{payer}/state/{s}/pspli/_cstm_all.parquet", f"{work}/{payer}/state/{s}/pspli/_cstm_all.parquet"))
+    got.update(_fetch_many(st))
+    return {"meta": meta, "code_files": [d for d in got if "/code/" in d and got[d]], "got": got}
+
+
+def build(states: list[str], work: str = "/tmp/shop", out: str = "/tmp/shop-out", upload_to: str | None = "ratecommons/work",
+          prefix: str = "shop/v1") -> dict:
+    """Cleaned offers for the given states, written as offers/<proc>/<zip3>.json (+ summaries)."""
+    t0 = time.time()
+    os.makedirs(work, exist_ok=True)
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(out)
+    con = _duck(f"{work}/duck")
+    env = _setup(con, work)
+    res: dict = {"states": {}, "products": {}}
+    pf = {}
+    for p in PAYERS:
+        pf[p] = _payer_files(p, env["codes"], states, work)
+        names, netmap = _products(p, pf[p]["meta"])
+        res["products"][p] = names
+        con.execute(f"CREATE OR REPLACE TABLE prod_{p} AS SELECT DISTINCT n.ns, x.prod FROM read_parquet('{work}/{p}/ns.parquet') n "
+                    f"JOIN (SELECT unnest(?) AS net, unnest(?) AS prod) x USING (net)",
+                    [list(netmap.keys()), list(netmap.values())])
+        cf = pf[p]["code_files"]
+        con.execute(f"""CREATE OR REPLACE TABLE rates_{p} AS
+            SELECT code, ps, ns, negotiated_type AS ntype, round(rate, 2) AS rate, rate_raw, billing_class AS bclass,
+                   coalesce(modifiers, '') AS mods, coalesce(pos, '') AS pos, expiration
+            FROM read_parquet({cf!r}, union_by_name = true)
+            WHERE NOT {PLACEHOLDER} AND (expiration IS NULL OR expiration = '' OR expiration >= strftime(current_date, '%Y-%m-%d'))""")
+        flat = f"{work}/{p}/cstm_all.parquet"
+        if os.path.exists(flat):
+            con.execute(f"""CREATE OR REPLACE TABLE flat_{p} AS
+                SELECT code, ps, ns, negotiated_type AS ntype, round(rate, 2) AS rate, rate_raw, billing_class AS bclass
+                FROM read_parquet('{flat}') WHERE NOT {PLACEHOLDER} AND negotiated_type IN ('per diem', 'negotiated', 'fee schedule', 'derived')""")
+        else:
+            con.execute(f"CREATE OR REPLACE TABLE flat_{p} AS SELECT NULL::VARCHAR code, NULL::INTEGER ps, NULL::INTEGER ns, "
+                        f"NULL::VARCHAR ntype, NULL::DOUBLE rate, NULL::VARCHAR rate_raw, NULL::VARCHAR bclass WHERE false")
+        res[f"rates_{p}"] = con.execute(f"SELECT count(*) FROM rates_{p}").fetchone()[0]
+    _log(json.dumps({k: v for k, v in res.items() if k.startswith("rates")}))
+    for s in states:
+        try:
+            res["states"][s] = _build_state(con, s, env, pf, work, out, res["products"])
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            res["states"][s] = {"error": repr(e)[:400]}
+        _log(json.dumps({s: res["states"][s]}, default=str))
+        for p in PAYERS:  # state files are no longer needed
+            shutil.rmtree(f"{work}/{p}/state/{s}", ignore_errors=True)
+    json.dump({"products": res["products"]}, open(f"{out}/products-{'-'.join(states)}.json", "w"))
+    res["seconds"] = round(time.time() - t0)
+    if upload_to:
+        from .cloudpack import upload
+
+        res["uploaded"] = upload(out, prefix, upload_to)
+    return res
+
+
+def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products: dict) -> dict:
+    t0 = time.time()
+    src = env["src"]
+    con.execute(f"""CREATE OR REPLACE TABLE addr_s AS SELECT npi, place_key, line1, city, state, zip5, phone
+                    FROM read_parquet('{src["addr"]}') WHERE state = '{s}'""")
+    con.execute(f"""CREATE OR REPLACE TABLE clin_s AS SELECT npi, entity_type, name, credential, taxonomy_code, classification,
+                           other_name FROM read_parquet('{src["clin"]}') WHERE npi IN (SELECT npi FROM addr_s)""")
+    con.execute("CREATE OR REPLACE TABLE rolemap AS SELECT DISTINCT proc, kind, code, role, addon FROM cat")
+    con.execute("CREATE OR REPLACE TABLE catg AS SELECT DISTINCT proc, code, role, grp FROM cat")
+    po_parts, team_parts = [], []
+    for p in PAYERS:
+        d = f"{work}/{p}/state/{s}"
+        if not os.path.exists(f"{d}/pgnpi.parquet"):
+            continue
+        buckets = [b for b in glob.glob(f"{d}/pspli/*/*.parquet")]
+        if not buckets:
+            continue
+        con.execute(f"""CREATE OR REPLACE TABLE psg AS SELECT DISTINCT b.ps, l.pg FROM read_parquet({buckets!r}) b
+                        JOIN read_parquet('{d}/plipg.parquet') l USING (pli)""")
+        con.execute(f"""CREATE OR REPLACE TABLE og AS
+            SELECT g.pg, r.code, r.ntype, r.rate, r.bclass, r.mods,
+                   (r.pos = '' OR list_contains(string_split(r.pos, ','), '11') OR r.pos LIKE 'CSTM%') AS office,
+                   list(DISTINCT pr.prod ORDER BY pr.prod) AS prods
+            FROM rates_{p} r JOIN psg g USING (ps) JOIN prod_{p} pr USING (ns)
+            GROUP BY ALL""")
+        flatb = f"{d}/pspli/_cstm_all.parquet"
+        if os.path.exists(flatb):  # flat all-services arrangements (e.g. one amount per urgent-care visit)
+            con.execute(f"""INSERT INTO og SELECT l.pg, 'FLAT' AS code, f.ntype, f.rate, f.bclass, '' AS mods, true AS office,
+                                   list(DISTINCT pr.prod ORDER BY pr.prod) AS prods
+                            FROM flat_{p} f JOIN read_parquet('{flatb}') b USING (ps)
+                            JOIN read_parquet('{d}/plipg.parquet') l USING (pli) JOIN prod_{p} pr USING (ns)
+                            GROUP BY ALL""")
+        con.execute(f"""CREATE OR REPLACE TABLE ogr AS
+            SELECT og.*, m.proc, m.role, m.addon FROM og JOIN rolemap m ON (m.code = og.code AND (
+                   (m.kind = 'imaging' AND ((m.role = 'global' AND og.mods = '') OR (m.role = 'pro' AND og.mods = '26')
+                                           OR (m.role = 'tc' AND og.mods = 'TC')))
+                   OR (m.kind <> 'imaging' AND m.role = 'any' AND og.mods = '')))
+               OR (og.code = 'FLAT' AND m.kind = 'visit' AND m.role = 'any' AND NOT m.addon)""")
+        # groups' clinicians in this state, at their practice addresses
+        con.execute(f"""CREATE OR REPLACE TABLE gp AS SELECT DISTINCT n.pg, n.npi, a.place_key
+                        FROM read_parquet('{d}/pgnpi.parquet') n JOIN addr_s a USING (npi)
+                        WHERE n.pg IN (SELECT DISTINCT pg FROM ogr)""")
+        # qualified clinicians per group, place, procedure part; with Medicare evidence for the code (or its family)
+        con.execute("""CREATE OR REPLACE TABLE q AS
+            SELECT gp.pg, gp.place_key, c.proc, c.role, c.code, count(DISTINCT gp.npi) AS nq,
+                   count(DISTINCT gp.npi) FILTER (WHERE ev.npi IS NOT NULL OR ef.npi IS NOT NULL) AS nev
+            FROM gp JOIN npigrp g USING (npi) JOIN catg c ON c.grp = g.grp
+            LEFT JOIN ev ON ev.npi = gp.npi AND ev.hcpcs = c.code
+            LEFT JOIN evfam ef ON ef.npi = gp.npi AND ef.fam = left(c.code, 4)
+            GROUP BY ALL""")
+        con.execute(f"""CREATE OR REPLACE TABLE pgs AS SELECT pg, tin,
+                               coalesce(business_names[1], name) AS gname FROM read_parquet('{d}/pg.parquet')""")
+        po_parts.append(f"po_{p}")
+        con.execute(f"""CREATE OR REPLACE TABLE po_{p} AS
+            SELECT q.place_key, '{p}' AS payer, o.proc, o.role, o.code, o.ntype, o.rate, o.bclass, o.office, o.prods,
+                   list(DISTINCT g.tin) AS tins, list(DISTINCT g.gname)[1:3] AS gnames, sum(q.nq) AS nq, sum(q.nev) AS nev
+            FROM ogr o JOIN q ON q.pg = o.pg AND q.proc = o.proc AND q.role = o.role AND (q.code = o.code OR o.code = 'FLAT')
+            JOIN pgs g ON g.pg = o.pg
+            GROUP BY ALL""")
+        # reading groups at hospitals: radiologists affiliated with a hospital (CMS facility affiliations)
+        team_parts.append(f"team_{p}")
+        con.execute(f"""CREATE OR REPLACE TABLE team_{p} AS
+            SELECT a.ccn, '{p}' AS payer, o.proc, o.code, o.ntype, o.rate, o.office, o.prods, g.tin,
+                   any_value(g.gname) AS gname, count(DISTINCT n.npi) AS nrad
+            FROM read_parquet('{src["affil"]}') a JOIN npigrp r ON r.npi = a.npi AND r.grp = 'radiology'
+            JOIN read_parquet('{d}/pgnpi.parquet') n ON n.npi = a.npi
+            JOIN ogr o ON o.pg = n.pg AND o.role = 'pro'
+            JOIN pgs g ON g.pg = o.pg
+            WHERE a.ccn IN (SELECT ccn FROM read_parquet('{src["hospitals"]}') WHERE state = '{s}')
+            GROUP BY ALL""")
+    if not po_parts:
+        return {"places": 0}
+    con.execute("CREATE OR REPLACE TABLE po AS " + " UNION ALL ".join(f"SELECT * FROM {t}" for t in po_parts))
+    con.execute("CREATE OR REPLACE TABLE team AS " + " UNION ALL ".join(f"SELECT * FROM {t}" for t in team_parts))
+    # price sanity: Medicare PFS for the state (office = non-facility amount), else the state's own spread
+    con.execute(f"""CREATE OR REPLACE TABLE po2 AS
+        WITH m AS (SELECT hcpcs, m, nf, fa FROM pfs WHERE state = '{s}'),
+        d AS (SELECT proc, role, code, quantile_cont(rate, 0.02) AS p02, quantile_cont(rate, 0.98) AS p98
+              FROM po WHERE ntype IN ('negotiated', 'fee schedule', 'derived') GROUP BY ALL)
+        SELECT po.*, CASE WHEN po.office THEN m.nf ELSE coalesce(m.fa, m.nf) END AS mcr, d.p02, d.p98
+        FROM po LEFT JOIN m ON m.hcpcs = po.code AND m.m = CASE WHEN po.role = 'pro' THEN '26'
+                                                               WHEN po.role = 'tc' THEN 'TC' ELSE '' END
+        LEFT JOIN d USING (proc, role, code)""")
+    con.execute("""CREATE OR REPLACE TABLE offers AS SELECT *,
+        CASE WHEN ntype NOT IN ('negotiated', 'fee schedule', 'derived', 'per diem') THEN 'x'
+             WHEN mcr > 0 AND (rate < 0.15 * mcr OR rate > 15 * mcr) THEN 'h'
+             WHEN (mcr IS NULL OR mcr <= 0) AND code <> 'FLAT' AND p98 IS NOT NULL AND (rate < p02 / 3 OR rate > p98 * 3) THEN 'h'
+             WHEN nev > 0 THEN 'c' ELSE 'l' END AS badge
+        FROM po2""")
+    # places
+    con.execute(f"""CREATE OR REPLACE TABLE pl AS
+        WITH a AS (SELECT place_key, any_value(line1) AS line1, any_value(city) AS city, any_value(zip5) AS zip5,
+                          any_value(phone) AS phone FROM addr_s WHERE place_key IN (SELECT DISTINCT place_key FROM offers)
+                   GROUP BY place_key),
+        h AS (SELECT place_key, any_value(ccn) AS ccn, any_value(name) AS hname, any_value(hospital_type) AS htype,
+                     any_value(emergency) AS er FROM read_parquet('{src["hospitals"]}') WHERE state = '{s}' GROUP BY place_key),
+        o AS (SELECT a.place_key, mode(coalesce(nullif(c.other_name, ''), c.name)) AS oname,
+                     bool_or(c.taxonomy_code = '261QU0200X') AS urgent,
+                     bool_or(c.taxonomy_code IN ('261QR0200X', '261QM1200X', '261QR0206X', '261QR0207X', '261QR0208X')) AS imaging,
+                     bool_or(c.taxonomy_code = '291U00000X') AS lab,
+                     bool_or(c.taxonomy_code LIKE '282N%') AS hosp
+              FROM addr_s a JOIN clin_s c USING (npi) WHERE c.entity_type = '2' GROUP BY 1),
+        g AS (SELECT place_key, mode(group_name) AS gname FROM read_parquet('{src["dac_groups"]}')
+              WHERE place_key IN (SELECT place_key FROM a) GROUP BY 1),
+        doc AS (SELECT a.place_key, mode(c.name || coalesce(', ' || c.credential, '')) AS dname
+                FROM addr_s a JOIN clin_s c USING (npi) WHERE c.entity_type = '1' AND a.place_key IN (SELECT place_key FROM a)
+                GROUP BY 1)
+        SELECT a.*, h.ccn, h.htype, h.er,
+               coalesce(h.hname, o.oname, g.gname, doc.dname, 'Medical office') AS name,
+               CASE WHEN h.ccn IS NOT NULL OR o.hosp THEN 'hospital' WHEN o.urgent THEN 'urgent' WHEN o.imaging THEN 'imaging'
+                    WHEN o.lab THEN 'lab' ELSE 'clinic' END AS kind,
+               (h.hname ILIKE '%CHILDREN%' OR o.oname ILIKE '%CHILDREN%' OR h.htype ILIKE '%Childrens%') AS kids,
+               z.lat + ((hash(a.place_key) % 1000) / 1000.0 - 0.5) * 0.012 AS lat,
+               z.lon + ((hash(a.place_key || 'x') % 1000) / 1000.0 - 0.5) * 0.015 AS lng
+        FROM a LEFT JOIN h USING (place_key) LEFT JOIN o USING (place_key) LEFT JOIN g USING (place_key)
+        LEFT JOIN doc USING (place_key) LEFT JOIN zipc z ON z.zip5 = a.zip5""")
+    stats = _write_state(con, s, out)
+    stats["seconds"] = round(time.time() - t0)
+    stats["offers"] = con.execute("SELECT badge, count(*) FROM offers GROUP BY 1 ORDER BY 1").fetchall()
+    return stats
+
+
+def _write_state(con, s: str, out: str) -> dict:
+    """offers/<proc>/<zip3>-<state>.json: places with their offers (and hospital reading groups)."""
+    places = {r[0]: r for r in con.execute(
+        "SELECT place_key, name, line1, city, zip5, phone, lat, lng, kind, kids, ccn, er FROM pl").fetchall()}
+    teams: dict = {}
+    for ccn, payer, proc, code, ntype, rate, office, prods, tin, gname, nrad in con.execute(
+            "SELECT ccn, payer, proc, code, ntype, rate, office, prods, tin, gname, nrad FROM team "
+            "WHERE ntype IN ('negotiated', 'fee schedule', 'derived')").fetchall():
+        teams.setdefault((ccn, proc), []).append([payer, code, ntype[0], rate, prods, tin, gname, nrad])
+    files: dict = {}
+    n = 0
+    for (place_key, payer, proc, role, code, ntype, rate, bclass, office, prods, tins, gnames, nq, nev, badge) in con.execute(
+            """SELECT place_key, payer, proc, role, code, ntype, rate, bclass, office, prods, tins, gnames, nq, nev, badge
+               FROM offers ORDER BY proc, place_key""").fetchall():
+        pl = places.get(place_key)
+        if not pl or pl[6] is None:
+            continue
+        key = (proc, (pl[4] or "000")[:3])
+        f = files.setdefault(key, {})
+        e = f.get(place_key)
+        if e is None:
+            e = f[place_key] = {"k": place_key, "n": pl[1], "a": pl[2], "c": pl[3], "s": s, "z": pl[4], "ph": pl[5],
+                                "lat": round(pl[6], 5), "lng": round(pl[7], 5), "kind": pl[8], "kids": bool(pl[9]),
+                                "o": []}
+            if pl[10]:
+                e["ccn"] = pl[10]
+                e["er"] = pl[11] == "Yes"
+                if (pl[10], proc) in teams:
+                    e["t"] = teams[(pl[10], proc)]
+        e["o"].append([payer, role, code, ntype, rate, 1 if bclass == "institutional" else 0, 1 if office else 0, badge,
+                       prods, tins[:4], gnames, nq, nev])
+        n += 1
+    for (proc, z3), f in files.items():
+        os.makedirs(f"{out}/offers/{proc}", exist_ok=True)
+        json.dump({"proc": proc, "zip3": z3, "state": s, "places": list(f.values())},
+                  open(f"{out}/offers/{proc}/{z3}-{s}.json", "w"), separators=(",", ":"))
+    # summary: per procedure, the spread of confirmed/likely dollar totals (global or any) for this state
+    summ = con.execute("""SELECT proc, payer, count(DISTINCT place_key), quantile_cont(rate, 0.1), median(rate),
+                                 quantile_cont(rate, 0.9)
+                          FROM offers WHERE badge IN ('c', 'l') AND role IN ('global', 'any') AND code <> 'FLAT'
+                          GROUP BY ALL""").fetchall()
+    os.makedirs(f"{out}/summary", exist_ok=True)
+    json.dump([list(r) for r in summ], open(f"{out}/summary/{s}.json", "w"))
+    return {"places": len(places), "files": len(files), "offers_written": n}
