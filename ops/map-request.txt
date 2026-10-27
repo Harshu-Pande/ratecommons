@@ -12,3 +12,4 @@ aetna 252 0 0-7
 aetna 252 0 8-39
 aetna 252 0 40-251
 uhc 2 0 0-9 match=UHIC_Insurer_Options-PPO_P3,UHIC_Insurer_Choice-Plus_C2
+uhc 3 0 0-2 match=HEALTHSCOPE-BENEFITS_Third-Party-Administrator_UNITEDHEALTHCARE-CHOICE-PLUS_0L,HealthSCOPE-Benefits--Inc-_Third-Party-Administrator_TENET-IN-MICHIGAN_UNITEDHEALTHCARE-CHOICE-PLUS_-TNT_0L,HealthSCOPE-Benefits--Inc-_Third-Party-Administrator_REAL-APPEAL-UNITEDHEALTHCARE-CSP_UNITEDHEALTHCARE-CHOICE-PLUS_-SRA_0L
