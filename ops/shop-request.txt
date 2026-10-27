@@ -1,3 +1,4 @@
 # CareCompass data builds: last line = groups ("all", "meta", "TN,MO IL"), optional prefix=shop/v2
 TN MO IL meta
 TN MO IL meta
+all

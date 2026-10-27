@@ -436,7 +436,9 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
                                coalesce(business_names[1], name) AS gname FROM read_parquet('{d}/pg.parquet')""")
         po_parts.append(f"po_{p}")
         con.execute("CREATE TABLE IF NOT EXISTS tn (tin VARCHAR, gname VARCHAR)")
-        con.execute("INSERT INTO tn SELECT tin, mode(gname) FROM pgs WHERE tin NOT IN (SELECT tin FROM tn) GROUP BY tin")
+        # some groups carry every department name joined by ';' as one business name: keep the first
+        con.execute("""INSERT INTO tn SELECT tin, mode(nullif(trim(split_part(gname, ';', 1)), '')) FROM pgs
+                       WHERE tin NOT IN (SELECT tin FROM tn) GROUP BY tin""")
         # price sanity per row: Medicare PFS for the state (office = non-facility amount), else this payer's own spread
         con.execute(f"""CREATE OR REPLACE TABLE chk AS
             WITH d AS (SELECT proc, role, code, quantile_cont(rate, 0.02) AS p02, quantile_cont(rate, 0.98) AS p98
@@ -499,9 +501,10 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
         o AS (SELECT a.place_key,
                      -- the name on the door: a hospital's "doing business as" name first (shortest wins, e.g. "Le Bonheur
                      -- Children's Hospital" over "... ESRD Unit"), then the most common organization name here
-                     coalesce(arg_min(d.dba, length(d.dba)) FILTER (WHERE c.taxonomy_code LIKE '282N%' AND d.dba IS NOT NULL),
+                     coalesce(arg_min(d.dba, (c.taxonomy_code = '282NC2000X')::INT * 1000 + length(d.dba))
+                                  FILTER (WHERE c.taxonomy_code LIKE '282N%' AND d.dba IS NOT NULL),
                               mode(coalesce(d.dba, c.name))) AS oname,
-                     bool_or(c.taxonomy_code = '282NC2000X') AS kidshosp,
+                     bool_or(c.taxonomy_code = '282NC2000X') AND NOT bool_or(c.taxonomy_code = '282N00000X') AS kidshosp,
                      bool_or(c.taxonomy_code = '261QU0200X') AS urgent,
                      bool_or(c.taxonomy_code IN ('261QR0200X', '261QM1200X', '261QR0206X', '261QR0207X', '261QR0208X')) AS imaging,
                      bool_or(c.taxonomy_code = '291U00000X') AS lab,
