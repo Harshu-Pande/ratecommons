@@ -401,13 +401,54 @@ def reduce_dims(payer: str, release: str, bucket: str, out: str, token=None, wor
     else:
         want = [p for p in allp if p.endswith(f"/{table}.parquet") or is_meta(p)]
     local = os.path.join(workdir, f"dims-{table}")
+    presplit = None
+    if table in DIM_SLICES:  # big list tables: download and split in batches so disk holds ~one copy
+        presplit = _fetch_split(bucket, [p for p in want if not is_meta(p)], local, prefix, token, table)
+        want = [p for p in want if is_meta(p)]
     _fetch(bucket, want, local, prefix, token)
-    res = reduce_dims_local(local, payer, out, table, delete_inputs=True)
+    res = reduce_dims_local(local, payer, out, table, delete_inputs=True, presplit=presplit)
     res["download_seconds"] = round(time.time() - t0, 1) - res["seconds"]
     return res
 
 
-def reduce_dims_local(local: str, payer: str, out: str, table: str = "all", delete_inputs: bool = False) -> dict:
+def _fetch_split(bucket: str, paths: list[str], local: str, prefix: str, token, name: str) -> int:
+    """Download one table's inputs a batch at a time, append each batch to a hash-sliced copy, delete the batch.
+    Returns the slice count. Peak disk is the sliced copy plus one batch (the whole input at once ran a
+    runner with 105 GB free out of space on Aetna wave 6)."""
+    from huggingface_hub import list_bucket_tree
+
+    size = {i.path: getattr(i, "size", 0) or 0 for i in list_bucket_tree(bucket, prefix=prefix, recursive=True, token=token)
+            if getattr(i, "type", "file") == "file"}
+    total = sum(size.get(p, 0) for p in paths)
+    k = max(DIM_SLICES.get(name, 1), total // int(os.environ.get("RC_DIM_SLICE_BYTES", 300 << 20)) + 1)
+    cap = int(os.environ.get("RC_SPLIT_BATCH_BYTES", 12 << 30))
+    batches, cur, cb = [], [], 0
+    for p in paths:
+        cur.append(p)
+        cb += size.get(p, 0)
+        if cb >= cap:
+            batches.append(cur)
+            cur, cb = [], 0
+    if cur:
+        batches.append(cur)
+    con = _duck(local)
+    split = f"{local}/split-{name}"
+    for n, b in enumerate(batches):
+        files = _fetch(bucket, b, f"{local}/batch", prefix, token)
+        con.execute(f"""COPY (SELECT *, (hash({DIMS[name]}) % {k})::INTEGER AS _slice
+                              FROM read_parquet({files!r}, union_by_name = true))
+                        TO '{split}' (FORMAT parquet, COMPRESSION zstd, PARTITION_BY (_slice),
+                                      OVERWRITE_OR_IGNORE true, FILENAME_PATTERN 'b{n}_{{i}}')""")
+        import shutil
+
+        shutil.rmtree(f"{local}/batch", ignore_errors=True)
+        print(f"split batch {n + 1}/{len(batches)}: {len(b)} files", flush=True)
+    con.close()
+    return k
+
+
+def reduce_dims_local(local: str, payer: str, out: str, table: str = "all", delete_inputs: bool = False,
+                      presplit: int | None = None) -> dict:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -433,9 +474,13 @@ def reduce_dims_local(local: str, payer: str, out: str, table: str = "all", dele
     for name, key in tables.items():
         files = sorted(str(p) for p in Path(local).glob(f"*/{name}.parquet")) + \
             sorted(str(p) for p in Path(local).glob(f"*/{name}/*.parquet"))  # wave outputs are sliced
+        if presplit:
+            files = sorted(str(p) for p in Path(f"{local}/split-{name}").glob("*/*.parquet"))
         if not files:
             continue
         src = f"read_parquet({files!r}, union_by_name = true)"
+        if presplit:
+            src = f"(SELECT * EXCLUDE (_slice) FROM {src})"
         cols = {d[0] for d in con.execute(f"SELECT * FROM {src} LIMIT 0").description}
         n_in = con.execute(f"SELECT count(*) FROM {src}").fetchone()[0]
         tin = ("list_distinct(flatten(list(coalesce(tin_raws, [tin_raw]))))" if "tin_raws" in cols and "tin_raw" in cols
@@ -450,8 +495,8 @@ def reduce_dims_local(local: str, payer: str, out: str, table: str = "all", dele
             return f"SELECT DISTINCT ON ({key}) * FROM {source}"
 
         # list columns and list aggregates do not spill well: about 300 MB of compressed input per slice
-        k = max(DIM_SLICES.get(name, 1),
-                sum(os.path.getsize(f) for f in files) // int(os.environ.get("RC_DIM_SLICE_BYTES", 300 << 20)) + 1)
+        k = presplit or max(DIM_SLICES.get(name, 1),
+                            sum(os.path.getsize(f) for f in files) // int(os.environ.get("RC_DIM_SLICE_BYTES", 300 << 20)) + 1)
         single = name not in DIM_SLICES  # published as one file
         if k == 1:
             dest = f"{out}/{name}.parquet" if single else f"{out}/{name}/part-00.parquet"
@@ -463,9 +508,10 @@ def reduce_dims_local(local: str, payer: str, out: str, table: str = "all", dele
 
             # one streaming pass splits the input by slice; then each slice is deduplicated alone
             split = f"{local}/split-{name}"
-            con.execute(f"""COPY (SELECT *, (hash({key}) % {k})::INTEGER AS _slice FROM {src})
-                            TO '{split}' (FORMAT parquet, PARTITION_BY (_slice), OVERWRITE_OR_IGNORE true)""")
-            if delete_inputs:  # the split copy replaces the downloaded input on disk
+            if not presplit:
+                con.execute(f"""COPY (SELECT *, (hash({key}) % {k})::INTEGER AS _slice FROM {src})
+                                TO '{split}' (FORMAT parquet, PARTITION_BY (_slice), OVERWRITE_OR_IGNORE true)""")
+            if delete_inputs and not presplit:  # the split copy replaces the downloaded input on disk
                 for f in files:
                     os.remove(f)
             parts_dir = f"{local}/parts-{name}" if single else f"{out}/{name}"
