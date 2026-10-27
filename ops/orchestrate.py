@@ -21,7 +21,9 @@ def wave_done(payer, release, wave):
     prefix = f"reduced/{release}/{payer}/wave-{wave}/"
     paths = {i.path for i in list_bucket_tree("ratecommons/work", prefix=prefix, recursive=True)}
     parts = all(f"{prefix}rate_fact/part-{k:02d}.parquet" in paths for k in range(16))
-    return parts and f"{prefix}code.parquet" in paths and f"{prefix}metas.json" in paths
+    dims = all(any(x.startswith(f"{prefix}{t}") for x in paths)  # a dims job can fail while the facts succeed
+               for t in ("provider_group", "provider_set", "provider_list", "price_term", "price_list"))
+    return parts and dims and f"{prefix}code.parquet" in paths and f"{prefix}metas.json" in paths
 
 
 def merge_done(payer, release):
