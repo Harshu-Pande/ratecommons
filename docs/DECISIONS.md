@@ -11,11 +11,18 @@ Newest first. One entry per lesson: what we saw, what we changed.
   (`DIM_SLICES`) in batches of `RC_SPLIT_BATCH_BYTES` (12 GB), appends each batch to the sliced copy as
   zstd, and deletes the batch, so peak disk is about one copy. The orchestrator called wave 7 "done"
   because it checked only rate_fact, code and metas; it now also requires every dims table.
-- **AI clients cache tool lists.** ChatGPT kept calling `run_sql` from the old Mac app after the cloud app
-  replaced it ("unknown tool run_sql"). Re-adding the connector refreshes the list. For questions that
-  needed SQL (rank groups nationally by a weighted basket of codes), the cloud app has `rank_providers`
-  instead of raw SQL: per group the median per code, weighted, compared with national Medicare.
-
+- **AI clients cache tool lists; custom SQL is back, sandboxed.** ChatGPT kept calling `run_sql` from the old
+  Mac app ("unknown tool run_sql"); re-adding the connector refreshes the list. The cloud app's `run_sql` takes
+  any one DuckDB SELECT. Data comes in through table functions (`rc_rates`, `rc_rates_by_product`,
+  `rc_medicare`, `rc_codes`, `rc_products`, `rc_groups`, `rc_group_npis`, `rc_nppes`, `rc_code_file`) that the
+  engine resolves first: it fetches the needed small files and, for `rc_rates`, writes one Parquet per
+  payer x state into a scratch folder. The user's query then runs on a fresh DuckDB with
+  `allowed_directories` = cache + scratch, `enable_external_access=false`, `lock_configuration=true`, one
+  SELECT statement only (checked by DuckDB's own parser), 1.1 GB memory, an interrupt at the time budget.
+  No pyarrow (not on Vercel). `rc_rates` collapses payer products by default: Cigna CA for 4 codes was
+  ~5.7M product-level rows and ran out of memory; without products it is 0.76M rows in 1.2 s. The user's
+  "top radiology groups nationally on the 10 most common CPTs" runs on Vercel in 78 s (0.93M rows, every
+  state). Function limit raised to 300 s.
 - **The app runs in the cloud; the Mac is out of the loop.** Pre-joining rates to providers is not an
   option (a Cigna sample: one sixteenth of the codes in Missouri alone is 32.8 million provider-level
   rows, about 30 billion for all of Cigna). Instead `cloudpack.py` re-cuts each serving pack into small
