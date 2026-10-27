@@ -1,3 +1,11 @@
+> **CareCompass v2 (2026-10-27):** the patient app is in `carecompass/` (Vite + React; Vercel project `carecompass`,
+> root directory `carecompass`, deployed from GitHub). It reads static JSON from the work bucket under `shop/v1/`:
+> `offers/<procedure>/<zip3>-<ST>.json` (places with their offers; a `g` map of TIN -> group name), `meta/zip3.json`,
+> `meta/zip/<zip3>.json`, `meta/products.json`. Built by `src/ticdata/shop.py` (`ticdata shop-sources`, `shop-build
+> --states`, `shop-meta`) through `.github/workflows/shop.yml` (`ops/shop-request.txt`: `all`, `meta`, or state groups).
+> Procedures are in `src/ticdata/shopcatalog.py` (exported to `carecompass/src/data/procedures.json`). Method and
+> lessons: `docs/DECISIONS.md` (2026-10-27). Production promotion of a preview deployment is a manual step.
+
 > **Update 2026-10-27:** the app now runs serverless at https://ratecommons-cloud.vercel.app (code in
 > `cloud/`, data in the public work bucket under `serve/v2/` (env `RC_DATA_URL`; v2 buckets provider sets by code prefix), built by `.github/workflows/cloud.yml`). The
 > old address https://ratecommons-atticusfinch.vercel.app forwards there. The Mac setup below is retired.

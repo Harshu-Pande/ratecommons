@@ -9,4 +9,4 @@ export const directionsUrl = (p) =>
   `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${p.name}, ${p.a}, ${p.c}, ${p.s} ${p.z}`)}`
 export const titleCase = (s) =>
   String(s || '').toLowerCase().replace(/(^|[\s\-/(&.,])([a-z])/g, (m, a, b) => a + b.toUpperCase())
-    .replace(/\b(Llc|Pc|Pllc|Pa|Lp|Md|Do|Np|Inc|Ii|Iii|Ut|Ssm|Bjc|Mri|Ct|Us|Usa|Er)\b/g, (m) => m.toUpperCase())
+    .replace(/\b(Llc|Pc|Pllc|Pa|Lp|Md|Do|Np|Inc|Ii|Iii|Ut|Ssm|Bjc|Mri|Ct|Us|Usa|Er|Tms|Hca|Aprn|Lcsw|Lpc|Lcpc|Ms|Phd|Psyd)\b/g, (m) => m.toUpperCase())
