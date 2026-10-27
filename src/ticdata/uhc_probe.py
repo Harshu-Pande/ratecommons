@@ -203,3 +203,36 @@ def diff(match: str = "_0L_", n: int = 4, head_mb: int = 256) -> dict:
         res["pairs"][-1]["network_names"] = [[x.decode("utf-8", "replace") for x in y] for y in res["pairs"][-1]["network_names"]]
         print(json.dumps(res["pairs"][-1])[:3000], flush=True)
     return res
+
+
+def tails(threads: int = 16, n: int = 1 << 20, match: str = "") -> dict:
+    """Last n compressed bytes of every UHC in-network file (guarded range reads): the last gzip member's
+    CRC32/ISIZE, how many members start in the window and a hash of the last member. Files with identical
+    rates end in identical members whatever their headers say."""
+    from .discover import uhc
+    from .net import fetch_range, new_session
+
+    s = new_session(pool=threads * 2)
+    _, entries = uhc(s)
+    es = [e for e in entries if e["kind"] == "in_network" and (e.get("size") or 0) > n and match in e["name"]]
+    t0 = time.time()
+
+    def one(e):
+        try:
+            b = fetch_range(e["url"], e["size"] - n, e["size"] - 1, s, total=e["size"])
+            starts = [m.start() for m in re.finditer(b"\x1f\x8b\x08", b)]
+            last = b[starts[-1]:] if starts else b""
+            return {"name": e["name"], "size": e["size"], "crc32": b[-8:-4].hex(), "isize": int.from_bytes(b[-4:], "little"),
+                    "members_in_window": len(starts), "last_member_bytes": len(last),
+                    "last_member_sha": hashlib.sha256(last).hexdigest()[:24] if last else None,
+                    "window_sha": hashlib.sha256(b).hexdigest()[:24]}
+        except Exception as ex:
+            return {"name": e["name"], "size": e["size"], "error": repr(ex)[:200]}
+    with ThreadPoolExecutor(threads) as ex:
+        rows = list(ex.map(one, es))
+    from collections import Counter
+
+    c = Counter((r.get("crc32"), r.get("isize")) for r in rows if "crc32" in r)
+    print(json.dumps({"files": len(rows), "errors": sum("error" in r for r in rows), "distinct_tails": len(c),
+                      "biggest": c.most_common(10), "seconds": round(time.time() - t0)}, default=str), flush=True)
+    return {"files": len(rows), "distinct_tails": len(c), "rows": rows}
