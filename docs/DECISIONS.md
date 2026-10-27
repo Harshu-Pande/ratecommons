@@ -5,6 +5,17 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-27
 
+- **Aetna provider_set dims outgrew a runner's disk, and the orchestrator did not notice.** Waves 6 and 7
+  failed in `dims-provider_set` with "No space left on device" even with 105 GB free: the job held every
+  downloaded input plus a full hash-sliced copy. `reduce_dims` now downloads the big list tables
+  (`DIM_SLICES`) in batches of `RC_SPLIT_BATCH_BYTES` (12 GB), appends each batch to the sliced copy as
+  zstd, and deletes the batch, so peak disk is about one copy. The orchestrator called wave 7 "done"
+  because it checked only rate_fact, code and metas; it now also requires every dims table.
+- **AI clients cache tool lists.** ChatGPT kept calling `run_sql` from the old Mac app after the cloud app
+  replaced it ("unknown tool run_sql"). Re-adding the connector refreshes the list. For questions that
+  needed SQL (rank groups nationally by a weighted basket of codes), the cloud app has `rank_providers`
+  instead of raw SQL: per group the median per code, weighted, compared with national Medicare.
+
 - **The app runs in the cloud; the Mac is out of the loop.** Pre-joining rates to providers is not an
   option (a Cigna sample: one sixteenth of the codes in Missouri alone is 32.8 million provider-level
   rows, about 30 billion for all of Cigna). Instead `cloudpack.py` re-cuts each serving pack into small
