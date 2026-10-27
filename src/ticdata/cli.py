@@ -251,7 +251,8 @@ def main(argv=None) -> int:
                                    token=hfio.token_for(hfio.bucket(cfg.restricted_bucket)))
             prefix = f"reduced/{a.release}/{a.payer}/wave-{a.wave}"
             adds = [(str(f), f"{prefix}/{f.relative_to(outdir)}") for f in Path(outdir).rglob("*") if f.is_file()]
-            batch_bucket_files(cfg.work_bucket, add=adds, token=tok)
+            # a fresh token: the one from the start expires after an hour, and big dims jobs run longer
+            batch_bucket_files(cfg.work_bucket, add=adds, token=hfio.token_for(hfio.bucket(cfg.work_bucket)))
             res["wave_output"] = prefix
             a.publish = False
         if a.publish:

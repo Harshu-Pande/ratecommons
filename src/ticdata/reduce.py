@@ -434,6 +434,11 @@ def _fetch_split(bucket: str, paths: list[str], local: str, prefix: str, token, 
     con = _duck(local)
     split = f"{local}/split-{name}"
     for n, b in enumerate(batches):
+        if token:  # tokens from GitHub's OIDC exchange last an hour; this loop can run longer
+            from .hfio import bucket as bk, oidc_available, token_for
+
+            if oidc_available():
+                token = token_for(bk(bucket))
         files = _fetch(bucket, b, f"{local}/batch", prefix, token)
         con.execute(f"""COPY (SELECT *, (hash({DIMS[name]}) % {k})::INTEGER AS _slice
                               FROM read_parquet({files!r}, union_by_name = true))
