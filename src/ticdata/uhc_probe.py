@@ -26,13 +26,16 @@ def body_hash(url: str, limit: int | None, session) -> dict:
     with session.get(url, stream=True, timeout=600) as r:
         r.raise_for_status()
         def pieces():
-            nonlocal comp_n
+            nonlocal comp_n, d
             for chunk in r.iter_content(1 << 20):
                 comp_n += len(chunk)
                 buf = chunk
                 while buf:  # bounded output: JSON can inflate 50-100x
                     yield d.decompress(buf, 32 << 20)
                     buf = d.unconsumed_tail
+                    if d.eof:  # multi-member gzip (UHC's are): the next member starts in unused_data
+                        buf = d.unused_data + buf
+                        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
         for out in pieces():
             if start is None:
                 head += out
@@ -59,6 +62,28 @@ def body_hash(url: str, limit: int | None, session) -> dict:
             "header": dict(plan), "seconds": round(time.time() - t0, 1), "complete": limit is None}
 
 
+def tail_info(url: str, session, n: int = 8 << 20) -> dict:
+    """Last n compressed bytes by HTTP Range: gzip member starts in them and hashes of the last 1 MB and of the
+    bytes after the last member start. Identical bodies split into independently compressed members end in
+    byte-identical members, so equal tails are a cheap duplicate test that needs no download."""
+    t0 = time.time()
+    r = session.get(url, headers={"Range": f"bytes=-{n}"}, timeout=300)
+    b = r.content
+    starts = [m.start() for m in re.finditer(b"\x1f\x8b\x08", b)]
+    last = b[starts[-1]:] if starts else b""
+    return {"tail_status": r.status_code, "tail_bytes": len(b), "tail_members": len(starts),
+            "tail_sha_1mb": hashlib.sha256(b[-(1 << 20):]).hexdigest(),
+            "tail_last_member_sha": hashlib.sha256(last).hexdigest() if last else None,
+            "tail_last_member_bytes": len(last), "tail_seconds": round(time.time() - t0, 1), "_tail": b}
+
+
+def common_suffix(a: bytes, b: bytes) -> int:
+    n, m = 0, min(len(a), len(b))
+    while n < m and a[-1 - n] == b[-1 - n]:
+        n += 1
+    return n
+
+
 def probe(head_mb: int = 256, full: int = 2, sample: int = 40, seed: int = 7) -> dict:
     from .discover import uhc
     from .net import new_session
@@ -80,15 +105,28 @@ def probe(head_mb: int = 256, full: int = 2, sample: int = 40, seed: int = 7) ->
 
     def one(ge):
         g, e = ge
+        out = {"group": g, "name": e["name"], "size": e["size"]}
         try:
-            r = body_hash(e["url"], head_mb << 20, s)
+            out.update(tail_info(e["url"], s))
         except Exception as ex:
-            r = {"error": repr(ex)[:300]}
-        out = {"group": g, "name": e["name"], "size": e["size"], **r}
-        print(json.dumps(out)[:400], flush=True)
+            out["tail_error"] = repr(ex)[:300]
+        try:
+            out.update(body_hash(e["url"], head_mb << 20, s))
+        except Exception as ex:
+            out["error"] = repr(ex)[:300]
+        print(json.dumps({k: v for k, v in out.items() if k != "_tail"})[:500], flush=True)
         return out
     with ThreadPoolExecutor(4) as ex:
         res["results"] = list(ex.map(one, picks))
+    # how much of the compressed tail two files share, within each group (first file vs the others)
+    res["tail_common_suffix"] = {}
+    for g in groups:
+        rs = [r for r in res["results"] if r["group"] == g and r.get("_tail")]
+        if len(rs) > 1:
+            res["tail_common_suffix"][g] = [common_suffix(rs[0]["_tail"], r["_tail"]) for r in rs[1:]]
+    for r in res["results"]:
+        r.pop("_tail", None)
+    print(json.dumps({"tail_common_suffix": res["tail_common_suffix"]}), flush=True)
     # whole-body proof on pairs from the biggest head-hash cluster
     from collections import defaultdict
 
@@ -97,7 +135,7 @@ def probe(head_mb: int = 256, full: int = 2, sample: int = 40, seed: int = 7) ->
         if r.get("body_sha256"):
             cl[r["body_sha256"]].append(r)
     res["head_clusters"] = sorted((len(v) for v in cl.values()), reverse=True)
-    pair = max(cl.values(), key=len)[:full] if cl else []
+    pair = max(cl.values(), key=len)[:full] if cl and full else []
     byname = {e["name"]: e for _, e in picks}
     with ThreadPoolExecutor(2) as ex:
         res["full"] = list(ex.map(lambda r: {"name": r["name"], **body_hash(byname[r["name"]]["url"], None, s)}, pair))

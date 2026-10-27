@@ -15,3 +15,4 @@ verify --payer cigna --release 2026-10 --match national-oap --out reports/verify
 card --payer cigna --release 2026-10 --name Cigna --rows-in 1928514784
 uhc-probe --head-mb 256 --sample 40 --full 2 --out reports/uhc-probe.json
 uhc-probe --head-mb 256 --sample 40 --full 2 --out reports/uhc-probe.json
+uhc-probe --head-mb 64 --sample 40 --full 0 --out reports/uhc-probe.json
