@@ -198,6 +198,7 @@ def sources(work: str = "/tmp/shop-src", upload_to: str | None = "ratecommons/wo
 
 CLOUD = "https://huggingface.co/buckets/ratecommons/work/resolve/serve/v2"
 SRC = "https://huggingface.co/buckets/ratecommons/work/resolve/shop/sources"
+ONAMES = "https://huggingface.co/datasets/ratecommons/identity/resolve/main/nppes/release=2026-10/other_names.parquet"
 PAYERS = ["cigna", "aetna", "uhc"]
 STATES = ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY",
           "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH",
@@ -290,6 +291,12 @@ def _setup(con, work: str) -> dict:
     con.execute(f"CREATE TABLE pfs AS SELECT hcpcs, coalesce(modifier, '') AS m, state, nonfacility_amount AS nf, "
                 f"facility_amount AS fa FROM read_parquet('{work}/src/pfs.parquet')")
     con.execute(f"CREATE TABLE zipc AS SELECT * FROM read_parquet('{src['zip']}')")
+    # NPPES "other names": type 3 = doing business as; the newest one per NPI
+    on = _fetch(ONAMES, f"{work}/src/other_names.parquet")
+    con.execute(f"""CREATE TABLE dba AS SELECT TRY_CAST(npi AS BIGINT) AS npi,
+                        arg_max(provider_other_organization_name, strptime(created_date, '%m/%d/%Y')) AS dba
+                    FROM read_parquet('{on}') WHERE provider_other_organization_name_type_code = '3'
+                         AND provider_other_organization_name NOT IN ('', '<UNAVAIL>') GROUP BY 1""")
     return {"cat": cat, "codes": codes, "src": src}
 
 
@@ -485,26 +492,32 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
     # places
     con.execute(f"""CREATE OR REPLACE TABLE pl AS
         WITH a AS (SELECT place_key, any_value(line1) AS line1, any_value(city) AS city, any_value(zip5) AS zip5,
-                          any_value(phone) AS phone FROM addr_s WHERE place_key IN (SELECT DISTINCT place_key FROM offers)
+                          any_value(phone) AS phone FROM addr_s WHERE place_key IN (SELECT DISTINCT place_key FROM offers) AND NOT starts_with(place_key, '|')
                    GROUP BY place_key),
         h AS (SELECT place_key, any_value(ccn) AS ccn, any_value(name) AS hname, any_value(hospital_type) AS htype,
                      any_value(emergency) AS er FROM read_parquet('{src["hospitals"]}') WHERE state = '{s}' GROUP BY place_key),
-        o AS (SELECT a.place_key, mode(coalesce(nullif(c.other_name, ''), c.name)) AS oname,
+        o AS (SELECT a.place_key,
+                     -- the name on the door: a hospital's "doing business as" name first (shortest wins, e.g. "Le Bonheur
+                     -- Children's Hospital" over "... ESRD Unit"), then the most common organization name here
+                     coalesce(arg_min(d.dba, length(d.dba)) FILTER (WHERE c.taxonomy_code LIKE '282N%' AND d.dba IS NOT NULL),
+                              mode(coalesce(d.dba, c.name))) AS oname,
+                     bool_or(c.taxonomy_code = '282NC2000X') AS kidshosp,
                      bool_or(c.taxonomy_code = '261QU0200X') AS urgent,
                      bool_or(c.taxonomy_code IN ('261QR0200X', '261QM1200X', '261QR0206X', '261QR0207X', '261QR0208X')) AS imaging,
                      bool_or(c.taxonomy_code = '291U00000X') AS lab,
                      bool_or(c.taxonomy_code LIKE '282N%') AS hosp
-              FROM addr_s a JOIN clin_s c USING (npi) WHERE c.entity_type = '2' GROUP BY 1),
+              FROM addr_s a JOIN clin_s c USING (npi) LEFT JOIN dba d USING (npi) WHERE c.entity_type = '2' GROUP BY 1),
         g AS (SELECT place_key, mode(group_name) AS gname FROM read_parquet('{src["dac_groups"]}')
               WHERE place_key IN (SELECT place_key FROM a) GROUP BY 1),
         doc AS (SELECT a.place_key, mode(c.name || coalesce(', ' || c.credential, '')) AS dname
                 FROM addr_s a JOIN clin_s c USING (npi) WHERE c.entity_type = '1' AND a.place_key IN (SELECT place_key FROM a)
                 GROUP BY 1)
         SELECT a.*, h.ccn, h.htype, h.er,
-               coalesce(h.hname, o.oname, g.gname, doc.dname, 'Medical office') AS name,
+               coalesce(CASE WHEN o.hosp THEN o.oname END, h.hname, o.oname, g.gname, doc.dname, 'Medical office') AS name,
                CASE WHEN h.ccn IS NOT NULL OR o.hosp THEN 'hospital' WHEN o.urgent THEN 'urgent' WHEN o.imaging THEN 'imaging'
                     WHEN o.lab THEN 'lab' ELSE 'clinic' END AS kind,
-               (h.hname ILIKE '%CHILDREN%' OR o.oname ILIKE '%CHILDREN%' OR h.htype ILIKE '%Childrens%') AS kids,
+               coalesce(o.kidshosp OR h.hname ILIKE '%CHILDREN%' OR o.oname ILIKE '%CHILDREN%' OR h.htype ILIKE '%Childrens%',
+                        false) AS kids,
                z.lat + ((hash(a.place_key) % 1000) / 1000.0 - 0.5) * 0.012 AS lat,
                z.lon + ((hash(a.place_key || 'x') % 1000) / 1000.0 - 0.5) * 0.015 AS lng
         FROM a LEFT JOIN h USING (place_key) LEFT JOIN o USING (place_key) LEFT JOIN g USING (place_key)

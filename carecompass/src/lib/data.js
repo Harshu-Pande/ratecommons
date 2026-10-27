@@ -93,20 +93,38 @@ function priceAt0(place, proc, sel) {
   const notes = []
   if (proc.kind === 'imaging') {
     const code = proc.codes[0]
-    const complete = P((o) => o[ROLE] === 'global' && !o[INST] && o[CODE] === code)
-    const facility = P((o) => o[CODE] === code && (o[ROLE] === 'tc' || (o[ROLE] === 'global' && o[INST])))
+    const hosp = place.kind === 'hospital'
+    // at a hospital the facility fee is the hospital's own (institutional) contract; a physician group's TC price is not it
+    const complete = hosp ? null : P((o) => o[ROLE] === 'global' && !o[INST] && o[CODE] === code)
+    const facility = hosp
+      ? P((o) => o[CODE] === code && o[INST] && (o[ROLE] === 'tc' || o[ROLE] === 'global'))
+      : P((o) => o[CODE] === code && (o[ROLE] === 'tc' || (o[ROLE] === 'global' && o[INST])))
     let reading = P((o) => o[ROLE] === 'pro' && o[CODE] === code)
-    let readers = null
-    const team = (place.t || []).filter((t) => t[0] === payer && (product == null || (t[4] || []).includes(product)) && t[1] === code)
-    if (team.length) {
-      const byTin = {}
-      for (const t of team) (byTin[t[5]] ||= { tin: t[5], name: t[6] || place.g?.[t[5]] || `Tax ID ${t[5]}`, nrad: t[7], rates: [] }).rates.push(t[3])
-      readers = Object.values(byTin).map((r) => ({ ...r, rate: median(r.rates) })).sort((a, b) => b.nrad - a.nrad)
-      if (!reading) reading = { rate: readers[0].rate, lo: Math.min(...readers.map((r) => r.rate)),
+    // who reads here: groups with reading contracts at this address, plus groups whose radiologists Medicare
+    // lists at this hospital
+    const byTin = {}
+    const add = (tin, rate, nrad, here) => {
+      const r = (byTin[tin] ||= { tin, name: place.g?.[tin] || `Tax ID ${tin}`, nrad: 0, rates: [], here: false })
+      r.rates.push(rate); r.nrad = Math.max(r.nrad, nrad || 0); r.here ||= here
+    }
+    for (const o of reading ? reading.offers : []) add((o[TINS] || [])[0], o[RATE], o[NQ], true)
+    for (const t of (place.t || []).filter((t) => t[0] === payer && (product == null || (t[4] || []).includes(product)) && t[1] === code)) {
+      add(t[5], t[3], t[7], false)
+    }
+    let readers = Object.values(byTin).filter((r) => r.tin).map((r) => ({ ...r, rate: median(r.rates) }))
+      .sort((a, b) => b.here - a.here || b.nrad - a.nrad)
+    if (!readers.length) readers = null
+    if (!reading && readers) {
+      reading = { rate: median(readers.map((r) => r.rate)), lo: Math.min(...readers.map((r) => r.rate)),
         hi: Math.max(...readers.map((r) => r.rate)), badge: 'l', groups: readers.map((r) => r.name), fromTeam: true }
     }
-    const facPct = pct.find((o) => o[CODE] === code && (o[ROLE] === 'tc' || o[ROLE] === 'global'))
-    if (complete && (!facility || place.kind !== 'hospital')) {
+    const facPct = pct.find((o) => o[CODE] === code && (o[ROLE] === 'tc' || o[ROLE] === 'global') && (!hosp || o[INST]))
+    if (complete && !facility) {
+      return { kind: 'complete', total: complete.rate, lo: complete.lo, hi: complete.hi, badge: complete.badge,
+        bills: [{ key: 'complete', label: 'Scan and reading (one bill)', short: 'scan + reading', allowed: complete.rate,
+          from: complete.groups[0] }], complete, facility, reading, readers, notes }
+    }
+    if (complete && facility && !hosp && complete.rate <= facility.rate + (reading?.rate || 0)) {
       return { kind: 'complete', total: complete.rate, lo: complete.lo, hi: complete.hi, badge: complete.badge,
         bills: [{ key: 'complete', label: 'Scan and reading (one bill)', short: 'scan + reading', allowed: complete.rate,
           from: complete.groups[0] }], complete, facility, reading, readers, notes }
@@ -120,10 +138,12 @@ function priceAt0(place, proc, sel) {
       return { kind: 'split', total: bills.reduce((s, b) => s + b.allowed, 0), badge: facility.badge, bills, facility,
         reading, readers, notes, partial: !reading }
     }
-    if (facPct && reading) {
-      notes.push(`The facility fee here is a contract of ${facPct[RATE]}% of the hospital's own charges, so no dollar amount is published.`)
-      return { kind: 'pct', total: reading.rate, badge: 'l', bills: [{ key: 'professional', label: 'Radiologist bill (reading fee)',
-        short: 'radiologist', allowed: reading.rate, from: reading.groups[0] }], reading, readers, facilityPct: facPct[RATE],
+    if (reading && (hosp || facPct)) {
+      notes.push(facPct
+        ? `The hospital's facility fee is a contract of ${facPct[RATE]}% of its own charges, so no dollar amount is published. Ask the hospital for its price for code ${code}.`
+        : `The hospital's facility fee for code ${code} is not in the published data. Ask the hospital for its price.`)
+      return { kind: 'pct', total: reading.rate, badge: reading.badge, bills: [{ key: 'professional', label: 'Radiologist bill (reading fee)',
+        short: 'radiologist', allowed: reading.rate, from: reading.groups[0] }], reading, readers, facilityPct: facPct?.[RATE],
       notes, partial: true }
     }
     return null
