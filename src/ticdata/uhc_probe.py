@@ -236,3 +236,50 @@ def tails(threads: int = 16, n: int = 1 << 20, match: str = "") -> dict:
     print(json.dumps({"files": len(rows), "errors": sum("error" in r for r in rows), "distinct_tails": len(c),
                       "biggest": c.most_common(10), "seconds": round(time.time() - t0)}, default=str), flush=True)
     return {"files": len(rows), "distinct_tails": len(c), "rows": rows}
+
+
+def compare_mapped(shards: str = "0,1,2", release: str = "2026-10", payer: str = "uhc") -> dict:
+    """Overlap of the parsed content of mapped files (content-hashed ids, so equal content = equal rows):
+    rate facts (code, provider set, price list), provider sets and price lists, first shard vs each other."""
+    import duckdb
+
+    from .reduce import _fetch, _list
+    from .config import load
+    from .hfio import bucket as bk, token_for
+
+    b = load().work_bucket
+    tok = token_for(bk(b))
+    nums = [int(x) for x in shards.split(",")]
+    prefix = f"map/{release}/{payer}/"
+    allp = _list(b, prefix, tok)
+    local = "/tmp/uhc-compare"
+    want = [p for p in allp if any(f"/shard-{n:03d}-" in p for n in nums)
+            and (p.endswith(("provider_set.parquet", "price_list.parquet", "metas.json")) or "/rate_fact/" in p)]
+    _fetch(b, want, local, prefix, tok)
+    con = duckdb.connect(f"{local}/c.db")
+    con.execute("SET memory_limit = '10GB'; SET threads = 4; SET preserve_insertion_order = false")
+    con.execute(f"SET temp_directory = '{local}/tmp'")
+    import glob
+    import os
+
+    dirs = sorted(d for d in glob.glob(f"{local}/shard-*") if os.path.isdir(d))
+    res = {"files": [], "pairs": []}
+    for i, d in enumerate(dirs):
+        metas = json.load(open(f"{d}/metas.json"))
+        res["files"].append([(m.get("source") or {}).get("name") for m in metas])
+        con.execute(f"CREATE TABLE f{i} AS SELECT DISTINCT code_id, ps_id, pl_id FROM read_parquet('{d}/rate_fact/*.parquet')")
+        con.execute(f"CREATE TABLE s{i} AS SELECT DISTINCT ps_id FROM read_parquet('{d}/provider_set.parquet')")
+        con.execute(f"CREATE TABLE l{i} AS SELECT DISTINCT pl_id FROM read_parquet('{d}/price_list.parquet')")
+    for i in range(1, len(dirs)):
+        row = {"file": res["files"][i]}
+        for t in ("f", "s", "l"):
+            a = con.execute(f"SELECT count(*) FROM {t}0").fetchone()[0]
+            bb = con.execute(f"SELECT count(*) FROM {t}{i}").fetchone()[0]
+            both = con.execute(f"SELECT count(*) FROM (SELECT * FROM {t}0 INTERSECT SELECT * FROM {t}{i})").fetchone()[0]
+            row[{"f": "rate_facts", "s": "provider_sets", "l": "price_lists"}[t]] = {"first": a, "this": bb, "both": both}
+        # facts that differ: are they the same code and provider set at another price, or new codes/sets?
+        row["only_this_same_code_ps"] = con.execute(
+            f"SELECT count(*) FROM (SELECT * FROM f{i} EXCEPT SELECT * FROM f0) x SEMI JOIN f0 USING (code_id, ps_id)").fetchone()[0]
+        res["pairs"].append(row)
+        print(json.dumps(row, default=str), flush=True)
+    return res

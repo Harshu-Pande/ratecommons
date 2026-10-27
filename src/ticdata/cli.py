@@ -137,6 +137,9 @@ def main(argv=None) -> int:
     p.add_argument("--threads", type=int, default=16)
     p.add_argument("--match", default="")
     p.add_argument("--out", default="reports/uhc-tails.json")
+    p = sub.add_parser("uhc-compare", help="overlap of parsed content between mapped shards")
+    p.add_argument("--shards", default="0,1,2")
+    p.add_argument("--out", default="reports/uhc-compare.json")
     p = sub.add_parser("cloud-pack", help="cloud pack (small files per code/state) of one payer -> work bucket serve/v1")
     p.add_argument("--payer", required=True)
     p.add_argument("--prefix", default="serve/v1")
@@ -325,6 +328,9 @@ def main(argv=None) -> int:
     elif a.cmd == "uhc-tails":
         from . import uhc_probe
         _write(uhc_probe.tails(a.threads, match=a.match), a.out)
+    elif a.cmd == "uhc-compare":
+        from . import uhc_probe
+        _write(uhc_probe.compare_mapped(a.shards), a.out)
     elif a.cmd == "cloud-pack":
         from . import cloudpack
         print(json.dumps(cloudpack.job(a.payer, prefix=a.prefix), default=str))
