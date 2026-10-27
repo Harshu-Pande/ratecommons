@@ -18,10 +18,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response  # noqa: E402
 import _rc as E  # noqa: E402
 from _tooldocs import DOCS  # noqa: E402
 
-TOOLS = {f.__name__: f for f in (E.provider_rates, E.lookup_rates, E.market_distribution, E.compare_providers,
+TOOLS = {f.__name__: f for f in (E.provider_rates, E.rank_providers, E.lookup_rates, E.market_distribution, E.compare_providers,
                                   E.benchmark_provider, E.network_breadth, E.provider_networks, E.find_plans,
                                   E.list_products, E.search_providers, E.code_info, E.medicare_rate, E.data_status)}
-INT_ARGS = {"limit"}
+INT_ARGS = {"limit", "min_codes"}
 
 app = FastAPI(title="RateCommons")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])

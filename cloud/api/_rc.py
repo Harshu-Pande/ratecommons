@@ -425,6 +425,73 @@ def provider_rates(provider, codes, state, payer="all", network=""):
     return _with_medicare(rows, state)
 
 
+STATES = ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA",
+          "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR",
+          "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "PR"]
+
+
+def rank_providers(codes, state="US", payer="cigna,uhc", specialty="", weights="", place="office", modifier="",
+                   min_codes=0, limit=25):
+    cs = _codes(codes)[:20]
+    ws = [float(x) for x in str(weights).split(",") if x.strip()] if weights else []
+    ws = ws if len(ws) == len(cs) else [1.0] * len(cs)
+    w = dict(zip(cs, ws))
+    st = (state or "US").strip().upper()
+    states = STATES if st in ("US", "ALL", "") else [_st(st)]
+    # placeholder amounts payers publish ($0.01, $99,999.xx, $999,999.xx) would top any ranking
+    where = (f"negotiated_type IN {DOLLAR_TYPES} AND rate > 0.01 AND rate < 99999 AND rate_raw NOT LIKE '9999%' AND "
+             + _place_mask_sql(place, modifier))
+    if specialty:
+        sp = _lit(f"%{specialty.strip()}%")
+        where += f" AND specialty ILIKE {sp}"
+    payers = _payers(payer)
+    jobs = [(p, s) for p in payers for s in states]
+    t0 = time.time()
+
+    def one(job):
+        p, s = job
+        if time.time() - t0 > 90:
+            return [{"_skipped": f"{p}/{s}"}]
+        try:
+            return _rows(p, cs, s, where=where,
+                         select="payer, tin, any_value(provider) AS provider, any_value(specialty) AS specialty, code, "
+                                "median(rate) AS rate", group="payer, tin, code")
+        except Exception as e:
+            return [{"_skipped": f"{p}/{s}: {e}"}]
+    with ThreadPoolExecutor(8) as ex:
+        parts = list(ex.map(one, jobs))
+    skipped = [r["_skipped"] for part in parts for r in part if "_skipped" in r]
+    per: dict = {}
+    for part in parts:
+        for r in part:
+            if "_skipped" in r:
+                continue
+            per.setdefault((r["payer"], r["tin"]), {"provider": r["provider"], "specialty": r["specialty"], "codes": {}})
+            per[(r["payer"], r["tin"])]["codes"].setdefault(r["code"], []).append(r["rate"])
+    mod = re.sub(r"[^A-Z0-9]", "", (modifier or "").upper())[:2]
+    mcr = _mcr(cs, "US")
+    need = int(min_codes or max(1, (len(cs) + 1) // 2))
+    out = []
+    for (py, tin), v in per.items():
+        rates = {c: sorted(x)[len(x) // 2] for c, x in v["codes"].items()}
+        if len(rates) < need:
+            continue
+        tw = sum(w[c] for c in rates)
+        wavg = sum(w[c] * r for c, r in rates.items()) / tw
+        pcts = {c: 100 * r / mcr[(c, mod)][0] for c, r in rates.items() if (c, mod) in mcr and mcr[(c, mod)][0]}
+        wpct = sum(w[c] * x for c, x in pcts.items()) / sum(w[c] for c in pcts) if pcts else None
+        out.append({"payer": py, "tin": tin, "provider": v["provider"], "specialty": v["specialty"],
+                    "codes_with_rates": len(rates), "weighted_avg_rate": round(wavg, 2),
+                    "weighted_pct_of_medicare": round(wpct) if wpct else None,
+                    "rates": {c: round(r, 2) for c, r in sorted(rates.items())}})
+    out.sort(key=lambda r: -(r["weighted_pct_of_medicare"] or 0))
+    head = out[:min(int(limit or 25), 200)]
+    note = {"payer": "_summary", "groups_ranked": len(out), "states": len(states), "codes": cs, "weights": ws,
+            "ranked_by": "weighted % of national Medicare (PFS)", "skipped": skipped[:20],
+            "excluded": "placeholder amounts ($0.01, $9999x)"}
+    return [note] + head
+
+
 def compare_providers(codes, state, providers, payer="all", network="", place="office"):
     state = _st(state)
     out = []
