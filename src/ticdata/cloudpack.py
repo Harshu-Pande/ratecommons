@@ -7,7 +7,12 @@ Layout under <prefix>/<payer>/ (prefix default serve/v1, in the public work buck
   codes.parquet                     billing_code_type, billing_code, key, rows: the index of code files
   code/<TYPE>/<key>.parquet         one billing code: ps, ns, price fields inline (negotiated_type, rate,
                                     rate_raw, billing_class, setting, modifiers, pos, expiration), sorted by ps
-  state/<ST>/pspli.parquet          provider set -> provider list, only lists with a group practicing in ST
+  state/<ST>/pspli/<TYPE>/<key[:3]>.parquet
+                                    provider set -> provider list, only lists with a group practicing in ST and
+                                    only sets priced for a code whose key starts with those 3 characters (a query
+                                    fetches its codes' buckets, not the whole state: Aetna TX was 127 MB whole,
+                                    the largest bucket ~1.4M rows); state/<ST>/pspli/_cstm_all.parquet for the
+                                    sets of flat all-services codes (meta.json "pspli": "bucket3")
   state/<ST>/plipg.parquet          provider list -> provider group, only groups practicing in ST
   state/<ST>/pg.parquet             group display: tin, tin_wide, name, n_npi, cities, specialty, business_names
   state/<ST>/pgnpi.parquet          group -> NPI located in ST
@@ -66,6 +71,7 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
     con.execute(f"CREATE TABLE pt AS SELECT * FROM read_parquet('{pack}/price_term.parquet')")
     os.makedirs(f"{out}/code", exist_ok=True)
     con.execute("SET partitioned_write_max_open_files = 64")
+    con.execute("CREATE TABLE cps (t VARCHAR, b VARCHAR, ps INTEGER)")  # (code bucket, provider set) pairs
     idx = []
     for f in sorted(glob.glob(f"{pack}/rate/*.parquet")):
         tmp = f"{work}/codes-tmp"
@@ -90,6 +96,11 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
             else:
                 con.execute(f"COPY (SELECT * FROM read_parquet({files!r})) TO '{dest}' {W}")
             n += 1
+        con.execute(f"""INSERT INTO cps SELECT DISTINCT
+                            regexp_replace(coalesce(r.billing_code_type, '_'), '[^A-Za-z0-9._-]', '_', 'g') AS t,
+                            CASE WHEN r.billing_code_type = 'CSTM-ALL' THEN '_cstm_all' ELSE
+                            left(left(coalesce(nullif(regexp_replace(trim(r.billing_code), '[^A-Za-z0-9._-]', '_', 'g'), ''), '_'), 80), 3) END AS b,
+                            p.ps FROM read_parquet('{f}') r JOIN psi p USING (ps_id)""")
         idx.append(con.execute(f"""SELECT billing_code_type, billing_code, regexp_replace(coalesce(billing_code_type, '_'), '[^A-Za-z0-9._-]', '_', 'g') t,
                                          left(coalesce(nullif(regexp_replace(trim(billing_code), '[^A-Za-z0-9._-]', '_', 'g'), ''), '_'), 80) k, count(*) n
                                   FROM read_parquet('{f}') GROUP BY ALL""").fetchall())
@@ -127,8 +138,23 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
                               ORDER BY 1, 2) TO '{d}/plipg.parquet' {W}""")
         ps_files = glob.glob(f"{pack}/ps_pli/state={st}/*.parquet")
         if ps_files:
-            con.execute(f"""COPY (SELECT DISTINCT p.ps, i.pli FROM read_parquet({ps_files!r}) x JOIN psi p USING (ps_id)
-                                  JOIN plii i USING (pli_id) ORDER BY 1, 2) TO '{d}/pspli.parquet' {W}""")
+            con.execute(f"""CREATE OR REPLACE TABLE sp AS SELECT DISTINCT p.ps, i.pli FROM read_parquet({ps_files!r}) x
+                            JOIN psi p USING (ps_id) JOIN plii i USING (pli_id)""")
+            tmp = f"{work}/pspli-tmp"
+            shutil.rmtree(tmp, ignore_errors=True)
+            con.execute(f"""COPY (SELECT c.t, c.b, s.ps, s.pli FROM cps c JOIN sp s USING (ps) ORDER BY c.t, c.b, s.ps, s.pli)
+                            TO '{tmp}' (FORMAT parquet, COMPRESSION zstd, PARTITION_BY (t, b), ROW_GROUP_SIZE 100000)""")
+            for bd in glob.glob(f"{tmp}/t=*/b=*"):
+                t = bd.split("/t=")[1].split("/")[0]
+                b = bd.split("/b=")[1]
+                dest = f"{d}/pspli/_cstm_all.parquet" if b == "_cstm_all" else f"{d}/pspli/{t}/{b}.parquet"
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                fs = sorted(glob.glob(f"{bd}/*.parquet"))
+                if len(fs) == 1:
+                    shutil.move(fs[0], dest)
+                else:
+                    con.execute(f"COPY (SELECT * FROM read_parquet({fs!r})) TO '{dest}' {W}")
+            shutil.rmtree(tmp, ignore_errors=True)
         con.execute(f"""COPY (SELECT DISTINCT n.pg, n.net FROM pgnet n SEMI JOIN (SELECT DISTINCT pg FROM gn) USING (pg)
                               ORDER BY 1, 2) TO '{d}/pgnet.parquet' {W}""")
         con.execute(f"""COPY (
@@ -148,7 +174,7 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
                           FROM pgx x, unnest(coalesce(x.states, ['XX'])) AS u(s) GROUP BY 1 ORDER BY 1)
                     TO '{out}/tin.parquet' {W}""")
     nets = con.execute("SELECT net, hex(network_id), file_names, plan_names, bytes FROM net ORDER BY net").fetchall()
-    meta = {"payer": payer, "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **res,
+    meta = {"payer": payer, "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "pspli": "bucket3", **res,
             "networks": [{"net": a, "network_id": b, "file_names": c, "plan_names": d or [], "bytes": e}
                          for a, b, c, d, e in nets]}
     json.dump(meta, open(f"{out}/meta.json", "w"), default=str)

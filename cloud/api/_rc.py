@@ -75,11 +75,16 @@ def fetch_many(paths: list[str]) -> dict[str, str | None]:
         return dict(zip(paths, ex.map(fetch, paths)))
 
 
+_pinned: set[str] = set()  # files an open run_sql view reads; never evicted while pinned
+
+
 def _evict():
     files = []
     for root, _, fs in os.walk(CACHE):
         for f in fs:
             p = os.path.join(root, f)
+            if p in _pinned:
+                continue
             try:
                 st = os.stat(p)
                 files.append((st.st_atime, st.st_size, p))
@@ -240,12 +245,21 @@ def _place_mask_sql(place: str, modifier: str = "") -> str:
 
 def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, city=None, zip_prefix=None,
           specialty=None, provider=None, billing_class=None, where: str = "true", select: str | None = None,
-          group: str | None = None, limit: int | None = None, pg_where: str | None = None) -> list[dict]:
+          group: str | None = None, limit: int | None = None, pg_where: str | None = None, arrow: bool = False):
     """Rows (product, provider group, price) for codes in one state for one payer, optionally aggregated."""
     if not meta(p):
-        return []
+        return None if arrow else []
     cf = _code_files(p, codes, code_type)
-    need = cf + [f"{p}/state/{state}/{x}.parquet" for x in ("pspli", "plipg", "pg")]
+    if meta(p).get("pspli") == "bucket3":  # provider sets bucketed by the first 3 characters of the code key
+        def bucket(f: str) -> str:
+            t, k = f.split("/")[-2], f.rsplit("/", 1)[1][:-8]
+            return f"{p}/state/{state}/pspli/" + ("_cstm_all.parquet" if t == "CSTM-ALL" else f"{t}/{k[:3]}.parquet")
+        psf = sorted({bucket(f) for f in cf})
+        if provider:
+            psf.append(f"{p}/state/{state}/pspli/_cstm_all.parquet")
+    else:
+        psf = [f"{p}/state/{state}/pspli.parquet"]
+    need = cf + psf + [f"{p}/state/{state}/{x}.parquet" for x in ("plipg", "pg")]
     if provider:
         need.append(f"{p}/cstm_all.parquet")
     loc = bool(city or zip_prefix or specialty or (provider and not re.fullmatch(r"\d{9,10}|\d{2}-\d{7}", provider.strip())))
@@ -257,9 +271,11 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
     files = [got[f] for f in cf if got.get(f)]
     if provider and got.get(f"{p}/cstm_all.parquet"):
         files.append(got[f"{p}/cstm_all.parquet"])
-    if not files or not got.get(f"{p}/state/{state}/pspli.parquet"):
-        return []
-    S = {k: f"read_parquet('{got[f'{p}/state/{state}/{k}.parquet']}')" for k in ("pspli", "plipg", "pg")}
+    psl = [got[f] for f in psf if got.get(f)]
+    if not files or not psl or not got.get(f"{p}/state/{state}/pg.parquet"):
+        return None if arrow else []
+    S = {k: f"read_parquet('{got[f'{p}/state/{state}/{k}.parquet']}')" for k in ("plipg", "pg")}
+    S["pspli"] = f"read_parquet({psl!r})"
     pv = ""
     if provider:
         v = provider.strip()
@@ -305,6 +321,8 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
              FROM base b JOIN {S['pg']} pg USING (pg) WHERE {where})
     SELECT {select or '*'} FROM rows {('GROUP BY ' + group) if group else ''} {('LIMIT ' + str(int(limit))) if limit else ''}
     """
+    if arrow:
+        return con().execute(sql).fetch_arrow_table()
     return _q(sql)
 
 
@@ -731,3 +749,174 @@ def data_status():
         if m:
             out["payers"][p] = {"networks": len(m["networks"]), "codes": m.get("codes"), "built": m.get("built")}
     return out
+
+
+# ------------------------------------------------------------------ custom SQL (sandboxed)
+
+SQL_BUDGET = float(os.environ.get("RC_SQL_SECONDS", "240"))
+SQL_MAX_BUILD_ROWS = int(os.environ.get("RC_SQL_BUILD_ROWS", "4000000"))
+_RC_CALL = re.compile(r"\brc_(\w+)\s*\(((?:\s*'(?:[^']|'')*'\s*,?)*)\s*\)", re.I)
+RATE_COLS = ("state, payer, product, pg, tin, provider, specialty, npis_in_area, tin_wide, code, negotiated_type, "
+             "rate, rate_raw, billing_class, setting, modifiers, pos, expiration")
+
+
+def _states_arg(x: str) -> list[str]:
+    x = (x or "US").strip().upper()
+    return list(STATES) if x in ("US", "ALL", "") else [_st(v) for v in x.split(",") if v.strip()]
+
+
+def _rates_table(payers: str, states: str, codes: str, specialty: str = "", place: str = "any", deadline: float = 0):
+    import pyarrow as pa
+
+    cs = _codes(codes)[:30]
+    sts = _states_arg(states)
+    where = "true" if (place or "any") == "any" else _place_mask_sql(place)
+    pg_where = f"specialty ILIKE {_lit('%' + specialty.strip() + '%')}" if specialty else None
+    jobs = [(p, st) for p in _payers(payers) for st in sts]
+    parts, notes, total = [], [], [0]
+
+    def one(job):
+        p, st = job
+        if time.time() > deadline or total[0] > SQL_MAX_BUILD_ROWS:
+            return job, None, "not built (time or size limit)"
+        try:
+            t = _rows(p, cs, st, where=where, pg_where=pg_where, arrow=True, select=f"'{st}' AS " + RATE_COLS)
+            if t is not None:
+                total[0] += t.num_rows
+            return job, t, None
+        except Exception as e:
+            return job, None, f"error: {e}"[:200]
+    with ThreadPoolExecutor(2 if len(jobs) > 4 else max(1, len(jobs))) as ex:
+        for (p, st), t, err in ex.map(one, jobs):
+            if err:
+                notes.append(f"{p}/{st}: {err}")
+            elif t is not None and t.num_rows:
+                parts.append(t)
+    if not parts:
+        return None, notes
+    return pa.concat_tables(parts, promote_options="permissive"), notes
+
+
+def run_sql(sql, max_rows=500):
+    t0 = time.time()
+    deadline = t0 + SQL_BUDGET - 45  # leave time for the query itself
+    sql = str(sql or "").strip().rstrip(";")
+    if not sql:
+        raise ValueError("give a SELECT query")
+    max_rows = max(1, min(int(max_rows or 500), 5000))
+    calls: dict = {}
+
+    def repl(m):
+        fn = m.group(1).lower()
+        args = tuple(a.replace("''", "'") for a in re.findall(r"'((?:[^']|'')*)'", m.group(2)))
+        if (fn, args) not in calls:
+            calls[(fn, args)] = f"rc_t{len(calls)}"
+        return calls[(fn, args)]
+    body = _RC_CALL.sub(repl, sql)
+    if re.search(r"\brc_\w+\s*\(", body, re.I):
+        raise ValueError("rc_* functions take only quoted string arguments, e.g. rc_rates('cigna', 'MO', '99213')")
+    sb = duckdb.connect()
+    sb.execute("SET enable_progress_bar = false")
+    sb.execute(f"SET memory_limit = '{os.environ.get('RC_SQL_MEMORY', '1100MB')}'")
+    sb.execute("SET threads = 4")
+    os.makedirs("/tmp/rc-duck-sql", exist_ok=True)
+    sb.execute("SET temp_directory = '/tmp/rc-duck-sql'")
+    sb.execute("SET max_temp_directory_size = '120MB'")
+    os.makedirs(CACHE, exist_ok=True)
+    sb.execute(f"SET allowed_directories = ['{os.path.realpath(CACHE)}/']")
+    notes, built, pins = [], {}, []
+
+    def view(name, path_rel, where=""):
+        f = fetch(path_rel)
+        if not f:
+            sb.execute(f"CREATE VIEW {name} AS SELECT NULL::INTEGER AS no_data WHERE false")
+            notes.append(f"{path_rel}: no such file")
+            return
+        f = os.path.realpath(f)
+        _pinned.add(f)
+        pins.append(f)
+        sb.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{f}') {where}")
+
+    def views_union(name, rels, extra_cols: dict | None = None):
+        got = fetch_many(rels)
+        sels = []
+        for r in rels:
+            if got.get(r):
+                f = os.path.realpath(got[r])
+                _pinned.add(f)
+                pins.append(f)
+                cols = "".join(f", {_lit(v)} AS {k}" for k, v in (extra_cols or {}).get(r, {}).items())
+                sels.append(f"SELECT *{cols} FROM read_parquet('{f}')")
+        sb.execute(f"CREATE VIEW {name} AS " + (" UNION ALL BY NAME ".join(sels) if sels
+                                                 else "SELECT NULL::INTEGER AS no_data WHERE false"))
+    try:
+        for (fn, args), name in calls.items():
+            a = list(args) + [""] * 5
+            if fn == "rates":
+                t, n = _rates_table(a[0] or "all", a[1], a[2], a[3], a[4] or "any", deadline)
+                notes += n
+                if t is None:
+                    sb.execute(f"CREATE TABLE {name} AS SELECT NULL::VARCHAR AS state WHERE false")
+                else:
+                    sb.register(f"{name}_a", t)
+                    sb.execute(f"CREATE VIEW {name} AS SELECT * FROM {name}_a")
+                    built[f"rc_rates{args}"] = t.num_rows
+            elif fn in ("groups", "group_npis", "group_networks"):
+                x = {"groups": "pg", "group_npis": "pgnpi", "group_networks": "pgnet"}[fn]
+                rels, extra = [], {}
+                for p in _payers(a[0] or "all"):
+                    for st in _states_arg(a[1])[:60]:
+                        r = f"{p}/state/{st}/{x}.parquet"
+                        rels.append(r)
+                        extra[r] = {"payer": p, "state": st}
+                views_union(name, rels, extra)
+            elif fn == "nppes":
+                sts = _states_arg(a[0])
+                if len(sts) > 6:
+                    raise ValueError("rc_nppes takes up to 6 states at a time")
+                views_union(name, [f"shared/nppes/{st}.parquet" for st in sts])
+            elif fn == "medicare":
+                _mcr(["99213"], "US")
+                st = (a[0] or "US").strip().upper()
+                sb.register(f"{name}_a", con().execute(f"SELECT * FROM mcr WHERE state = {_lit(st)}").fetch_arrow_table())
+                sb.execute(f"CREATE VIEW {name} AS SELECT * FROM {name}_a")
+            elif fn in ("codes", "products"):
+                import pyarrow as pa
+                ts = []
+                for p in _payers(a[0] or "all"):
+                    meta(p)
+                    q = (f"SELECT '{p}' AS payer, billing_code_type, billing_code, name, n AS published_rows FROM codes_{p}"
+                         if fn == "codes" else
+                         f"SELECT '{p}' AS payer, net, product, label, n_plans, plan_names, file_names FROM netlabel_{p}")
+                    ts.append(con().execute(q).fetch_arrow_table())
+                sb.register(f"{name}_a", pa.concat_tables(ts, promote_options="permissive"))
+                sb.execute(f"CREATE VIEW {name} AS SELECT * FROM {name}_a")
+            elif fn == "code_file":
+                p = _payers(a[0])[0]
+                cf = _code_files(p, [_code(a[1])], None)
+                views_union(name, cf)
+            else:
+                raise ValueError(f"unknown function rc_{fn}; see the tool description")
+        sb.execute("SET enable_external_access = false")
+        sb.execute("SET lock_configuration = true")
+        stmts = sb.extract_statements(body)
+        if len(stmts) != 1 or stmts[0].type != duckdb.StatementType.SELECT:
+            raise ValueError("only one read-only SELECT (or WITH ... SELECT) statement is allowed")
+        left = max(15.0, t0 + SQL_BUDGET - time.time())
+        timer = threading.Timer(left, sb.interrupt)
+        timer.start()
+        try:
+            rel = sb.execute(f"SELECT * FROM ({body}) LIMIT {max_rows + 1}")
+            cols = [d[0] for d in rel.description]
+            data = rel.fetchall()
+        except duckdb.InterruptException:
+            raise ValueError(f"the query ran past {int(SQL_BUDGET)} s; narrow it (fewer states/codes, filters)")
+        finally:
+            timer.cancel()
+    finally:
+        for f in pins:
+            _pinned.discard(f)
+        sb.close()
+    rows = [dict(zip(cols, r)) for r in data[:max_rows]]
+    return {"columns": cols, "rows": rows, "row_count": len(rows), "truncated": len(data) > max_rows,
+            "built": built, "notes": notes[:30], "seconds": round(time.time() - t0, 1)}

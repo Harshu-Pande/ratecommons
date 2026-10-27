@@ -1,7 +1,8 @@
 name: cloud
 # Cloud pack: serving packs re-cut into small files per billing code and per state (src/ticdata/cloudpack.py),
 # uploaded to the public work bucket under serve/v1/ for the serverless app (cloud/).
-# Trigger: edit ops/cloud-request.txt; its last line lists targets, e.g. "shared cigna aetna uhc".
+# Trigger: edit ops/cloud-request.txt; its last line lists targets, e.g. "shared cigna aetna uhc",
+# optionally with "prefix=serve/v2" to build beside the live pack (then point the app's RC_DATA_URL at it).
 on:
   workflow_dispatch:
     inputs:
@@ -21,14 +22,17 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       targets: ${{ steps.a.outputs.targets }}
+      prefix: ${{ steps.a.outputs.prefix }}
     steps:
       - uses: actions/checkout@v5
       - id: a
         run: |
           line="${{ github.event.inputs.request }}"
           [ -n "$line" ] || line="$(grep -v '^#' ops/cloud-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
-          t=""; for x in $line; do t="$t,\"$x\""; done
+          t=""; prefix="serve/v1"
+          for x in $line; do case "$x" in prefix=*) prefix="${x#prefix=}";; *) t="$t,\"$x\"";; esac; done
           echo "targets=[${t#,}]" >> "$GITHUB_OUTPUT"
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
 
   build:
     needs: args
@@ -51,6 +55,6 @@ jobs:
       - run: pip install -q -e .
       - name: build ${{ matrix.target }}
         run: |
-          if [ "${{ matrix.target }}" = shared ]; then ticdata cloud-shared; else ticdata cloud-pack --payer "${{ matrix.target }}"; fi
+          if [ "${{ matrix.target }}" = shared ]; then ticdata cloud-shared --prefix "${{ needs.args.outputs.prefix }}"; else ticdata cloud-pack --payer "${{ matrix.target }}" --prefix "${{ needs.args.outputs.prefix }}"; fi
       - if: always()
         run: df -h / | tail -1
