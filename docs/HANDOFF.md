@@ -1,5 +1,5 @@
 > **Update 2026-10-27:** the app now runs serverless at https://ratecommons-cloud.vercel.app (code in
-> `cloud/`, data in the public work bucket under `serve/v1/`, built by `.github/workflows/cloud.yml`). The
+> `cloud/`, data in the public work bucket under `serve/v2/` (env `RC_DATA_URL`; v2 buckets provider sets by code prefix), built by `.github/workflows/cloud.yml`). The
 > old address https://ratecommons-atticusfinch.vercel.app forwards there. The Mac setup below is retired.
 > Tools include `run_sql` (sandboxed DuckDB SELECT over `rc_*` table functions; see its description in
 > `cloud/api/_tooldocs.py`) and `rank_providers`. To release app code: push to main, set the Vercel env `RC_CODE_REF` (project `ratecommons-cloud`) to the

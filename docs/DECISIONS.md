@@ -5,6 +5,14 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-27
 
+- **Cloud pack v2: provider sets split by code prefix.** A query needs only the provider sets priced for its
+  codes, but `state/<ST>/pspli.parquet` held all of them (Aetna TX: 127 MB, 54.6M rows, for 3 networks;
+  one code touches ~10k of 980k sets). Per-code files would total 5x the rows (275M for TX); per
+  3-character code prefix they total 1.8x (98M) with the largest file ~1.4M rows. v2 writes
+  `state/<ST>/pspli/<TYPE>/<key[:3]>.parquet` (+ `_cstm_all`), flagged by `"pspli": "bucket3"` in meta.json,
+  under `serve/v2/` (built beside v1, then the app's `RC_DATA_URL` was switched). Aetna TX 70450
+  distribution: 5.5 s cold with a 37 MB cache, where v1 needed the 127 MB file.
+
 - **UHC near-copies are not byte copies; exact dedup saves only 4 TB.** Findings from `uhc_probe.py`:
   - UHC files are single-member gzip (no member starts in the last 1 MB of 6,775 of 6,824 files), so the
     gzip trailer's CRC32 + ISIZE fingerprints the whole decompressed file. 6,824 files give 6,269 distinct

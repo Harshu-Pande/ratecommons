@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import duckdb
 import httpx
 
-BASE = os.environ.get("RC_DATA_URL", "https://huggingface.co/buckets/ratecommons/work/resolve/serve/v1").rstrip("/")
+BASE = os.environ.get("RC_DATA_URL", "https://huggingface.co/buckets/ratecommons/work/resolve/serve/v2").rstrip("/")
 CACHE = os.environ.get("RC_CACHE", "/tmp/rc-cache")
 CACHE_MAX = int(float(os.environ.get("RC_CACHE_GB", "0.33")) * 1e9)  # Vercel's /tmp holds 500 MB in all
 PAYERS = ["cigna", "aetna", "uhc"]
