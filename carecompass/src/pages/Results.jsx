@@ -79,6 +79,8 @@ export default function Results() {
     const rows = []
     let hiddenCount = 0
     for (const place of places) {
+      // an urgent care visit means an urgent care clinic (or a hospital), not every doctor's office with a visit price
+      if (proc.id === 'urgent-care' && place.kind !== 'urgent') continue
       const d = miles(origin, place)
       if (d > radius) continue
       const price = priceAt(place, proc, sel)

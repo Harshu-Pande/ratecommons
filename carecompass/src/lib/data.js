@@ -54,7 +54,10 @@ const median = (xs) => {
 function pick(offers, filter, g = {}) {
   let xs = offers.filter(filter)
   if (!xs.length) return null
-  // prefer the strongest evidence: confirmed over likely over hidden
+  // prefer the place's own group (most of its qualified clinicians here) over clinicians who also bill elsewhere,
+  // then the strongest evidence: confirmed over likely over hidden
+  const maxNq = Math.max(...xs.map((o) => o[NQ] || 0))
+  if (maxNq >= 2) xs = xs.filter((o) => (o[NQ] || 0) >= maxNq / 2)
   const top = Math.max(...xs.map((o) => BADGE_RANK[o[BADGE]]))
   xs = xs.filter((o) => BADGE_RANK[o[BADGE]] === top)
   const rates = xs.map((o) => o[RATE])
