@@ -123,6 +123,9 @@ def main(argv=None) -> int:
     p.add_argument("--match", default="", help="comma-separated file/plan name substrings: only those networks")
     p.add_argument("--release", default="2026-10")
     p.add_argument("--no-upload", action="store_true")
+    p = sub.add_parser("cloud-pack", help="cloud pack (small files per code/state) of one payer -> work bucket serve/v1")
+    p.add_argument("--payer", required=True)
+    p = sub.add_parser("cloud-shared", help="cloud shared files (NPPES by state, NPI index, Medicare) -> serve/v1/shared")
     p = sub.add_parser("serve-shared", help="shared serving tables: NPPES lite, Medicare PFS -> identity/serving")
     p.add_argument("--no-upload", action="store_true")
 
@@ -297,6 +300,12 @@ def main(argv=None) -> int:
     elif a.cmd == "serve-pack":
         from . import serve_jobs
         print(json.dumps(serve_jobs.pack(a.payer, a.source, a.release, upload=not a.no_upload, states=[x.strip().upper() for x in a.states.split(',') if x.strip()] or None, match=[x.strip() for x in a.match.split(',') if x.strip()] or None), default=str))
+    elif a.cmd == "cloud-pack":
+        from . import cloudpack
+        print(json.dumps(cloudpack.job(a.payer), default=str))
+    elif a.cmd == "cloud-shared":
+        from . import cloudpack
+        print(json.dumps(cloudpack.shared_job(), default=str))
     elif a.cmd == "serve-shared":
         from . import serve_jobs
         print(json.dumps(serve_jobs.shared(upload=not a.no_upload), default=str))
