@@ -110,6 +110,7 @@ def con() -> duckdb.DuckDBPyConnection:
             c.execute("SET enable_progress_bar = false")
             c.execute(f"SET memory_limit = '{os.environ.get('RC_MEMORY', '1700MB')}'")
             c.execute("SET threads = 4")
+            c.execute("SET preserve_insertion_order = false")
             c.execute("SET temp_directory = '/tmp/rc-duck'")  # the function's working directory is read-only
             c.execute("SET max_temp_directory_size = '150MB'")
             _con = c
@@ -245,7 +246,8 @@ def _place_mask_sql(place: str, modifier: str = "") -> str:
 
 def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, city=None, zip_prefix=None,
           specialty=None, provider=None, billing_class=None, where: str = "true", select: str | None = None,
-          group: str | None = None, limit: int | None = None, pg_where: str | None = None, copy_to: str | None = None):
+          group: str | None = None, limit: int | None = None, pg_where: str | None = None, copy_to: str | None = None,
+          by_product: bool = True):
     """Rows (product, provider group, price) for codes in one state for one payer, optionally aggregated."""
     if not meta(p):
         return None if copy_to else []
@@ -314,9 +316,12 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
           WHERE s.ps IN (SELECT ps FROM f) {"AND l.pg IN (SELECT pg FROM pv)" if pv else ""}
           {"AND l.pg IN (SELECT pg FROM lq)" if locq else ""}
           {f"AND l.pg IN (SELECT pg FROM {S['pg']} WHERE {pg_where})" if pg_where else ""}),
-    base AS (SELECT DISTINCT '{p}' AS payer, nets.product, g.pg, f.code, f.negotiated_type, round(f.rate, 2) AS rate,
+    base AS ({f"""SELECT DISTINCT '{p}' AS payer, nets.product, g.pg, f.code, f.negotiated_type, round(f.rate, 2) AS rate,
                     f.rate_raw, f.billing_class, f.setting, f.modifiers, f.pos, f.expiration
-             FROM f JOIN nets USING (ns) JOIN g USING (ps)),
+             FROM f JOIN nets USING (ns) JOIN g USING (ps)""" if by_product else
+             f"""SELECT DISTINCT '{p}' AS payer, g.pg, f.code, f.negotiated_type, round(f.rate, 2) AS rate,
+                    f.rate_raw, f.billing_class, f.setting, f.modifiers, f.pos, f.expiration
+             FROM f JOIN g USING (ps) WHERE f.ns IN (SELECT ns FROM nets)"""}),
     rows AS (SELECT b.*, pg.tin, pg.name AS provider, pg.n_npi AS npis_in_area, pg.cities, pg.specialty, pg.tin_wide
              FROM base b JOIN {S['pg']} pg USING (pg) WHERE {where})
     SELECT {select or '*'} FROM rows {('GROUP BY ' + group) if group else ''} {('LIMIT ' + str(int(limit))) if limit else ''}
@@ -756,7 +761,7 @@ def data_status():
 SQL_BUDGET = float(os.environ.get("RC_SQL_SECONDS", "240"))
 SQL_MAX_BUILD_ROWS = int(os.environ.get("RC_SQL_BUILD_ROWS", "4000000"))
 _RC_CALL = re.compile(r"\brc_(\w+)\s*\(((?:\s*'(?:[^']|'')*'\s*,?)*)\s*\)", re.I)
-RATE_COLS = ("state, payer, product, pg, tin, provider, specialty, npis_in_area, tin_wide, code, negotiated_type, "
+RATE_COLS = ("state, payer, pg, tin, provider, specialty, npis_in_area, tin_wide, code, negotiated_type, "
              "rate, rate_raw, billing_class, setting, modifiers, pos, expiration")
 
 
@@ -766,7 +771,7 @@ def _states_arg(x: str) -> list[str]:
 
 
 def _rates_table(payers: str, states: str, codes: str, specialty: str = "", place: str = "any", deadline: float = 0,
-                 out_dir: str = "") -> tuple[list[str], int, list[str]]:
+                 out_dir: str = "", network: str = "", by_product: bool = False) -> tuple[list[str], int, list[str]]:
     """rc_rates: one Parquet file per payer x state under out_dir; returns (files, rows, notes)."""
     cs = _codes(codes)[:30]
     sts = _states_arg(states)
@@ -782,7 +787,9 @@ def _rates_table(payers: str, states: str, codes: str, specialty: str = "", plac
             return job, None, "not loaded (time or size limit): run again for this state"
         f = f"{out_dir}/{p}-{st}.parquet"
         try:
-            n = _rows(p, cs, st, where=where, pg_where=pg_where, copy_to=f, select=f"'{st}' AS " + RATE_COLS)
+            cols = RATE_COLS.replace("payer, pg,", "payer, product, pg,") if by_product else RATE_COLS
+            n = _rows(p, cs, st, where=where, pg_where=pg_where, copy_to=f, select=f"'{st}' AS " + cols,
+                      network=network or None, by_product=by_product)
             if n:
                 total[0] += n
                 return job, (f, n), None
@@ -860,8 +867,11 @@ def run_sql(sql, max_rows=500):
     try:
         for (fn, args), name in calls.items():
             a = list(args) + [""] * 5
-            if fn == "rates":
-                fs, n, nt = _rates_table(a[0] or "all", a[1], a[2], a[3], a[4] or "any", deadline, f"{work}/{name}")
+            if fn in ("rates", "rates_by_product"):
+                if fn == "rates_by_product" and len(_states_arg(a[1])) > 3:
+                    raise ValueError("rc_rates_by_product takes up to 3 states; use rc_rates for national questions")
+                fs, n, nt = _rates_table(a[0] or "all", a[1], a[2], a[3], a[4] or "any", deadline, f"{work}/{name}",
+                                         network=a[5], by_product=fn == "rates_by_product")
                 notes += nt
                 sb.execute(f"CREATE VIEW {name} AS " + (f"SELECT * FROM read_parquet({fs!r}, union_by_name = true)" if fs else
                            "SELECT NULL::VARCHAR AS state, NULL::VARCHAR AS payer, NULL::VARCHAR AS tin, NULL::VARCHAR AS code, "
