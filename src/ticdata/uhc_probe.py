@@ -25,9 +25,15 @@ def body_hash(url: str, limit: int | None, session) -> dict:
     first_key = None
     with session.get(url, stream=True, timeout=600) as r:
         r.raise_for_status()
-        for chunk in r.iter_content(8 << 20):
-            comp_n += len(chunk)
-            out = d.decompress(chunk)
+        def pieces():
+            nonlocal comp_n
+            for chunk in r.iter_content(1 << 20):
+                comp_n += len(chunk)
+                buf = chunk
+                while buf:  # bounded output: JSON can inflate 50-100x
+                    yield d.decompress(buf, 32 << 20)
+                    buf = d.unconsumed_tail
+        for out in pieces():
             if start is None:
                 head += out
                 pos = [(head.find(k), k) for k in KEYS if head.find(k) >= 0]
@@ -37,6 +43,8 @@ def body_hash(url: str, limit: int | None, session) -> dict:
                     out = head[p:]
                     header = head[:p]
                 else:
+                    if len(head) > (64 << 20):
+                        raise ValueError("no provider_references/in_network key in the first 64 MB")
                     continue
             if limit is not None and raw_n + len(out) > limit:
                 out = out[:limit - raw_n]
@@ -76,8 +84,10 @@ def probe(head_mb: int = 256, full: int = 2, sample: int = 40, seed: int = 7) ->
             r = body_hash(e["url"], head_mb << 20, s)
         except Exception as ex:
             r = {"error": repr(ex)[:300]}
-        return {"group": g, "name": e["name"], "size": e["size"], **r}
-    with ThreadPoolExecutor(8) as ex:
+        out = {"group": g, "name": e["name"], "size": e["size"], **r}
+        print(json.dumps(out)[:400], flush=True)
+        return out
+    with ThreadPoolExecutor(4) as ex:
         res["results"] = list(ex.map(one, picks))
     # whole-body proof on pairs from the biggest head-hash cluster
     from collections import defaultdict
