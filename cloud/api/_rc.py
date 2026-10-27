@@ -442,7 +442,7 @@ def rank_providers(codes, state="US", payer="cigna,uhc", specialty="", weights="
     ws = ws if len(ws) == len(cs) else [1.0] * len(cs)
     w = dict(zip(cs, ws))
     st = (state or "US").strip().upper()
-    states = STATES if st in ("US", "ALL", "") else [_st(st)]
+    states = STATES if st in ("US", "ALL", "") else [_st(x) for x in st.split(",") if x.strip()]
     # placeholder amounts payers publish ($0.01, $99,999.xx, $999,999.xx) would top any ranking
     where = (f"negotiated_type IN {DOLLAR_TYPES} AND rate > 0.01 AND rate < 99999 AND rate_raw NOT LIKE '9999%' AND "
              + _place_mask_sql(place, modifier))
@@ -454,14 +454,14 @@ def rank_providers(codes, state="US", payer="cigna,uhc", specialty="", weights="
     def one(job):
         p, s = job
         if time.time() - t0 > 100:
-            return [{"_skipped": f"{p}/{s}"}]
+            return [{"_skipped": f"{p}/{s}", "_state": s}]
         try:
             return _rows(p, cs, s, where=where, pg_where=pg_where,
                          select="payer, tin, any_value(provider) AS provider, any_value(specialty) AS specialty, code, "
                                 "median(rate) AS rate", group="payer, tin, code")
         except Exception as e:
             return [{"_skipped": f"{p}/{s}: {e}"}]
-    with ThreadPoolExecutor(4) as ex:
+    with ThreadPoolExecutor(2) as ex:  # a 2 GB function: more parallel joins ran it out of memory
         parts = list(ex.map(one, jobs))
     skipped = [r["_skipped"] for part in parts for r in part if "_skipped" in r]
     per: dict = {}
@@ -489,7 +489,10 @@ def rank_providers(codes, state="US", payer="cigna,uhc", specialty="", weights="
                     "rates": {c: round(r, 2) for c, r in sorted(rates.items())}})
     out.sort(key=lambda r: -(r["weighted_pct_of_medicare"] or 0))
     head = out[:min(int(limit or 25), 200)]
-    note = {"payer": "_summary", "groups_ranked": len(out), "states": len(states), "codes": cs, "weights": ws,
+    left = sorted({r["_state"] for part in parts for r in part if "_state" in r})
+    note = {"payer": "_summary", "groups_ranked": len(out), "states": len(states) - len(left), "codes": cs, "weights": ws,
+            "states_not_done": ",".join(left) or None,
+            "how_to_continue": "call again with state=<states_not_done> and merge" if left else None,
             "ranked_by": "weighted % of national Medicare (PFS)", "skipped": skipped[:20],
             "excluded": "placeholder amounts ($0.01, $9999x)"}
     return [note] + head
