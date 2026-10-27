@@ -143,6 +143,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("uhc-sketch", help="bottom-k sketches of mapped shards' facts; pairwise similarity")
     p.add_argument("--shards", required=True)
     p.add_argument("--out", default="reports/uhc-sketch.json")
+    p = sub.add_parser("shop-sources", help="CareCompass reference tables -> work bucket shop/sources")
     p = sub.add_parser("cloud-pack", help="cloud pack (small files per code/state) of one payer -> work bucket serve/v1")
     p.add_argument("--payer", required=True)
     p.add_argument("--prefix", default="serve/v1")
@@ -338,6 +339,9 @@ def main(argv=None) -> int:
     elif a.cmd == "uhc-sketch":
         from . import uhc_probe
         _write(uhc_probe.sketch(a.shards), a.out)
+    elif a.cmd == "shop-sources":
+        from . import shop
+        _write(shop.sources(), "reports/shop-sources.json")
     elif a.cmd == "cloud-pack":
         from . import cloudpack
         print(json.dumps(cloudpack.job(a.payer, prefix=a.prefix), default=str))
