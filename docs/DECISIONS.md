@@ -25,7 +25,9 @@ Newest first. One entry per lesson: what we saw, what we changed.
   failed in `dims-provider_set` with "No space left on device" even with 105 GB free: the job held every
   downloaded input plus a full hash-sliced copy. `reduce_dims` now downloads the big list tables
   (`DIM_SLICES`) in batches of `RC_SPLIT_BATCH_BYTES` (12 GB), appends each batch to the sliced copy as
-  zstd, and deletes the batch, so peak disk is about one copy. The orchestrator called wave 7 "done"
+  zstd, and deletes the batch, so peak disk is about one copy. With that fix the job ran past an hour, and its upload
+  then failed with 401: the GitHub OIDC exchange gives a one-hour Hugging Face token and the job fetched it
+  once at the start. Uploads and later download batches now ask `token_for` again (it caches until expiry). The orchestrator called wave 7 "done"
   because it checked only rate_fact, code and metas; it now also requires every dims table.
 - **AI clients cache tool lists; custom SQL is back, sandboxed.** ChatGPT kept calling `run_sql` from the old
   Mac app ("unknown tool run_sql"); re-adding the connector refreshes the list. The cloud app's `run_sql` takes
