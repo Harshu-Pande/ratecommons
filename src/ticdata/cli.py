@@ -128,6 +128,11 @@ def main(argv=None) -> int:
     p.add_argument("--sample", type=int, default=40)
     p.add_argument("--full", type=int, default=2)
     p.add_argument("--out", default="reports/uhc-probe.json")
+    p = sub.add_parser("uhc-diff", help="how UHC near-copy files differ (first diff, provider_references overlap)")
+    p.add_argument("--match", default="_0L_")
+    p.add_argument("--n", type=int, default=4)
+    p.add_argument("--head-mb", type=int, default=256)
+    p.add_argument("--out", default="reports/uhc-diff.json")
     p = sub.add_parser("cloud-pack", help="cloud pack (small files per code/state) of one payer -> work bucket serve/v1")
     p.add_argument("--payer", required=True)
     p.add_argument("--prefix", default="serve/v1")
@@ -310,6 +315,9 @@ def main(argv=None) -> int:
     elif a.cmd == "uhc-probe":
         from . import uhc_probe
         _write(uhc_probe.probe(a.head_mb, a.full, a.sample), a.out)
+    elif a.cmd == "uhc-diff":
+        from . import uhc_probe
+        _write(uhc_probe.diff(a.match, a.n, a.head_mb), a.out)
     elif a.cmd == "cloud-pack":
         from . import cloudpack
         print(json.dumps(cloudpack.job(a.payer, prefix=a.prefix), default=str))

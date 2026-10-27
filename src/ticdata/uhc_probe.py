@@ -142,3 +142,59 @@ def probe(head_mb: int = 256, full: int = 2, sample: int = 40, seed: int = 7) ->
     with ThreadPoolExecutor(2) as ex:
         res["full"] = list(ex.map(lambda r: {"name": r["name"], **body_hash(byname[r["name"]]["url"], None, s)}, pair))
     return res
+
+
+def head_bytes(url: str, limit: int, session) -> bytes:
+    """First `limit` decompressed bytes of a (multi-member) gzip file."""
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    out = []
+    n = 0
+    with session.get(url, stream=True, timeout=600) as r:
+        r.raise_for_status()
+        for chunk in r.iter_content(1 << 20):
+            buf = chunk
+            while buf and n < limit:
+                o = d.decompress(buf, 32 << 20)
+                out.append(o)
+                n += len(o)
+                buf = d.unconsumed_tail
+                if d.eof:
+                    buf = d.unused_data + buf
+                    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            if n >= limit:
+                break
+    return b"".join(out)[:limit]
+
+
+def diff(match: str = "_0L_", n: int = 4, head_mb: int = 256) -> dict:
+    """How near-copies differ: first differing offset with context, and overlap of provider_references records
+    with and without their provider_group_id numbers."""
+    from .discover import uhc
+    from .net import new_session
+
+    s = new_session(pool=8)
+    _, entries = uhc(s)
+    es = [e for e in entries if e["kind"] == "in_network" and match in e["name"]][:n]
+    with ThreadPoolExecutor(4) as ex:
+        heads = list(ex.map(lambda e: head_bytes(e["url"], head_mb << 20, s), es))
+    res = {"files": [e["name"] for e in es], "pairs": []}
+    recs = []
+    for h in heads:
+        parts = h.split(b'{"provider_group_id":')[1:-1]  # the last one may be cut off
+        ids = [hashlib.md5(p).hexdigest() for p in parts]
+        noid = [hashlib.md5(re.sub(rb"^\s*\d+", b"", p)).hexdigest() for p in parts]
+        recs.append((ids, noid, len(parts)))
+    for i in range(1, len(heads)):
+        a, b = heads[0], heads[i]
+        k = next((j for j in range(min(len(a), len(b))) if a[j] != b[j]), None)
+        sa, sb = set(recs[0][0]), set(recs[i][0])
+        na, nb = set(recs[0][1]), set(recs[i][1])
+        res["pairs"].append({
+            "file": es[i]["name"], "first_diff": k,
+            "a_context": a[max(0, (k or 0) - 300):(k or 0) + 300].decode("utf-8", "replace") if k is not None else None,
+            "b_context": b[max(0, (k or 0) - 300):(k or 0) + 300].decode("utf-8", "replace") if k is not None else None,
+            "records": [recs[0][2], recs[i][2]],
+            "same_records_with_ids": len(sa & sb), "same_records_without_ids": len(na & nb),
+            "union_without_ids": len(na | nb)})
+        print(json.dumps(res["pairs"][-1])[:3000], flush=True)
+    return res
