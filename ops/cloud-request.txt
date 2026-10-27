@@ -1,2 +1,3 @@
 # Cloud pack targets (see .github/workflows/cloud.yml); the last line runs.
 shared cigna aetna uhc
+shared cigna aetna uhc prefix=serve/v2
