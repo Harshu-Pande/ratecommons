@@ -1,6 +1,6 @@
-"""Vercel entry (deployed as api/index.py): loads the app code from this repo at a pinned commit (RC_CODE_REF),
-so a release is a one-line environment change plus a redeploy. Source: cloud/api/ in Harshu-Pande/ratecommons."""
+"""Vercel entry: loads the app code from github.com/Harshu-Pande/ratecommons cloud/api at a pinned commit (RC_CODE_REF)."""
 import importlib.util
+import json
 import os
 import sys
 
@@ -19,4 +19,19 @@ sys.path.insert(0, D)
 spec = importlib.util.spec_from_file_location("rc_app", f"{D}/index.py")
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-app = mod.app
+_inner = mod.app
+
+
+async def app(scope, receive, send):
+    if scope["type"] == "http":
+        path = scope.get("path", "")
+        if path == "/__debug":
+            body = json.dumps({"path": path, "root_path": scope.get("root_path"), "raw": str(scope.get("raw_path")), "ref": REF}).encode()
+            await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": body})
+            return
+        for pre in ("/api/index.py", "/api/index"):
+            if path.startswith(pre):
+                scope = dict(scope, path=path[len(pre):] or "/")
+                break
+    await _inner(scope, receive, send)

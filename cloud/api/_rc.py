@@ -245,10 +245,10 @@ def _place_mask_sql(place: str, modifier: str = "") -> str:
 
 def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, city=None, zip_prefix=None,
           specialty=None, provider=None, billing_class=None, where: str = "true", select: str | None = None,
-          group: str | None = None, limit: int | None = None, pg_where: str | None = None, arrow: bool = False):
+          group: str | None = None, limit: int | None = None, pg_where: str | None = None, copy_to: str | None = None):
     """Rows (product, provider group, price) for codes in one state for one payer, optionally aggregated."""
     if not meta(p):
-        return None if arrow else []
+        return None if copy_to else []
     cf = _code_files(p, codes, code_type)
     if meta(p).get("pspli") == "bucket3":  # provider sets bucketed by the first 3 characters of the code key
         def bucket(f: str) -> str:
@@ -273,7 +273,7 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
         files.append(got[f"{p}/cstm_all.parquet"])
     psl = [got[f] for f in psf if got.get(f)]
     if not files or not psl or not got.get(f"{p}/state/{state}/pg.parquet"):
-        return None if arrow else []
+        return None if copy_to else []
     S = {k: f"read_parquet('{got[f'{p}/state/{state}/{k}.parquet']}')" for k in ("plipg", "pg")}
     S["pspli"] = f"read_parquet({psl!r})"
     pv = ""
@@ -321,8 +321,8 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
              FROM base b JOIN {S['pg']} pg USING (pg) WHERE {where})
     SELECT {select or '*'} FROM rows {('GROUP BY ' + group) if group else ''} {('LIMIT ' + str(int(limit))) if limit else ''}
     """
-    if arrow:
-        return con().execute(sql).fetch_arrow_table()
+    if copy_to:  # into a Parquet file (run_sql): returns the row count
+        return con().execute(f"COPY ({sql}) TO '{copy_to}' (FORMAT parquet, COMPRESSION zstd)").fetchone()[0]
     return _q(sql)
 
 
@@ -765,36 +765,39 @@ def _states_arg(x: str) -> list[str]:
     return list(STATES) if x in ("US", "ALL", "") else [_st(v) for v in x.split(",") if v.strip()]
 
 
-def _rates_table(payers: str, states: str, codes: str, specialty: str = "", place: str = "any", deadline: float = 0):
-    import pyarrow as pa
-
+def _rates_table(payers: str, states: str, codes: str, specialty: str = "", place: str = "any", deadline: float = 0,
+                 out_dir: str = "") -> tuple[list[str], int, list[str]]:
+    """rc_rates: one Parquet file per payer x state under out_dir; returns (files, rows, notes)."""
     cs = _codes(codes)[:30]
     sts = _states_arg(states)
     where = "true" if (place or "any") == "any" else _place_mask_sql(place)
     pg_where = f"specialty ILIKE {_lit('%' + specialty.strip() + '%')}" if specialty else None
     jobs = [(p, st) for p in _payers(payers) for st in sts]
-    parts, notes, total = [], [], [0]
+    files, notes, total = [], [], [0]
+    os.makedirs(out_dir, exist_ok=True)
 
     def one(job):
         p, st = job
         if time.time() > deadline or total[0] > SQL_MAX_BUILD_ROWS:
-            return job, None, "not built (time or size limit)"
+            return job, None, "not loaded (time or size limit): run again for this state"
+        f = f"{out_dir}/{p}-{st}.parquet"
         try:
-            t = _rows(p, cs, st, where=where, pg_where=pg_where, arrow=True, select=f"'{st}' AS " + RATE_COLS)
-            if t is not None:
-                total[0] += t.num_rows
-            return job, t, None
+            n = _rows(p, cs, st, where=where, pg_where=pg_where, copy_to=f, select=f"'{st}' AS " + RATE_COLS)
+            if n:
+                total[0] += n
+                return job, (f, n), None
+            if os.path.exists(f):
+                os.remove(f)
+            return job, None, None
         except Exception as e:
             return job, None, f"error: {e}"[:200]
     with ThreadPoolExecutor(2 if len(jobs) > 4 else max(1, len(jobs))) as ex:
-        for (p, st), t, err in ex.map(one, jobs):
+        for (p, st), got, err in ex.map(one, jobs):
             if err:
                 notes.append(f"{p}/{st}: {err}")
-            elif t is not None and t.num_rows:
-                parts.append(t)
-    if not parts:
-        return None, notes
-    return pa.concat_tables(parts, promote_options="permissive"), notes
+            elif got:
+                files.append(got[0])
+    return files, total[0], notes
 
 
 def run_sql(sql, max_rows=500):
@@ -823,7 +826,12 @@ def run_sql(sql, max_rows=500):
     sb.execute("SET temp_directory = '/tmp/rc-duck-sql'")
     sb.execute("SET max_temp_directory_size = '120MB'")
     os.makedirs(CACHE, exist_ok=True)
-    sb.execute(f"SET allowed_directories = ['{os.path.realpath(CACHE)}/']")
+    import shutil
+    import uuid
+
+    work = os.path.realpath(f"/tmp/rc-sql/{uuid.uuid4().hex}")
+    os.makedirs(work)
+    sb.execute(f"SET allowed_directories = ['{os.path.realpath(CACHE)}/', '{work}/']")
     notes, built, pins = [], {}, []
 
     def view(name, path_rel, where=""):
@@ -853,14 +861,12 @@ def run_sql(sql, max_rows=500):
         for (fn, args), name in calls.items():
             a = list(args) + [""] * 5
             if fn == "rates":
-                t, n = _rates_table(a[0] or "all", a[1], a[2], a[3], a[4] or "any", deadline)
-                notes += n
-                if t is None:
-                    sb.execute(f"CREATE TABLE {name} AS SELECT NULL::VARCHAR AS state WHERE false")
-                else:
-                    sb.register(f"{name}_a", t)
-                    sb.execute(f"CREATE VIEW {name} AS SELECT * FROM {name}_a")
-                    built[f"rc_rates{args}"] = t.num_rows
+                fs, n, nt = _rates_table(a[0] or "all", a[1], a[2], a[3], a[4] or "any", deadline, f"{work}/{name}")
+                notes += nt
+                sb.execute(f"CREATE VIEW {name} AS " + (f"SELECT * FROM read_parquet({fs!r}, union_by_name = true)" if fs else
+                           "SELECT NULL::VARCHAR AS state, NULL::VARCHAR AS payer, NULL::VARCHAR AS tin, NULL::VARCHAR AS code, "
+                           "NULL::DOUBLE AS rate WHERE false"))
+                built[f"rc_rates{args}"] = n
             elif fn in ("groups", "group_npis", "group_networks"):
                 x = {"groups": "pg", "group_npis": "pgnpi", "group_networks": "pgnet"}[fn]
                 rels, extra = [], {}
@@ -876,21 +882,18 @@ def run_sql(sql, max_rows=500):
                     raise ValueError("rc_nppes takes up to 6 states at a time")
                 views_union(name, [f"shared/nppes/{st}.parquet" for st in sts])
             elif fn == "medicare":
-                _mcr(["99213"], "US")
                 st = (a[0] or "US").strip().upper()
-                sb.register(f"{name}_a", con().execute(f"SELECT * FROM mcr WHERE state = {_lit(st)}").fetch_arrow_table())
-                sb.execute(f"CREATE VIEW {name} AS SELECT * FROM {name}_a")
+                view(name, "shared/medicare.parquet", f"WHERE state = {_lit(st)}")
             elif fn in ("codes", "products"):
-                import pyarrow as pa
-                ts = []
+                fs = []
                 for p in _payers(a[0] or "all"):
                     meta(p)
                     q = (f"SELECT '{p}' AS payer, billing_code_type, billing_code, name, n AS published_rows FROM codes_{p}"
                          if fn == "codes" else
                          f"SELECT '{p}' AS payer, net, product, label, n_plans, plan_names, file_names FROM netlabel_{p}")
-                    ts.append(con().execute(q).fetch_arrow_table())
-                sb.register(f"{name}_a", pa.concat_tables(ts, promote_options="permissive"))
-                sb.execute(f"CREATE VIEW {name} AS SELECT * FROM {name}_a")
+                    fs.append(f"{work}/{name}-{p}.parquet")
+                    con().execute(f"COPY ({q}) TO '{fs[-1]}' (FORMAT parquet)")
+                sb.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet({fs!r}, union_by_name = true)")
             elif fn == "code_file":
                 p = _payers(a[0])[0]
                 cf = _code_files(p, [_code(a[1])], None)
@@ -917,6 +920,7 @@ def run_sql(sql, max_rows=500):
         for f in pins:
             _pinned.discard(f)
         sb.close()
+        shutil.rmtree(work, ignore_errors=True)
     rows = [dict(zip(cols, r)) for r in data[:max_rows]]
     return {"columns": cols, "rows": rows, "row_count": len(rows), "truncated": len(data) > max_rows,
             "built": built, "notes": notes[:30], "seconds": round(time.time() - t0, 1)}
