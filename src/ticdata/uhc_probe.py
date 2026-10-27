@@ -256,30 +256,39 @@ def compare_mapped(shards: str = "0,1,2", release: str = "2026-10", payer: str =
     want = [p for p in allp if any(f"/shard-{n:03d}-" in p for n in nums)
             and (p.endswith(("provider_set.parquet", "price_list.parquet", "metas.json")) or "/rate_fact/" in p)]
     _fetch(b, want, local, prefix, tok)
-    con = duckdb.connect(f"{local}/c.db")
-    con.execute("SET memory_limit = '10GB'; SET threads = 4; SET preserve_insertion_order = false")
+    con = duckdb.connect()
+    con.execute("SET memory_limit = '12GB'; SET threads = 4; SET preserve_insertion_order = false")
     con.execute(f"SET temp_directory = '{local}/tmp'")
     import glob
     import os
 
     dirs = sorted(d for d in glob.glob(f"{local}/shard-*") if os.path.isdir(d))
     res = {"files": [], "pairs": []}
-    for i, d in enumerate(dirs):
+    for d in dirs:
         metas = json.load(open(f"{d}/metas.json"))
         res["files"].append([(m.get("source") or {}).get("name") for m in metas])
-        con.execute(f"CREATE TABLE f{i} AS SELECT DISTINCT code_id, ps_id, pl_id FROM read_parquet('{d}/rate_fact/*.parquet')")
-        con.execute(f"CREATE TABLE s{i} AS SELECT DISTINCT ps_id FROM read_parquet('{d}/provider_set.parquet')")
-        con.execute(f"CREATE TABLE l{i} AS SELECT DISTINCT pl_id FROM read_parquet('{d}/price_list.parquet')")
-    for i in range(1, len(dirs)):
-        row = {"file": res["files"][i]}
-        for t in ("f", "s", "l"):
-            a = con.execute(f"SELECT count(*) FROM {t}0").fetchone()[0]
-            bb = con.execute(f"SELECT count(*) FROM {t}{i}").fetchone()[0]
-            both = con.execute(f"SELECT count(*) FROM (SELECT * FROM {t}0 INTERSECT SELECT * FROM {t}{i})").fetchone()[0]
-            row[{"f": "rate_facts", "s": "provider_sets", "l": "price_lists"}[t]] = {"first": a, "this": bb, "both": both}
-        # facts that differ: are they the same code and provider set at another price, or new codes/sets?
-        row["only_this_same_code_ps"] = con.execute(
-            f"SELECT count(*) FROM (SELECT * FROM f{i} EXCEPT SELECT * FROM f0) x SEMI JOIN f0 USING (code_id, ps_id)").fetchone()[0]
+    # rate facts are partitioned by code hash, so part k of one file only meets part k of another:
+    # compare part by part to stay inside memory and disk
+    tot = [dict(first=0, this=0, both=0, only_this_same_code_ps=0) for _ in dirs[1:]]
+    for k in range(16):
+        con.execute(f"CREATE OR REPLACE TABLE f0 AS SELECT DISTINCT code_id, ps_id, pl_id FROM read_parquet('{dirs[0]}/rate_fact/part-{k:02d}.parquet')")
+        for i, d in enumerate(dirs[1:]):
+            con.execute(f"CREATE OR REPLACE TABLE fi AS SELECT DISTINCT code_id, ps_id, pl_id FROM read_parquet('{d}/rate_fact/part-{k:02d}.parquet')")
+            t = tot[i]
+            t["first"] += con.execute("SELECT count(*) FROM f0").fetchone()[0]
+            t["this"] += con.execute("SELECT count(*) FROM fi").fetchone()[0]
+            t["both"] += con.execute("SELECT count(*) FROM (SELECT * FROM f0 INTERSECT SELECT * FROM fi)").fetchone()[0]
+            t["only_this_same_code_ps"] += con.execute(
+                "SELECT count(*) FROM (SELECT * FROM fi EXCEPT SELECT * FROM f0) x SEMI JOIN f0 USING (code_id, ps_id)").fetchone()[0]
+        print(json.dumps({"part": k, "so_far": tot}), flush=True)
+    for i, d in enumerate(dirs[1:]):
+        row = {"file": res["files"][i + 1], "rate_facts": tot[i]}
+        for t, f, col in (("provider_sets", "provider_set", "ps_id"), ("price_lists", "price_list", "pl_id")):
+            a = con.execute(f"SELECT count(DISTINCT {col}) FROM read_parquet('{dirs[0]}/{f}.parquet')").fetchone()[0]
+            b = con.execute(f"SELECT count(DISTINCT {col}) FROM read_parquet('{d}/{f}.parquet')").fetchone()[0]
+            both = con.execute(f"SELECT count(*) FROM (SELECT {col} FROM read_parquet('{dirs[0]}/{f}.parquet') "
+                               f"INTERSECT SELECT {col} FROM read_parquet('{d}/{f}.parquet'))").fetchone()[0]
+            row[t] = {"first": a, "this": b, "both": both}
         res["pairs"].append(row)
         print(json.dumps(row, default=str), flush=True)
     return res
