@@ -46,6 +46,26 @@ def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = 
             uniq.append(e)
     if match:  # a hand-picked subset of files (names containing any of these substrings)
         uniq = [e for e in uniq if any(m in e["name"] for m in match)]
+    # Whole-file duplicates (same gzip trailer CRC32 + ISIZE, i.e. same decompressed content, from `uhc-tails`): parse one, record
+    # the rest as duplicates of it so their plan/network membership can be attached at merge (nothing is dropped).
+    duplicates = {}
+    tails = os.environ.get("TIC_DUP_TAILS")
+    if tails:
+        from huggingface_hub import hf_hub_download
+
+        rows = json.load(open(hf_hub_download("ratecommons/ops", tails, repo_type="dataset")))["rows"]
+        key = {r["name"]: (r["crc32"], r["isize"]) for r in rows if "crc32" in r}  # same content, any compression
+        rep, keep = {}, []
+        for e in uniq:
+            k = key.get(e["name"])
+            if k is None:
+                keep.append(e)
+            elif k in rep:
+                duplicates[e["name"]] = rep[k]
+            else:
+                rep[k] = e["name"]
+                keep.append(e)
+        uniq = keep
     if limit:
         uniq = uniq[:limit]
 
@@ -73,7 +93,7 @@ def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = 
             i += 1
         assign[i].append({k: e.get(k) for k in ("name", "url", "size", "kind")})
         load[i] += e["size"] or 0
-    return {"payer": payer, "kind": kind, "files": len(uniq), "bytes": sum(load),
+    return {"payer": payer, "kind": kind, "files": len(uniq), "bytes": sum(load), "duplicates": duplicates,
             "shards": [{"shard": i, "bytes": load[i], "files": a} for i, a in enumerate(assign)]}
 
 
