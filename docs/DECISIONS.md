@@ -5,6 +5,22 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-27
 
+- **UHC near-copies are not byte copies; exact dedup saves only 4 TB.** Findings from `uhc_probe.py`:
+  - UHC files are single-member gzip (no member starts in the last 1 MB of 6,775 of 6,824 files), so the
+    gzip trailer's CRC32 + ISIZE fingerprints the whole decompressed file. 6,824 files give 6,269 distinct
+    fingerprints: whole-file duplicates exist (C0 x47, P3 x30, C2 x17, C1 x13, dental and NDC files), but
+    the representative set is still 89.8 TB of 93.8 TB.
+  - The 465 "0L" (Choice Plus) UMR files have 459 distinct fingerprints. Their provider_references put a
+    per-file `network_name` (the employer/plan label) in every record, number `provider_group_id`
+    differently and list records in a different order; in the first 512 MB, about 75% of records are equal
+    once the number and label are removed.
+  - Grouping by product code and near-equal size gives 1,268 groups whose largest members total 11.8 TB.
+    Whether one parse per group is safe is being tested by mapping three 0L files and comparing their
+    content-hashed facts (`uhc-compare`).
+  - The earlier probe hung because it treated the first gzip member as the whole file
+    (`decompressobj` stops at a member end); and UHC's Cloudflare front answers a first Range request with
+    the whole 15 GB (`r.content` on it killed the runner). Both fixed.
+
 - **Aetna provider_set dims outgrew a runner's disk, and the orchestrator did not notice.** Waves 6 and 7
   failed in `dims-provider_set` with "No space left on device" even with 105 GB free: the job held every
   downloaded input plus a full hash-sliced copy. `reduce_dims` now downloads the big list tables
