@@ -137,8 +137,25 @@ BCBST_DIRECTORY = "https://d7k0rj9u1dp84.cloudfront.net/non_aso_directory.json" 
 
 
 def _bcbst_index_urls(s: requests.Session) -> list[str]:
-    """BCBS of Tennessee's fully insured index (its ASO directory lists one index per employer, same networks)."""
-    return list(_get(s, BCBST_DIRECTORY).json().get("TOC_Files", []))
+    """BCBS of Tennessee's fully insured index (its ASO directory lists one index per employer, same networks).
+    Some CloudFront edges serve a stale directory naming an index that is gone (403; a GitHub runner got the
+    2026-09-27 one on 2026-10-28), so the directory is fetched with a cache-buster and, failing that, the newest
+    dated index of the last 10 days is probed by name."""
+    import datetime
+    import time
+
+    try:
+        urls = list(_get(s, f"{BCBST_DIRECTORY}?t={int(time.time())}").json().get("TOC_Files", []))
+        if urls and s.head(urls[0], timeout=60).status_code == 200:
+            return urls
+    except Exception:
+        pass
+    base = BCBST_DIRECTORY.rsplit("/", 1)[0] + "/TCR_TOC_Output/NON-ASO/{}_bcbst_index.json"
+    for k in range(10):
+        u = base.format((datetime.date.today() - datetime.timedelta(days=k)).isoformat())
+        if s.head(u, timeout=60).status_code == 200:
+            return [u]
+    raise RuntimeError("no BCBST index found")
 
 
 def bcbs(s: requests.Session | None = None):

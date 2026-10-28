@@ -11,6 +11,9 @@ Newest first. One entry per lesson: what we saw, what we changed.
   2.8 GB) and every Blue plan's BlueCard files, but for next month (2026-11). Those BlueCard files are skipped: the
   release takes BlueCard files from HCSC's listing of the same month. Networks S and P are also BlueCard files
   890_58A0/B0; both copies are kept (the reduce dedups identical facts; labels say which is which).
+- A GitHub runner's CloudFront edge served a stale `non_aso_directory.json` naming the 2026-09-27 index, which
+  answers 403. Discovery now fetches the directory with a cache-buster, checks the named index, and otherwise probes
+  `TCR_TOC_Output/NON-ASO/<date>_bcbst_index.json` for the last 10 days.
 - Files found after a payer's map are planned on their own (`match=`) with `base=N`, so they get new shard folders
   (shard-020..023) instead of overwriting the mapped ones; waves.txt gets a wave for them before the merge.
 
