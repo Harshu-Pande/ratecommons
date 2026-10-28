@@ -126,10 +126,13 @@ def _stream_files(repo: str, paths: list[str], dest: str, ahead: int = 3):
             yield path, local
 
 
-def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str) -> dict:
+def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str, main: list | None = None) -> dict:
     """Write a release folder holding only the facts for `codes` (plus CSTM-ALL) and the dimension rows they
     use, streaming the published release one file at a time (the whole BCBS release is 110 GB, Aetna's 600 GB).
-    build_pack then runs on it unchanged."""
+    build_pack then runs on it unchanged.
+    main: network ids that keep EVERY code. A fact of another code is kept when its network set holds a main
+    network, under a derived network set listing only its main networks (so other networks never look as if
+    they had that code). Aetna's top 20 networks hold ~3% of its facts."""
     from huggingface_hub import HfApi
 
     from .serving import _duck
@@ -157,11 +160,33 @@ def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str) 
         for path, local in _stream_files(repo, table(t), dl):
             shutil.move(local, out_path(path))
     cl = ", ".join("'" + c.replace("'", "''") + "'" for c in codes)
+    common = f"(r.billing_code IN ({cl}) OR r.billing_code_type = 'CSTM-ALL')"
+    ns_all = f"{work}/ns_all"
+    if main:  # network sets holding a main network, and their derived "main networks only" twins
+        os.makedirs(ns_all, exist_ok=True)
+        con.execute("CREATE TABLE seen_ns (ns_id BLOB)")
+        for path, local in _stream_files(repo, table("network_set"), dl):  # each set once (it repeats per fact slice)
+            o = f"{ns_all}/{os.path.basename(path)}"
+            con.execute(f"COPY (SELECT * FROM read_parquet('{local}') ANTI JOIN seen_ns USING (ns_id)) TO '{o}' "
+                        "(FORMAT parquet, COMPRESSION zstd)")
+            con.execute(f"INSERT INTO seen_ns SELECT ns_id FROM read_parquet('{o}')")
+            os.remove(local)
+        con.execute("DROP TABLE seen_ns")
+        con.execute(f"""CREATE TABLE mainns AS SELECT ns_id, unhex(md5(hex(ns_id) || ':main')) AS d_id
+                        FROM read_parquet('{ns_all}/*.parquet') WHERE list_has_any(network_ids, ?)""", [main])
+        res["main_networks"] = len(main)
+        res["main_network_sets"] = con.execute("SELECT count(*) FROM mainns").fetchone()[0]
+        _log(f"main networks {len(main)}: {res['main_network_sets']:,} network sets hold one")
     n = 0
     for path, local in _stream_files(repo, table("rate_fact"), dl):
         o = out_path(path)
-        con.execute(f"COPY (SELECT * FROM read_parquet('{local}') WHERE billing_code IN ({cl}) "
-                    f"OR billing_code_type = 'CSTM-ALL') TO '{o}' (FORMAT parquet, COMPRESSION zstd)")
+        if main:
+            con.execute(f"""COPY (SELECT r.* REPLACE (CASE WHEN {common} THEN r.ns_id ELSE m.d_id END AS ns_id)
+                                  FROM read_parquet('{local}') r LEFT JOIN mainns m ON m.ns_id = r.ns_id
+                                  WHERE {common} OR m.ns_id IS NOT NULL) TO '{o}' (FORMAT parquet, COMPRESSION zstd)""")
+        else:
+            con.execute(f"COPY (SELECT * FROM read_parquet('{local}') r WHERE {common}) TO '{o}' "
+                        "(FORMAT parquet, COMPRESSION zstd)")
         os.remove(local)
         n += con.execute(f"SELECT count(*) FROM read_parquet('{o}')").fetchone()[0]
     res["facts"] = n
@@ -192,7 +217,19 @@ def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str) 
         if then and outs:
             con.execute(f"CREATE TABLE {then[0]} AS SELECT DISTINCT {then[1]} FROM read_parquet({outs!r})")
 
-    keep("network_set", "ns_id", "k_ns", once=True)
+    if main:  # network sets from the local copy: the kept originals, plus derived twins listing main networks only
+        os.makedirs(f"{dest}/network_set", exist_ok=True)
+        con.execute(f"""COPY (SELECT * FROM read_parquet('{ns_all}/*.parquet') SEMI JOIN k_ns USING (ns_id))
+                        TO '{dest}/network_set/part-00.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+        con.execute(f"""COPY (SELECT n.* REPLACE (m.d_id AS ns_id, list_filter(n.network_ids, x -> list_contains(?, x)) AS network_ids)
+                              FROM read_parquet('{ns_all}/*.parquet') n JOIN mainns m USING (ns_id)
+                              WHERE m.d_id IN (SELECT ns_id FROM k_ns))
+                        TO '{dest}/network_set/part-01.parquet' (FORMAT parquet, COMPRESSION zstd)""", [main])
+        shutil.rmtree(ns_all, ignore_errors=True)
+        res["network_set"] = con.execute(f"SELECT count(*) FROM read_parquet('{dest}/network_set/*.parquet')").fetchone()[0]
+        _log(f"network_set kept: {res['network_set']:,}")
+    else:
+        keep("network_set", "ns_id", "k_ns", once=True)
     keep("price_list", "pl_id", "k_pl", ("k_pt", "unnest(pt_ids) AS pt_id"))
     keep("price_term", "pt_id", "k_pt")
     keep("provider_set", "ps_id", "k_ps", ("k_pli", "unnest(pli_ids) AS pli_id"))
@@ -235,6 +272,54 @@ def network_products(payer: str, src: str, plans: dict | None) -> dict | None:
     return out
 
 
+MAIN_NETWORKS = int(os.environ.get("RC_MAIN_NETWORKS", "20"))
+
+
+def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NETWORKS) -> list:
+    """The networks that keep every code: Aetna's n networks used by the most employer plans; a Blue plan's own
+    (home) networks, not other plans' BlueCard files; Anthem's n largest own networks. Returns network ids."""
+    import re
+
+    import duckdb
+    from huggingface_hub import hf_hub_download
+
+    sf = hf_hub_download(f"{ORG}/{payer}", f"release={release}/source_file.parquet", repo_type="dataset")
+    rows = duckdb.sql(f"SELECT network_id, list(name), max(bytes) FROM read_parquet('{sf}') GROUP BY 1").fetchall()
+    if payer == "aetna":  # rank file groups by employer plans; a group's every network id counts (a file name can
+        # carry two network ids, one of them without facts: 2026-10-05_pl-tz-tr25 in October 2026)
+        groups: dict = {}
+        for nid, names, _ in rows:
+            g = tuple(sorted(names))
+            groups.setdefault(g, [set(), []])
+            groups[g][0].update(p for nm in names for p in (plans or {}).get(nm, []))
+            groups[g][1].append(nid)
+        ranked = sorted(groups.values(), key=lambda x: -len(x[0]))[:n]
+        return [nid for _, ids in ranked for nid in ids]
+    elif payer == "bcbs":  # BlueCard files are named <YYYY-MM>_<plan>_<prefix>_...; home networks are the rest
+        score = {nid: b for nid, names, b in rows
+                 if not all(re.match(r"\d{4}-\d{2}_\d{3}_[0-9A-Z]{4}_", x) for x in names)}
+    elif payer == "anthem":
+        score = {nid: b for nid, names, b in rows if any(re.match(r"[A-Z]{2}_", x) for x in names)}
+    else:
+        score = {nid: b for nid, names, b in rows}
+    top = [k for k, _ in sorted(score.items(), key=lambda x: -(x[1] or 0))]
+    if payer == "bcbs":  # the largest home networks of each Blue plan we read (TN, IL, TX), n/3 each
+        names = {nid: " ".join(nm) for nid, nm, _ in rows}
+
+        def plan(nid):
+            x = names[nid]
+            return "TN" if "_890_" in x else "IL" if "Illinois" in x else "TX" if "Texas" in x else "other"
+        per = max(1, -(-n // 3))
+        out, cnt = [], {}
+        for k in top:
+            g = plan(k)
+            if g != "other" and cnt.get(g, 0) < per:
+                out.append(k)
+                cnt[g] = cnt.get(g, 0) + 1
+        return out
+    return top[:n]
+
+
 def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload: bool = True,
          states: list[str] | None = None, match: list[str] | None = None, codes: str | None = None) -> dict:
     """source: "dataset" (the published release) or "wave-N" (a reduce wave in the work bucket).
@@ -248,11 +333,15 @@ def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload:
     os.makedirs(work)
     codes = codes or os.environ.get("RC_PACK_CODES") or "auto"  # serve.yml passes a target's 5th field here
     if codes == "auto":
-        codes = "all" if payer in FULL_PACK else "common"
+        codes = "all" if payer in FULL_PACK else "main"
     subset = None
-    if codes == "common" and source == "dataset":
+    main = None
+    if codes in ("common", "main") and source == "dataset":
         subset = common_codes()
-        pre = prefilter(payer, release, subset, f"{work}/src/release={release}", f"{work}/pre")
+        if codes == "main":
+            main = main_networks(payer, release, aetna_plans() if payer == "aetna" else None)
+            _log(f"main networks: {len(main)}")
+        pre = prefilter(payer, release, subset, f"{work}/src/release={release}", f"{work}/pre", main=main)
         _log(f"prefilter: {json.dumps(pre)}")
         src = f"{work}/src/release={release}"
     elif source == "dataset":
@@ -288,7 +377,7 @@ def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload:
     res.update({"source": source, "release": release, "states": states})
     if subset:  # the app says when a code is outside the pack instead of "no published rate"
         res["code_subset"] = {"name": "common services (CareCompass procedures + flat all-services contracts)",
-                              "codes": subset}
+                              "codes": subset, "all_codes_networks": [x.hex() for x in (main or [])]}
     json.dump(res, open(f"{work}/out/pack.json", "w"), indent=1, default=str)
     shutil.rmtree(f"{work}/src", ignore_errors=True)
     shutil.rmtree(f"{work}/duck", ignore_errors=True)

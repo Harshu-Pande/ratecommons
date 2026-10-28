@@ -212,8 +212,8 @@ def meta(p: str) -> dict | None:
         cur.execute(f"CREATE OR REPLACE TABLE codes_{p} AS SELECT * FROM read_parquet('{cx}')")
         if m.get("real_networks"):  # product mode: every real network (employer plans), for exact-network questions
             rn = fetch(f"{p}/networks.parquet")
-            cur.execute(f"CREATE OR REPLACE TABLE realnet_{p} AS SELECT rnet, product, file_names, plan_names "
-                        f"FROM read_parquet('{rn}')")
+            cur.execute(f"CREATE OR REPLACE TABLE realnet_{p} AS SELECT rnet, upper(network_id) AS network_id, product, "
+                        f"file_names, plan_names FROM read_parquet('{rn}')")
         _meta[p] = m
     return _meta[p]
 
@@ -852,20 +852,52 @@ def coverage_notes(args: dict) -> list[str]:
             except Exception:
                 pass
     for p in ps:
-        sub = (meta(p) or {}).get("code_subset")
+        m = meta(p) or {}
+        sub = m.get("code_subset")
         if not sub:
             continue
         have = set(sub.get("codes") or [])
-        missing = [c for c in asked if c not in have]
         name = PAYER_LABEL.get(p, p)
-        if missing:
-            notes.append(f"{name}: this version holds only common services ({len(have)} codes + flat all-services "
-                         f"contracts); {', '.join(missing[:10])} not included here. That is not the same as "
-                         "'no published rate': the payer's full file has more.")
-        elif not asked:
-            notes.append(f"{name}: this version holds only common services ({len(have)} codes + flat all-services "
-                         "contracts); network and provider lists come from those rates.")
+        mains = main_network_labels(p)
+        outside = [c for c in asked if c not in have]
+        packed = {r["billing_code"] for r in _q(f"SELECT DISTINCT billing_code FROM codes_{p} WHERE billing_code IN "
+                                                 f"({', '.join(_lit(c) for c in outside)})")} if outside else set()
+        main_only = [c for c in outside if c in packed]
+        absent = [c for c in outside if c not in packed]
+        scope = (f"its {len(mains)} main networks ({'; '.join(mains[:8])}{' ...' if len(mains) > 8 else ''})"
+                 if mains else "no network")
+        if main_only:
+            notes.append(f"{name}: for {', '.join(main_only[:10])} this version has rates for {scope} only; its other "
+                         f"networks are loaded for {len(have)} common services. A network missing here may still "
+                         "publish a rate (not the same as 'no published rate').")
+        if absent:
+            notes.append(f"{name}: {', '.join(absent[:10])} has no rate in this version's networks ({scope} for all "
+                         f"codes, every network for {len(have)} common services). Other networks may publish one.")
+        if not asked:
+            notes.append(f"{name}: every code for {scope}; the other networks hold {len(have)} common services, "
+                         "so their network and provider lists come from those rates.")
     return notes
+
+
+_mains: dict = {}
+
+
+def main_network_labels(p: str) -> list[str]:
+    """Labels of the networks that keep every code in a common-services pack (meta code_subset.all_codes_networks)."""
+    if p in _mains:
+        return _mains[p]
+    m = meta(p) or {}
+    hx = {x.upper() for x in ((m.get("code_subset") or {}).get("all_codes_networks") or [])}
+    out: list[str] = []
+    if hx and m.get("real_networks"):
+        rows = _q(f"SELECT product, len(plan_names) AS n FROM realnet_{p} WHERE network_id IN ({', '.join(_lit(x) for x in hx)}) "
+                  "ORDER BY n DESC")
+        out = [f"{r['product']}, network used by {r['n']:,} employer plans" for r in rows]
+    elif hx:
+        lab = {n["net"]: n.get("label") for n in m["networks"]}
+        out = sorted({lab.get(n["net"]) or "" for n in m["networks"] if str(n.get("network_id", "")).upper() in hx})
+    _mains[p] = out
+    return out
 
 
 # ------------------------------------------------------------------ custom SQL (sandboxed)
