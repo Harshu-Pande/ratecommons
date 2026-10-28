@@ -21,6 +21,9 @@ BASE = os.environ.get("RC_DATA_URL", "https://huggingface.co/buckets/ratecommons
 CACHE = os.environ.get("RC_CACHE", "/tmp/rc-cache")
 CACHE_MAX = int(float(os.environ.get("RC_CACHE_GB", "0.33")) * 1e9)  # Vercel's /tmp holds 500 MB in all
 PAYERS = ["cigna", "aetna", "uhc", "bcbs", "anthem"]
+# BCBS of Tennessee network names by file prefix, from the descriptions in its index (Oct 2026)
+BCBST_NETWORKS = {"58A0": "Network S", "58B0": "Network P", "58M0": "Network E", "58Q0": "Network L",
+                  "BHBH": "Behavioral Health", "MDEN": "Medical Dental", "TLDC": "Teladoc"}
 BLUE_PLANS = {"020": "Arkansas Blue Cross and Blue Shield", "030": "Blue Cross Blue Shield Of Arizona", "040": "Anthem Blue Cross California", "042": "Blue Shield of California", "051": "Anthem Blue Cross and Blue Shield Colorado", "062": "Anthem Blue Cross and Blue Shield Connecticut", "070": "Highmark Blue Cross Blue Shield Delaware", "102": "Anthem Blue Cross and Blue Shield Georgia", "110": "Blue Cross of Idaho", "131": "Anthem Blue Cross and Blue Shield Indiana", "140": "Wellmark Blue Cross and Blue Shield of Iowa", "141": "Wellmark Blue Cross and Blue Shield of South Dakota", "150": "Blue Cross and Blue Shield of Kansas", "170": "Blue Cross and Blue Shield of Louisiana", "182": "Anthem Blue Cross and Blue Shield Maine", "230": "Blue Cross & Blue Shield of Mississippi", "240": "Blue Cross and Blue Shield of Kansas City", "250": "Blue Cross and Blue Shield of Montana", "254": "Empire BlueCross BlueShield", "260": "Blue Cross and Blue Shield of Nebraska", "266": "Anthem Blue Cross and Blue Shield Nevada", "271": "Anthem Blue Cross and Blue Shield New Hampshire", "280": "Horizon Blue Cross Blue Shield of New Jersey", "290": "Blue Cross and Blue Shield of New Mexico", "301": "Highmark Blue Cross Blue Shield of Western New York", "302": "Excellus BlueCross BlueShield", "310": "Blue Cross and Blue Shield of North Carolina", "320": "Blue Cross Blue Shield of North Dakota", "340": "Blue Cross and Blue Shield of Oklahoma", "361": "Capital BlueCross", "362": "Independence Blue Cross", "370": "Blue Cross & Blue Shield of Rhode Island", "378": "Highmark Blue Shield Pennsylvania", "380": "BlueCross BlueShield of South Carolina", "400": "Blue Cross and Blue Shield of Texas", "410": "Regence BlueCross BlueShield of Utah", "415": "Blue Cross and Blue Shield of Vermont", "425": "Anthem Blue Cross and Blue Shield Virginia", "430": "Premera Blue Cross", "443": "Highmark Blue Cross Blue Shield West Virginia", "458": "Anthem Blue Cross and Blue Shield Wisconsin", "460": "Blue Cross Blue Shield of Wyoming", "471": "Blue Cross and Blue Shield of Hawaii", "510": "Blue Cross and Blue Shield of Alabama", "590": "Florida Blue", "611": "Regence BlueShield of Idaho", "690": "CareFirst BlueCross BlueShield", "700": "Blue Cross Blue Shield of Massachusetts", "710": "Blue Cross Blue Shield of Michigan", "720": "Blue Cross and Blue Shield of Minnesota", "748": "Anthem Blue Cross and Blue Shield Missouri", "800": "Highmark Blue Shield of Northeastern New York", "850": "Regence BlueCross BlueShield of Oregon", "890": "BlueCross BlueShield of Tennessee", "932": "Regence BlueShield of Washington", "973": "BlueCross BlueShield of Puerto Rico"}
 DOLLAR_TYPES = ("negotiated", "fee schedule", "derived")
 MAX_ROWS = 2000
@@ -167,6 +170,11 @@ def _label(payer: str, files: list[str], plans: list[str] | None) -> tuple[str, 
         if m:  # BlueCard file of a Blue plan's network (plan code from the file name, as checked in Oct 2026)
             plan = BLUE_PLANS.get(m.group(1), f"Blue plan {m.group(1)}")
             return f"{plan} (BlueCard)", f"{plan} BlueCard network {m.group(2)}"
+        m = re.match(r"(\d{3})_([0-9A-Z]{4})$", re.sub(r"_\d+_of_\d+$", "", stem))
+        if m:  # a Blue plan's own files, e.g. BCBST's <date>_890_<prefix>_in-network-rates_0001_of_32
+            plan = BLUE_PLANS.get(m.group(1), f"Blue plan {m.group(1)}")
+            net = BCBST_NETWORKS.get(m.group(2), m.group(2)) if m.group(1) == "890" else m.group(2)
+            return f"{plan} {net}", f"{plan} {net} ({m.group(2)})"
         m = re.match(r"([A-Z]{2})_([A-Z0-9]+?)MED", name)
         if m:  # Anthem's own networks: <ST>_<network code>MED<suffix>.json.gz
             return f"Anthem {m.group(1)}", f"Anthem {m.group(1)} network {m.group(2)}"

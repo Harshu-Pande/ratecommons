@@ -34,7 +34,9 @@ def release_of(name: str) -> str:
 
 
 def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = None,
-         match: list[str] | None = None) -> dict:
+         match: list[str] | None = None, first_shard: int = 0) -> dict:
+    """first_shard: number the shards from N (empty shards 0..N-1 keep plan["shards"][n] indexable), so files added
+    to a payer after its map (a `match=` plan) land in new shard folders next to the existing ones."""
     s = new_session(pool=32)
     _, entries = PAYERS[payer](s)
     files = sorted((e for e in entries if e["kind"] == kind), key=lambda e: e["name"])
@@ -94,7 +96,8 @@ def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = 
         assign[i].append({k: e.get(k) for k in ("name", "url", "size", "kind")})
         load[i] += e["size"] or 0
     return {"payer": payer, "kind": kind, "files": len(uniq), "bytes": sum(load), "duplicates": duplicates,
-            "shards": [{"shard": i, "bytes": load[i], "files": a} for i, a in enumerate(assign)]}
+            "shards": [{"shard": i, "bytes": 0, "files": []} for i in range(first_shard)] +
+                      [{"shard": first_shard + i, "bytes": load[i], "files": a} for i, a in enumerate(assign)]}
 
 
 CHUNK_FILES = int(os.environ.get("TIC_CHUNK_FILES", "25"))

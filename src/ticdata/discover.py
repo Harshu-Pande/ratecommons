@@ -133,11 +133,40 @@ def _hcsc_index_urls(s: requests.Session, landing: str) -> list[str]:
                    if "Prescription" not in u})
 
 
+BCBST_DIRECTORY = "https://d7k0rj9u1dp84.cloudfront.net/non_aso_directory.json"  # BCBS of Tennessee, linked from bcbst.com/tcr
+
+
+def _bcbst_index_urls(s: requests.Session) -> list[str]:
+    """BCBS of Tennessee's fully insured index (its ASO directory lists one index per employer, same networks)."""
+    return list(_get(s, BCBST_DIRECTORY).json().get("TOC_Files", []))
+
+
 def bcbs(s: requests.Session | None = None):
+    """Blue plans: HCSC (IL, TX) indexes plus BCBS of Tennessee's. Each index lists the plan's own networks and the
+    BlueCard files of every Blue plan (`<YYYY-MM>_<plan code>_<prefix>_in-network-rates...` on `*.mrf.bcbs.com`),
+    kept once by file name. BCBST lists next month's BlueCard files (2026-11 in Oct 2026); those are skipped, since
+    the release takes BlueCard files from HCSC's listing for the same month. Its own files (`TCR_Output_JSON/<net>/
+    <date>_890_<prefix>_...`) are kept, including Networks S and P that also appear as BlueCard files 890_58A0/B0."""
     import re
 
     s = s or new_session()
     raw_files, entries, seen = {}, [], set()
+    try:
+        for toc_url in _bcbst_index_urls(s):
+            raw = _get(s, toc_url, timeout=600).content
+            raw_files[f"bcbs/{toc_url.rsplit('/', 1)[1]}"] = raw
+            for rs in json.loads(raw).get("reporting_structure", []):
+                for x in rs.get("in_network_files", []):
+                    base = x["location"].split("?")[0]
+                    name = base.rsplit("/", 1)[-1]
+                    if ".mrf.bcbs.com" in base or base in seen or not name.endswith((".json.gz", ".json")):
+                        continue
+                    seen.add(base)
+                    entries.append({"payer": "bcbs", "kind": "in_network", "name": name, "size": None,
+                                    "url": x["location"], "key": base, "host": urllib.parse.urlparse(base).netloc,
+                                    "listed_by": "bcbst", "description": x.get("description")})
+    except Exception as e:  # BCBST's site down: the HCSC part still plans
+        print("bcbst index unavailable:", repr(e)[:200])
     for plan, landing in BCBS_LANDINGS.items():
         for toc_url in _hcsc_index_urls(s, landing):
             raw = _get(s, toc_url, timeout=600).content
