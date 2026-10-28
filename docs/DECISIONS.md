@@ -3,6 +3,13 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: a broken single-GET download resumes with Range; the orchestrator re-maps only missing shards
+- UHC wave 3, shard 32: a 15 GB UMR file broke after 9.3 GB and 45 minutes (`ChunkedEncodingError`,
+  IncompleteRead) on the single-GET path, which had no retry. It now resumes from the bytes on disk with a Range
+  request (or starts over if the server answers 200), up to 5 tries; the result records `resumes`.
+- The orchestrator then re-ran all 12 shards of the wave for that one file. `start_maps` now dispatches only the
+  wave's unmapped shards.
+
 ## 2026-10-28: a UHC shard is mapped only when its run wrote its status file; reduce refuses unfinished waves
 - The orchestrator dispatched UHC wave 3's reduce (run 40770018611) while the wave's map was still running: every chunk
   of a shard uploads its own metas.json, and `mapped_shards` counted a shard as mapped once its first chunk landed.

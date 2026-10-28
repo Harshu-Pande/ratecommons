@@ -143,16 +143,30 @@ def _fetch(url: str, path: str, s: requests.Session) -> dict:
     else:
         note = None
     t0 = time.time()
-    n = 0
-    with s.get(url, stream=True, timeout=(10, 300), headers={"User-Agent": USER_AGENT}) as resp:
-        resp.raise_for_status()
-        with open(path, "wb") as f:
-            for chunk in resp.iter_content(8 << 20):
-                f.write(chunk)
-                n += len(chunk)
+    n, resumes = 0, 0
+    # a long single GET can break (UHC: IncompleteRead after 9.3 of 15 GB, 45 minutes in): resume from the bytes
+    # on disk with a Range request, or start over when the server ignores it
+    for attempt in range(5):
+        headers = {"User-Agent": USER_AGENT, **({"Range": f"bytes={n}-"} if n else {})}
+        try:
+            with s.get(url, stream=True, timeout=(10, 300), headers=headers) as resp:
+                resp.raise_for_status()
+                if n and resp.status_code != 206:
+                    n = 0
+                with open(path, "ab" if n else "wb") as f:
+                    for chunk in resp.iter_content(8 << 20):
+                        f.write(chunk)
+                        n += len(chunk)
+            break
+        except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError,
+                requests.exceptions.ReadTimeout):
+            if attempt == 4:
+                raise
+            resumes += 1
+            time.sleep(5 * (attempt + 1))
     dt = time.time() - t0
     return {"url": url, "bytes": n, "seconds": round(dt, 1), "mb_per_s": round(n / dt / 1e6, 1),
-            "mode": "single GET", **({"range_note": note} if note else {})}
+            "mode": "single GET", **({"resumes": resumes} if resumes else {}), **({"range_note": note} if note else {})}
 
 
 def csv_to_parquet(open_src, dest: str, meta: dict) -> dict:

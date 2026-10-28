@@ -144,13 +144,14 @@ def start_maps(waves):
             if got == b - a + 1:
                 in_flight += 1
             elif nxt is None:
-                nxt = w  # partly or not mapped: (re)run its whole range; finished shards are just rewritten
+                # partly or not mapped: run only its missing shards (one failed download re-ran all 12, 2.5 hours)
+                nxt = w + [",".join(str(x) for x in range(a, b + 1) if x not in mapped)]
                 break
         if nxt and in_flight < MAX_WAVES_IN_FLIGHT:
-            print(f"starting map of {payer} wave {nxt[2]} (shards {nxt[3]})")
+            print(f"starting map of {payer} wave {nxt[2]} (shards {nxt[4]})")
             subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/workflows/map.yml/dispatches",
                                    "-f", "ref=main", "-f", f"inputs[payer]={payer}", "-f", f"inputs[shards]={shards}",
-                                   "-f", "inputs[limit]=", "-f", f"inputs[range]={nxt[3]}"])
+                                   "-f", "inputs[limit]=", "-f", f"inputs[range]={nxt[4]}"])
             return
         print(f"{payer}: {in_flight} mapped wave(s) wait for reduce; next map: {nxt and nxt[2]}")
 

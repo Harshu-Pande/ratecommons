@@ -226,3 +226,19 @@ def test_uhc_shards_are_mapped_only_after_their_status_file(monkeypatch):
     assert pipeline.wave_ready("ratecommons/work", "2026-10", "uhc", (25, 25)) == []
     assert pipeline.wave_ready("ratecommons/work", "2026-10", "uhc", (24, 25))[0].startswith("shard 24")
     assert pipeline.wave_ready("ratecommons/work", "2026-10", "aetna", (0, 7)) == []
+
+
+def test_start_maps_reruns_only_missing_shards(monkeypatch):
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ops"))
+    import orchestrate
+
+    calls = []
+    monkeypatch.setattr(orchestrate, "gh", lambda path: {"workflow_runs": []})
+    monkeypatch.setattr(orchestrate, "mapped_shards", lambda p, r: set(range(24, 36)) - {32})
+    monkeypatch.setattr(orchestrate, "wave_done", lambda p, r, w: w in ("1", "2"))
+    monkeypatch.setattr(orchestrate.subprocess, "check_call", lambda cmd: calls.append(cmd))
+    waves = [["uhc", "2026-10", "1", "0-11"], ["uhc", "2026-10", "2", "12-23"], ["uhc", "2026-10", "3", "24-35"]]
+    orchestrate.start_maps(waves)
+    assert calls and calls[0][-1] == "inputs[range]=32"
