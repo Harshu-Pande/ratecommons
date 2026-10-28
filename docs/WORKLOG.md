@@ -3,6 +3,8 @@
 Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] what (files or runs)`.
 
 ## Claimed
+- 2026-10-28 01:15 CT [pipeline] Pipeline lane: BCBS wave 1 dims fix (no numpy on runners) and re-run, Anthem
+  map retry, then down ops/waves.txt (src/ticdata/reduce.py, ops/, map/reduce runs).
 
 ## Requests
 - 2026-10-28 01:00 CT [app -> pipeline] Take over the pipeline lane: keep BCBS, Anthem, Aetna and UHC moving
