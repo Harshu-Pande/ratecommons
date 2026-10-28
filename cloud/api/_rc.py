@@ -210,6 +210,10 @@ def meta(p: str) -> dict | None:
         cur.execute(f"CREATE OR REPLACE TABLE ns_{p} AS SELECT * FROM read_parquet('{ns}')")
         cx = fetch(f"{p}/codes.parquet")
         cur.execute(f"CREATE OR REPLACE TABLE codes_{p} AS SELECT * FROM read_parquet('{cx}')")
+        if m.get("real_networks"):  # product mode: every real network (employer plans), for exact-network questions
+            rn = fetch(f"{p}/networks.parquet")
+            cur.execute(f"CREATE OR REPLACE TABLE realnet_{p} AS SELECT rnet, product, file_names, plan_names "
+                        f"FROM read_parquet('{rn}')")
         _meta[p] = m
     return _meta[p]
 
@@ -330,9 +334,13 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
         nf = (f" AND (l.product ILIKE {w} OR l.label ILIKE {w} OR list_contains(list_transform(l.plan_names, z -> z ILIKE {w}), true)"
               f" OR list_contains(list_transform(l.file_names, z -> z ILIKE {w}), true))")
     bc = f" AND f.billing_class = {_lit(billing_class.lower())}" if billing_class else ""
+    nets_sql = f"SELECT DISTINCT n.ns, l.product FROM ns_{p} n JOIN netlabel_{p} l USING (net) WHERE true {nf}"
+    exact = _exact_networks(p, network) if network else None
+    if exact:  # an employer or plan name matched real networks: only the network sets holding them
+        nets_sql = exact
     sql = f"""
     WITH f AS (SELECT * FROM read_parquet({files!r}, union_by_name = true) f WHERE true {bc}),
-    nets AS (SELECT DISTINCT n.ns, l.product FROM ns_{p} n JOIN netlabel_{p} l USING (net) WHERE true {nf}),
+    nets AS ({nets_sql}),
     {"pv AS (" + pv + ")," if pv else ""}
     {"lq AS (" + locq + ")," if locq else ""}
     g AS (SELECT DISTINCT s.ps, l.pg FROM {S['pspli']} s JOIN {S['plipg']} l USING (pli)
@@ -352,6 +360,42 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
     if copy_to:  # into a Parquet file (run_sql): returns the row count
         return con().execute(f"COPY ({sql}) TO '{copy_to}' (FORMAT parquet, COMPRESSION zstd)").fetchone()[0]
     return _q(sql)
+
+
+EXACT_MAX = 25  # real networks fetched for one exact-network question
+
+
+def _real_matches(p: str, network: str) -> list[dict]:
+    """Real networks of a product-mode payer whose employer plan names or file names match `network`."""
+    if not (meta(p) or {}).get("real_networks"):
+        return []
+    w = _lit(f"%{network.strip()}%")
+    return _q(f"""SELECT rnet, product, list_filter(plan_names, z -> z ILIKE {w})[1:5] AS plans,
+                         len(plan_names) AS n_plans FROM realnet_{p}
+                  WHERE list_contains(list_transform(plan_names, z -> z ILIKE {w}), true)
+                     OR list_contains(list_transform(file_names, z -> z ILIKE {w}), true)
+                  ORDER BY n_plans DESC LIMIT {EXACT_MAX + 1}""")
+
+
+def _exact_networks(p: str, network: str) -> str | None:
+    """SQL (ns, product) for the real networks matching `network`, when it names an employer or plan rather than a
+    product (e.g. 'Acme Plumbing'); None when it matches a product label or nothing."""
+    m = meta(p) or {}
+    if not m.get("real_networks"):
+        return None
+    w = _lit(f"%{network.strip()}%")
+    if _q(f"SELECT 1 FROM netlabel_{p} WHERE product ILIKE {w} OR label ILIKE {w} LIMIT 1"):
+        return None
+    hits = _real_matches(p, network)[:EXACT_MAX]
+    if not hits:
+        return None
+    got = fetch_many([f"{p}/net/{h['rnet']}.parquet" for h in hits])
+    files = [v for v in got.values() if v]
+    if not files:
+        return None
+    prod = {h["rnet"]: h["product"] for h in hits}
+    cases = " ".join(f"WHEN {k} THEN {_lit(v)}" for k, v in prod.items())
+    return f"SELECT DISTINCT ns, CASE rnet {cases} END AS product FROM read_parquet({files!r})"
 
 
 def _for_payers(payer, fn) -> list[dict]:
@@ -697,6 +741,12 @@ def find_plans(query, payer="all"):
     w = _lit(f"%{query.strip()}%")
     out = []
     for p in _payers(payer):
+        if (meta(p) or {}).get("real_networks"):  # employer plans live on the real networks
+            out += [{"payer": p, "product": h["product"], "label": f"{h['product']} (network {h['rnet']})",
+                     "n_plans": h["n_plans"], "matching_plans": h["plans"],
+                     "how_to_use": f"pass network='{query.strip()}' to rate tools for this exact network"}
+                    for h in _real_matches(p, query)]
+            continue
         out += _q(f"""SELECT payer, product, label, n_plans, list_filter(plan_names, z -> z ILIKE {w})[1:10] AS matching_plans,
                              file_names[1:3] AS files FROM netlabel_{p}
                       WHERE product ILIKE {w} OR label ILIKE {w} OR list_contains(list_transform(plan_names, z -> z ILIKE {w}), true)
