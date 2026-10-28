@@ -18,8 +18,7 @@ BUCKET = "ratecommons/work"
 PIPELINE = {"uhc": 1024}
 MAX_WAVES_IN_FLIGHT = 2
 # payers whose serving pack (serve.yml) and cloud pack (cloud.yml) are built automatically once merged
-# bcbs is paused until its full merge (with wave 3) lands: a failed merge left rate_fact published (2026-10-28)
-AUTO_PACK = ["anthem"]
+AUTO_PACK = ["bcbs", "anthem"]
 
 
 def gh(path, tries=4):
@@ -44,9 +43,13 @@ def wave_done(payer, release, wave):
 
 
 def merge_done(payer, release):
+    """Every merged table is in the payer dataset (a failed merge job can leave the others published:
+    BCBS's provider_set ran out of memory while rate_fact and source_file landed, 2026-10-28)."""
     files = HfApi().list_repo_files(f"ratecommons/{payer}", repo_type="dataset")
-    return all(f"release={release}/rate_fact/part-{k:02d}.parquet" in files for k in range(16)) and \
-        f"release={release}/source_file.parquet" in files
+    r = f"release={release}/"
+    return all(f"{r}rate_fact/part-{k:02d}.parquet" in files for k in range(16)) and \
+        all(f"{r}{t}.parquet" in files for t in ("source_file", "network", "code", "provider_group")) and \
+        all(any(f.startswith(f"{r}{t}/") for f in files) for t in ("provider_set", "provider_list", "price_list", "price_term"))
 
 
 def mapped_shards(payer, release):
@@ -149,16 +152,25 @@ def start_maps(waves):
 
 
 def packs(waves):
-    """After a merge of an AUTO_PACK payer: serving pack, then cloud pack (each started once per release)."""
-    def started(wf, title):
+    """After a merge of an AUTO_PACK payer: serving pack, then cloud pack, then CareCompass (once per merge run)."""
+    import os
+
+    def started(wf, title, after=""):
         runs = gh(f"repos/{REPO}/actions/workflows/{wf}/runs?per_page=50")["workflow_runs"]
-        return [r for r in runs if title in (r.get("display_title") or "")]
+        return [r for r in runs if title in (r.get("display_title") or "") and r["created_at"] > after]
 
     for payer in AUTO_PACK:
         rel = next((w[1] for w in waves if w[0] == payer), None)
         if not rel or not merge_done(payer, rel):
             continue
-        serve = started("serve.yml", f"serve {payer}:dataset")
+        # packs follow the newest successful merge run, so a re-merge (more files) is packed again
+        # (called from the merge run's last job, which runs only when every part succeeded, it counts as done)
+        merges = started("reduce.yml", f"reduce {payer} {rel} all merge")
+        ok = merges and (str(merges[0]["id"]) == os.environ.get("SELF_RUN_ID")
+                         or (merges[0]["status"] == "completed" and merges[0]["conclusion"] == "success"))
+        if not ok:
+            continue
+        serve = started("serve.yml", f"serve {payer}:dataset", after=merges[0]["created_at"])
         if not serve:
             print(f"starting serving pack of {payer}")
             subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/workflows/serve.yml/dispatches",
@@ -166,7 +178,7 @@ def packs(waves):
             continue
         if serve[0]["status"] != "completed" or serve[0]["conclusion"] != "success":
             continue
-        cloud = started("cloud.yml", f"cloud {payer} prefix=serve/v2")
+        cloud = started("cloud.yml", f"cloud {payer} prefix=serve/v2", after=serve[0]["updated_at"])
         if not cloud:
             print(f"starting cloud pack of {payer}")
             subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/workflows/cloud.yml/dispatches",

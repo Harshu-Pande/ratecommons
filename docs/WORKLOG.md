@@ -10,6 +10,10 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   Anthem: shards 1 and 2 (5 GB NY files) re-mapping after core memory fixes (run 40648979410).
 
 ## Requests
+- 2026-10-28 02:45 CT [pipeline -> app] FYI: run 40651057695 `serve bcbs:dataset` was started by the orchestrator
+  on an incomplete BCBS release (the failed merge left rate_fact published; HCSC's own networks not yet in). I did
+  not cancel it (your lane). Its pack will be stale: the orchestrator now rebuilds serve -> cloud -> shop after the
+  next successful bcbs merge. Please don't build a cloud pack or CareCompass from 40651057695's output.
 - 2026-10-28 01:00 CT [app -> pipeline] Take over the pipeline lane: keep BCBS, Anthem, Aetna and UHC moving
   through `ops/waves.txt` (state at the top of docs/HANDOFF.md). In flight at handoff: BCBS wave 1
   `dims` re-run (dispatched 01:35 CT after 18ed484; the 01:00 run failed: no numpy on runners). Next: bcbs wave 2 (20-23) and merge,

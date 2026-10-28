@@ -136,3 +136,29 @@ def test_orchestrator_skips_shards_with_failed_files(monkeypatch):
     monkeypatch.setattr(orchestrate, "list_bucket_tree", lambda *a, **k: [SimpleNamespace(path=p) for p in paths])
     monkeypatch.setattr(huggingface_hub, "HfFileSystem", lambda: SimpleNamespace(read_text=texts.__getitem__))
     assert orchestrate.mapped_shards("p", "2026-10") == {0, 2}
+
+
+def test_packs_follow_the_newest_successful_merge(monkeypatch):
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ops"))
+    import orchestrate
+
+    runs = {"reduce.yml": [{"id": 9, "display_title": "reduce p 2026-10 all merge", "status": "completed",
+                            "conclusion": "success", "created_at": "2026-10-28T09:00:00Z", "updated_at": "T10"}],
+            "serve.yml": [{"id": 5, "display_title": "serve p:dataset", "status": "completed", "conclusion": "success",
+                           "created_at": "2026-10-28T07:35:00Z", "updated_at": "2026-10-28T08:00:00Z"}]}
+    calls = []
+    monkeypatch.setattr(orchestrate, "AUTO_PACK", ["p"])
+    monkeypatch.setattr(orchestrate, "merge_done", lambda *a: True)
+    monkeypatch.setattr(orchestrate, "gh", lambda path: {"workflow_runs": runs[path.split("/workflows/")[1].split("/")[0]]})
+    monkeypatch.setattr(orchestrate.subprocess, "check_call", lambda cmd: calls.append(cmd))
+    orchestrate.packs([["p", "2026-10", "merge"]])
+    assert len(calls) == 1 and "serve.yml" in calls[0][4]  # the serve run predates the re-merge: pack again
+    runs["reduce.yml"][0].update(status="in_progress", conclusion=None)
+    calls.clear()
+    orchestrate.packs([["p", "2026-10", "merge"]])
+    assert calls == []  # a merge still running (not this run) is not packed
+    monkeypatch.setenv("SELF_RUN_ID", "9")
+    orchestrate.packs([["p", "2026-10", "merge"]])
+    assert len(calls) == 1

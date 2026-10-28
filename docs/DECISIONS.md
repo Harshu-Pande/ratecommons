@@ -3,6 +3,13 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: packs start only after a successful merge run, and again after a newer one
+- The failed bcbs merge (dims-provider_set OOM) had published rate_fact and source_file, which was all
+  `merge_done` checked, so the orchestrator started `serve bcbs:dataset` on an incomplete release (07:35 UTC).
+- `merge_done` now needs every merged table (provider_set, provider_list, price_list, price_term too).
+  `packs()` follows the newest `reduce <payer> <release> all merge` run: it must have succeeded (or be the run
+  calling the orchestrator from its last job), and serve/cloud must be newer than it, so a re-merge is packed again.
+
 ## 2026-10-28: HCSC's own networks belong to release 2026-10 (their file names say 2026-09); merge streams list dims
 - 1,142 HCSC files (IL/TX own networks, 15.6 GB) are named `2026-09-12_...` (13 `-14`, 3 `-15`) but listed as
   current in October's index. `release_of` filed them under `map/2026-09/bcbs/`, so the 2026-10 waves and merge
