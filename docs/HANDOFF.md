@@ -1,3 +1,12 @@
+> **State on 2026-10-28 (01:00 CT), for a session picking this up:** the orchestrator (`ops/orchestrate.py`, cron +
+> end of every map/reduce run) works through `ops/waves.txt`: Aetna waves 1-15 reduced (16 + merge left); BCBS
+> (`bcbs`: HCSC IL/TX indexes, BlueCard files, BCBS of Tennessee's own networks as shards 20-23) fully mapped, wave 1
+> dims re-running after the pyarrow streaming fix, then wave 2 (20-23) and merge; Anthem mapping (71 non-empty shards
+> of an 80-shard plan; retry failed shards with a `map.yml` dispatch, `range` = comma list); UHC waves of 12 shards
+> run by the orchestrator. After a bcbs/anthem merge, AUTO_PACK chains serve pack -> cloud pack -> CareCompass
+> rebuild. Check runs with `gh api repos/Harshu-Pande/ratecommons/actions/runs`; read failed job logs with
+> `gh api .../actions/jobs/<id>/logs`. Lessons go in `docs/DECISIONS.md`.
+
 > **CareCompass v2 (2026-10-27):** the patient app is in `carecompass/` (Vite + React; Vercel project `carecompass`,
 > root directory `carecompass`, deployed from GitHub). It reads static JSON from the work bucket under `shop/v1/`:
 > `offers/<procedure>/<zip3>-<ST>.json` (places with their offers; a `g` map of TIN -> group name), `meta/zip3.json`,
