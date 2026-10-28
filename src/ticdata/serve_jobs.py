@@ -276,51 +276,45 @@ MAIN_NETWORKS = int(os.environ.get("RC_MAIN_NETWORKS", "20"))
 
 
 def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NETWORKS) -> list:
-    """The networks that keep every code: Aetna's n networks used by the most employer plans; a Blue plan's own
-    (home) networks, not other plans' BlueCard files; Anthem's n largest own networks. Returns network ids."""
+    """The networks that keep every code, as whole network families (a family is every network id carrying the same
+    app label: BCBS Tennessee posts Network S as 32 part files, Anthem splits files into _01_04 parts, and each part
+    is its own network id). Aetna: the n families used by the most employer plans. BCBS: every home family of the
+    plans in RC_BCBS_MAIN_PLANS (default TN). Anthem: its n largest own families. Returns network ids."""
     import re
 
     import duckdb
     from huggingface_hub import hf_hub_download
 
     sf = hf_hub_download(f"{ORG}/{payer}", f"release={release}/source_file.parquet", repo_type="dataset")
-    rows = duckdb.sql(f"SELECT network_id, list(name), max(bytes) FROM read_parquet('{sf}') GROUP BY 1").fetchall()
-    if payer == "aetna":  # rank file groups by employer plans; a group's every network id counts (a file name can
-        # carry two network ids, one of them without facts: 2026-10-05_pl-tz-tr25 in October 2026)
-        groups: dict = {}
-        for nid, names, _ in rows:
-            g = tuple(sorted(names))
-            groups.setdefault(g, [set(), []])
-            groups[g][0].update(p for nm in names for p in (plans or {}).get(nm, []))
-            groups[g][1].append(nid)
-        ranked = sorted(groups.values(), key=lambda x: -len(x[0]))[:n]
-        return [nid for _, ids in ranked for nid in ids]
-    elif payer == "bcbs":  # BlueCard files are named <YYYY-MM>_<plan>_<prefix>_...; home networks are the rest
-        score = {nid: b for nid, names, b in rows
-                 if not all(re.match(r"\d{4}-\d{2}_\d{3}_[0-9A-Z]{4}_", x) for x in names)}
-    elif payer == "anthem":
-        score = {nid: b for nid, names, b in rows if any(re.match(r"[A-Z]{2}_", x) for x in names)}
-    else:
-        score = {nid: b for nid, names, b in rows}
-    top = [k for k, _ in sorted(score.items(), key=lambda x: -(x[1] or 0))]
-    if payer == "bcbs":  # the largest home networks of the Blue plans in RC_BCBS_MAIN_PLANS (default TN: Illinois
-        # and Texas home networks hold provider sets of thousands of lists; with them a pack had 1 billion
-        # set -> list links and filled a runner's disk, so they wait for a build split across runners)
-        names = {nid: " ".join(nm) for nid, nm, _ in rows}
-
-        def plan(nid):
-            x = names[nid]
-            return "TN" if "_890_" in x else "IL" if "Illinois" in x else "TX" if "Texas" in x else "other"
-        want = os.environ.get("RC_BCBS_MAIN_PLANS", "TN").split(",")
-        per = max(1, -(-n // len(want)))
-        out, cnt = [], {}
-        for k in top:
-            g = plan(k)
-            if g in want and cnt.get(g, 0) < per:
-                out.append(k)
-                cnt[g] = cnt.get(g, 0) + 1
-        return out
-    return top[:n]
+    rows = duckdb.sql(f"SELECT network_id, list(name), sum(bytes) FROM read_parquet('{sf}') GROUP BY 1").fetchall()
+    fam: dict = {}
+    if payer == "aetna":  # one family per file group (a file name can carry two network ids, one without facts)
+        for nid, names, b in rows:
+            g = fam.setdefault(tuple(sorted(names)), {"ids": [], "score": set()})
+            g["ids"].append(nid)
+            g["score"].update(p for nm in names for p in (plans or {}).get(nm, []))
+        ranked = sorted(fam.values(), key=lambda g: -len(g["score"]))[:n]
+        return [i for g in ranked for i in g["ids"]]
+    label = _label_fn()
+    want = os.environ.get("RC_BCBS_MAIN_PLANS", "TN").split(",")
+    for nid, names, b in rows:
+        if payer == "bcbs":  # home networks only (BlueCard files are other plans' networks)
+            if all(re.match(r"\d{4}-\d{2}_\d{3}_[0-9A-Z]{4}_", x) for x in names):
+                continue
+            x = " ".join(names)
+            plan = "TN" if "_890_" in x else "IL" if "Illinois" in x else "TX" if "Texas" in x else "other"
+            if plan not in want:
+                continue
+        elif payer == "anthem" and not any(re.match(r"[A-Z]{2}_", x) for x in names):
+            continue
+        g = fam.setdefault(label(payer, names, None)[1], {"ids": [], "score": 0})
+        g["ids"].append(nid)
+        g["score"] += b or 0
+    ranked = sorted(fam.items(), key=lambda kv: -kv[1]["score"])
+    if payer != "bcbs":
+        ranked = ranked[:n]
+    _log("main network families: " + "; ".join(f"{k} ({len(v['ids'])})" for k, v in ranked[:40]))
+    return [i for _, g in ranked for i in g["ids"]]
 
 
 def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload: bool = True,
