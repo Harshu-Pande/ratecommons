@@ -19,6 +19,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
-- 2026-10-28 01:45 CT [app] Anthem fully mapped: all 71 non-empty shards (last retry run 40639683209 succeeded).
+- 2026-10-28 01:45 CT [app] Anthem retry run 40639683209 succeeded (13 shards); shard 1 still needed the pipeline
+  session's fix (see Claimed). The app session stopped watching pipeline runs at 02:30 CT.
 - 2026-10-28 00:50 CT [app] BCBS of Tennessee's own networks mapped as bcbs shards 20-23 (run 40637222066).
 - 2026-10-28 00:45 CT [app] consolidate.py and reduce.py stream list tables with pyarrow (Anthem, BCBS OOMs).
