@@ -64,10 +64,13 @@ def _log(msg: str):
 
 def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], networks: list[bytes] | None = None,
                plans: dict[str, list[str]] | None = None, work: str = "/tmp/packwork",
-               states: list[str] | None = None) -> dict:
+               states: list[str] | None = None, products: dict | None = None) -> dict:
     """`src` holds release tables (a published release, or one reduce wave). `nppes` is the shared
     nppes.parquet (npi, state, zip5...). `plans` maps source file name -> plan names. `states` limits the
-    pack to provider groups practicing in those states (and the rates of their provider sets)."""
+    pack to provider groups practicing in those states (and the rates of their provider sets).
+    `products` (network_id -> product label) groups a payer's networks by product: the pack's "networks" are then
+    products (network_id = md5 of the label), and ns_net.parquet / network_real.parquet keep every real network
+    and its network sets for exact-network questions (Aetna: 6,219 networks, a price in ~300 of them)."""
     t0 = time.time()
     shutil.rmtree(out, ignore_errors=True)
     os.makedirs(f"{out}/rate", exist_ok=True)
@@ -84,15 +87,36 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
     else:
         con.execute("CREATE TABLE keep_net AS SELECT DISTINCT network_id FROM sf")
     con.execute("CREATE TABLE ns AS SELECT * FROM ns_all SEMI JOIN keep_net USING (network_id)")
-    con.execute(f"COPY (SELECT * FROM ns ORDER BY ns_id) TO '{out}/ns.parquet' {W}")
+    con.execute("DROP TABLE ns_all")
     con.execute("CREATE TABLE plans (name VARCHAR, plan_name VARCHAR)")
     if plans:
         con.executemany("INSERT INTO plans VALUES (?, ?)", [[n, p] for n, ps in plans.items() for p in ps])
-    con.execute(f"""COPY (SELECT ? AS payer, s.network_id, list(DISTINCT s.name ORDER BY s.name) AS file_names,
-                         max(s.bytes) AS bytes, list(DISTINCT p.plan_name ORDER BY p.plan_name)
-                           FILTER (WHERE p.plan_name IS NOT NULL) AS plan_names
-                  FROM sf s SEMI JOIN keep_net USING (network_id) LEFT JOIN plans p USING (name)
-                  GROUP BY s.network_id) TO '{out}/network.parquet' {W}""", [payer])
+    real = f"""SELECT ? AS payer, s.network_id, list(DISTINCT s.name ORDER BY s.name) AS file_names,
+                     max(s.bytes) AS bytes, list(DISTINCT p.plan_name ORDER BY p.plan_name)
+                       FILTER (WHERE p.plan_name IS NOT NULL) AS plan_names
+              FROM sf s SEMI JOIN keep_net USING (network_id) LEFT JOIN plans p USING (name)
+              GROUP BY s.network_id"""
+    if products:  # networks grouped by product; every real network kept beside for exact-network questions
+        con.execute("CREATE TABLE prodmap (network_id BLOB, product VARCHAR)")
+        con.executemany("INSERT INTO prodmap VALUES (?, ?)", [[k, v] for k, v in products.items()])
+        con.execute(f"COPY (SELECT * FROM ns ORDER BY network_id, ns_id) TO '{out}/ns_net.parquet' {W}")
+        con.execute(f"CREATE TABLE realnet AS SELECT r.*, m.product FROM ({real}) r LEFT JOIN prodmap m USING (network_id)",
+                    [payer])
+        con.execute(f"COPY (SELECT * FROM realnet ORDER BY product, network_id) TO '{out}/network_real.parquet' {W}")
+        con.execute("""CREATE OR REPLACE TABLE ns AS SELECT DISTINCT n.ns_id, unhex(md5(coalesce(m.product, 'other'))) AS network_id
+                       FROM ns n LEFT JOIN prodmap m USING (network_id)""")
+        # a product row carries its networks' file names and up to 200 plan names (the app labels it from them)
+        con.execute(f"""COPY (SELECT ? AS payer, unhex(md5(coalesce(product, 'other'))) AS network_id,
+                                     (list(DISTINCT f ORDER BY f) FILTER (WHERE f IS NOT NULL))[1:50] AS file_names, sum(bytes) AS bytes,
+                                     (list(DISTINCT q ORDER BY q) FILTER (WHERE q IS NOT NULL))[1:200] AS plan_names,
+                                     count(DISTINCT network_id) AS real_networks
+                              FROM (SELECT product, network_id, bytes, unnest(file_names) f, unnest(coalesce(plan_names, [NULL])) q
+                                    FROM realnet) GROUP BY product)
+                        TO '{out}/network.parquet' {W}""", [payer])
+        res["real_networks"] = len(products)
+    else:
+        con.execute(f"COPY ({real}) TO '{out}/network.parquet' {W}", [payer])
+    con.execute(f"COPY (SELECT * FROM ns ORDER BY ns_id) TO '{out}/ns.parquet' {W}")
     res["networks"] = con.execute(f"SELECT count(*) FROM '{out}/network.parquet'").fetchone()[0]
     _log(f"networks {res['networks']}")
 

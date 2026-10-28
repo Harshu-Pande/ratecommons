@@ -171,13 +171,20 @@ def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str) 
     con.execute(f"CREATE TABLE k_pl AS SELECT DISTINCT pl_id FROM {F}")
     con.execute(f"CREATE TABLE k_ps AS SELECT DISTINCT ps_id FROM {F}")
 
-    def keep(t, key, keys, then=None):
-        """Copy the rows of table t whose key is in table `keys`; `then` = (new key table, SQL over the output)."""
+    def keep(t, key, keys, then=None, once=False):
+        """Copy the rows of table t whose key is in table `keys`; `then` = (new key table, SQL over the output).
+        once: keep each key once across files (network_set is written per fact slice, so a set repeats in up to
+        16 parts; unnesting the repeats ran Aetna's pack out of memory)."""
         outs = []
+        if once:
+            con.execute(f"CREATE TABLE seen_{t} AS SELECT * FROM {keys} WHERE false")
         for path, local in _stream_files(repo, table(t), dl):
             o = out_path(path)
-            con.execute(f"COPY (SELECT * FROM read_parquet('{local}') SEMI JOIN {keys} USING ({key})) TO '{o}' "
+            anti = f"ANTI JOIN seen_{t} USING ({key})" if once else ""
+            con.execute(f"COPY (SELECT * FROM read_parquet('{local}') SEMI JOIN {keys} USING ({key}) {anti}) TO '{o}' "
                         "(FORMAT parquet, COMPRESSION zstd)")
+            if once:
+                con.execute(f"INSERT INTO seen_{t} SELECT DISTINCT {key} FROM read_parquet('{o}')")
             os.remove(local)
             outs.append(o)
         res[t] = con.execute(f"SELECT count(*) FROM read_parquet({outs!r})").fetchone()[0] if outs else 0
@@ -185,7 +192,7 @@ def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str) 
         if then and outs:
             con.execute(f"CREATE TABLE {then[0]} AS SELECT DISTINCT {then[1]} FROM read_parquet({outs!r})")
 
-    keep("network_set", "ns_id", "k_ns")
+    keep("network_set", "ns_id", "k_ns", once=True)
     keep("price_list", "pl_id", "k_pl", ("k_pt", "unnest(pt_ids) AS pt_id"))
     keep("price_term", "pt_id", "k_pt")
     keep("provider_set", "ps_id", "k_ps", ("k_pli", "unnest(pli_ids) AS pli_id"))
@@ -195,6 +202,37 @@ def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str) 
     shutil.rmtree(dl, ignore_errors=True)
     shutil.rmtree(f"{work}/duck", ignore_errors=True)
     return res
+
+
+PRODUCT_MODE_NETWORKS = 2000  # above this many networks the app copy groups networks by product (Aetna: 6,219)
+
+
+def _label_fn():
+    """The app's own network labeler (cloud/api/_rc.py), so packs, the app and CareCompass name products alike."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("rcapi", os.path.join(os.path.dirname(__file__), "..", "..",
+                                                                         "cloud", "api", "_rc.py"))
+    rc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rc)
+    return rc._label
+
+
+def network_products(payer: str, src: str, plans: dict | None) -> dict | None:
+    """network_id -> product label, for payers with more than PRODUCT_MODE_NETWORKS networks; else None."""
+    import duckdb
+
+    rows = duckdb.sql(f"SELECT network_id, list(name ORDER BY name) FROM read_parquet('{src}/source_file.parquet') "
+                      "GROUP BY 1").fetchall()
+    if len(rows) <= PRODUCT_MODE_NETWORKS:
+        return None
+    label = _label_fn()
+    out = {}
+    for nid, names in rows:
+        pl = [x for n in names for x in (plans or {}).get(n, [])]
+        out[nid] = label(payer, names, pl)[0]
+    _log(f"product mode: {len(rows)} networks -> {len(set(out.values()))} products")
+    return out
 
 
 def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload: bool = True,
@@ -244,8 +282,9 @@ def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload:
         networks = sorted({nid for name, nid in sf
                            if any(m.lower() in (name + " " + " ".join((plans or {}).get(name, []))).lower() for m in match)})
         _log(f"match {match}: {len(networks)} networks")
+    products = network_products(payer, src, plans)
     res = build_pack(payer, src, f"{work}/out", nppes, irs, networks=networks, plans=plans, work=f"{work}/duck",
-                     states=states)
+                     states=states, products=products)
     res.update({"source": source, "release": release, "states": states})
     if subset:  # the app says when a code is outside the pack instead of "no published rate"
         res["code_subset"] = {"name": "common services (CareCompass procedures + flat all-services contracts)",

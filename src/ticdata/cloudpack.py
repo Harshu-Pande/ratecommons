@@ -18,6 +18,9 @@ Layout under <prefix>/<payer>/ (prefix default serve/v1, in the public work buck
   state/<ST>/pgnpi.parquet          group -> NPI located in ST
   state/<ST>/pgnet.parquet          group -> network int (has any published rate in it)
   tin.parquet                       tin -> states (to find a group without knowing its state)
+  networks.parquet, net/<rnet>.parquet  product mode only (payers with thousands of networks, e.g. Aetna): the pack's
+                                    "networks" are products; networks.parquet lists every real network (employer
+                                    plan names, files, product) and net/<rnet>.parquet the network sets (ns) holding it
 
 Shared, under <prefix>/shared/: nppes/<ST>.parquet (NPPES lite), medicare.parquet (PFS by state).
 IDs are dense integers local to one payer and one build; files are rebuilt together.
@@ -62,6 +65,27 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
                 f"(SELECT DISTINCT pli_id FROM read_parquet('{pack}/pli_pg.parquet'))")
     con.execute(f"CREATE TABLE pgi AS SELECT pg_id, (row_number() OVER (ORDER BY pg_id) - 1)::INTEGER pg FROM "
                 f"(SELECT DISTINCT pg_id FROM read_parquet('{pack}/provider_group.parquet'))")
+    if os.path.exists(f"{pack}/ns_net.parquet"):  # product mode: one small "network sets that include me" file per real network
+        con.execute(f"""CREATE TABLE realnet AS SELECT (row_number() OVER (ORDER BY product, network_id) - 1)::INTEGER rnet, *
+                        FROM read_parquet('{pack}/network_real.parquet')""")
+        con.execute(f"""COPY (SELECT rnet, hex(network_id) AS network_id, product, file_names, plan_names, bytes FROM realnet
+                              ORDER BY rnet) TO '{out}/networks.parquet' {W}""")
+        tmp = f"{work}/netidx-tmp"
+        shutil.rmtree(tmp, ignore_errors=True)
+        con.execute("SET partitioned_write_max_open_files = 64")
+        con.execute(f"""COPY (SELECT r.rnet, i.ns FROM read_parquet('{pack}/ns_net.parquet') x JOIN nsi i USING (ns_id)
+                              JOIN realnet r USING (network_id) ORDER BY r.rnet, i.ns)
+                        TO '{tmp}' (FORMAT parquet, COMPRESSION zstd, PARTITION_BY (rnet), ROW_GROUP_SIZE 100000)""")
+        os.makedirs(f"{out}/net", exist_ok=True)
+        for d in glob.glob(f"{tmp}/rnet=*"):
+            fs = sorted(glob.glob(f"{d}/*.parquet"))
+            dest = f"{out}/net/{d.split('=')[1]}.parquet"
+            if len(fs) == 1:
+                shutil.move(fs[0], dest)
+            else:
+                con.execute(f"COPY (SELECT * FROM read_parquet({fs!r}) ORDER BY ns) TO '{dest}' {W}")
+        shutil.rmtree(tmp, ignore_errors=True)
+        res["real_networks"] = con.execute("SELECT count(*) FROM realnet").fetchone()[0]
     for t in ("net", "nsi", "psi", "plii", "pgi"):
         res[t] = con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
     _log(json.dumps(res))
