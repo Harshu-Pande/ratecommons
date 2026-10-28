@@ -50,7 +50,8 @@ jobs:
           [ "$payer" = uhc ] && export TIC_DUP_TAILS="runs/2026-10-27-gha-run-40546293263/uhc-tails.json"
           ticdata plan --payer "$payer" --shards "$shards" ${limit:+--limit $limit} --match "${match#match=}" --out plan.json > /dev/null
           # optional 4th word "a-b": run only shards a..b of the plan (waves that fit storage)
-          RANGE="$range" python -c "import json, os; d=json.load(open('plan.json')); r=os.environ['RANGE']; a, b = (map(int, r.split('-')) if r else (0, 10**9)); print(json.dumps([s['shard'] for s in d['shards'] if s['files'] and a <= s['shard'] <= b]))" > shards.json
+          # range: "a-b", or a comma list of shards and ranges ("0,1,8,12-15") to retry failed shards
+          RANGE="$range" python -c "import json, os; d=json.load(open('plan.json')); r=os.environ['RANGE'] or '0-1000000'; want=set(); [want.update(range(int(x.split('-')[0]), int(x.split('-')[-1]) + 1)) for x in r.split(',') if x]; print(json.dumps([s['shard'] for s in d['shards'] if s['files'] and s['shard'] in want]))" > shards.json
           echo "shards=$(cat shards.json)" >> "$GITHUB_OUTPUT"
           echo "payer=$payer" >> "$GITHUB_OUTPUT"
           python -c "import json; d=json.load(open('plan.json')); print(d['files'], 'files', round(d['bytes']/1e9,1), 'GB')" >> "$GITHUB_STEP_SUMMARY"

@@ -28,7 +28,8 @@ def consolidate(items: list[tuple[str, str]], dest: str) -> dict:
     os.makedirs(f"{dest}/rate_fact", exist_ok=True)
     con = duckdb.connect()
     con.execute("SET preserve_insertion_order = false")
-    con.execute("SET memory_limit = '6GB'")  # the runner also holds the shard's seen-sets on disk/cache
+    con.execute("SET memory_limit = '8GB'")  # the runner also holds the shard's seen-sets on disk/cache
+    con.execute("SET threads = 2")  # Anthem chunks: wide provider_group/npi lists ran a 4-thread copy out of 5.5 GB
     con.execute(f"SET temp_directory = '{dest}/.duck_tmp'")
     out: dict = {"files": len(items), "tables": {}}
     metas = [json.loads((Path(d) / "meta.json").read_text()) for _, d in items]
@@ -38,7 +39,7 @@ def consolidate(items: list[tuple[str, str]], dest: str) -> dict:
         return [(k, f"{d}/{table}.parquet") for k, d in items if os.path.exists(f"{d}/{table}.parquet")]
 
     def copy(sql: str, path: str, name: str):
-        con.execute(f"COPY ({sql}) TO '{path}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)")
+        con.execute(f"COPY ({sql}) TO '{path}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 250000)")
         out["tables"][name] = con.execute(f"SELECT count(*) FROM read_parquet('{path}')").fetchone()[0]
 
     for table in ("file_block", "provider_reference"):
@@ -52,14 +53,21 @@ def consolidate(items: list[tuple[str, str]], dest: str) -> dict:
             copy(f"SELECT * FROM read_parquet({fs!r}, union_by_name = true)", f"{dest}/{table}.parquet", table)
     fs = [f for _, f in have("provider_group")]
     if fs:
-        copy(f"SELECT DISTINCT * FROM read_parquet({fs!r}, union_by_name = true)", f"{dest}/provider_group.parquet",
-             "provider_group")
+        try:
+            copy(f"SELECT DISTINCT * FROM read_parquet({fs!r}, union_by_name = true)", f"{dest}/provider_group.parquet",
+                 "provider_group")
+        except Exception as e:  # out of memory on huge groups: keep duplicates, the reduce dedups them anyway
+            if "Out of Memory" not in str(e):
+                raise
+            copy(f"SELECT * FROM read_parquet({fs!r}, union_by_name = true)", f"{dest}/provider_group.parquet",
+                 "provider_group")
+            out["provider_group_not_deduped"] = True
     parts = sorted({p.name for _, d in items for p in Path(d).glob("rate_fact/part-*.parquet")})
     n = 0
     for part in parts:
         fs = [f"{d}/rate_fact/{part}" for _, d in items if os.path.exists(f"{d}/rate_fact/{part}")]
         con.execute(f"COPY (SELECT * FROM read_parquet({fs!r}, union_by_name = true)) TO '{dest}/rate_fact/{part}' "
-                    "(FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)")
+                    "(FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 250000)")
         n += con.execute(f"SELECT count(*) FROM read_parquet('{dest}/rate_fact/{part}')").fetchone()[0]
     out["tables"]["rate_fact"] = n
     con.close()

@@ -609,13 +609,57 @@ fn writer_thread(rx: Receiver<Msg>, outdir: String) -> serde_json::Map<String, s
     out
 }
 
+/// Bytes after the last gzip member that are not another member (BCBS CloudFront files end with some):
+/// reported in counts as gzip_trailing_bytes instead of failing the file.
+static TRAILING: AtomicU64 = AtomicU64::new(0);
+
+/// gzip members one after another, like MultiGzDecoder, but stopping (not failing) at trailing non-gzip bytes.
+struct Members {
+    cur: Option<flate2::bufread::GzDecoder<std::io::BufReader<std::fs::File>>>,
+    done: Option<std::io::BufReader<std::fs::File>>,
+}
+impl Read for Members {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::BufRead;
+        loop {
+            let Some(gz) = self.cur.as_mut() else { return Ok(0) };
+            let n = gz.read(out)?;
+            if n > 0 || out.is_empty() {
+                return Ok(n);
+            }
+            // member finished: another one follows only if the next bytes are a gzip header
+            let mut inner = self.cur.take().unwrap().into_inner();
+            let next = inner.fill_buf()?;
+            if next.is_empty() {
+                return Ok(0);
+            }
+            if next.len() >= 2 && next[0] == 0x1f && next[1] == 0x8b {
+                self.cur = Some(flate2::bufread::GzDecoder::new(inner));
+                continue;
+            }
+            let mut rest = 0u64;
+            loop {
+                let k = inner.fill_buf()?.len();
+                if k == 0 {
+                    break;
+                }
+                rest += k as u64;
+                inner.consume(k);
+            }
+            TRAILING.store(rest, Ordering::Relaxed);
+            self.done = Some(inner);
+            return Ok(0);
+        }
+    }
+}
+
 fn open(path: &str) -> Box<dyn Read + Send> {
     let mut f = std::fs::File::open(path).expect("open");
     let mut magic = [0u8; 2];
     let _ = f.read(&mut magic);
     let r = std::io::BufReader::with_capacity(1 << 22, std::fs::File::open(path).expect("reopen"));
     if magic == [0x1f, 0x8b] {
-        Box::new(flate2::read::MultiGzDecoder::new(r))
+        Box::new(Members { cur: Some(flate2::bufread::GzDecoder::new(r)), done: None })
     } else if magic == *b"PK" {
         eprintln!("zip files are handled by the Python parser");
         std::process::exit(3);
@@ -1068,6 +1112,10 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     if let (Some(c), Some(p)) = (&rcache, record_cache) {
         counts.insert("record_cache_loaded", recs_loaded);
         counts.insert("record_cache_saved", c.save(p));
+    }
+    let trailing = TRAILING.load(Ordering::Relaxed);
+    if trailing > 0 {
+        counts.insert("gzip_trailing_bytes", trailing);
     }
     counts.insert("seen_blocks_loaded", blocks_loaded);
     counts.insert("seen_blocks_saved", blocks_saved);

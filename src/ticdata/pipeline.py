@@ -234,6 +234,10 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
                 else:  # zip input (exit 3) or a failure: fall back to the Python parser
                     rec["rust_error"] = (cp.stderr or "")[-1500:]
                     shutil.rmtree(outdir, ignore_errors=True)
+                    # the Python parser is ~10x slower and holds more in memory: on a big file after a Rust
+                    # failure it took the runner down (BCBS, Oct 2026). Fail the file instead; it is retried later.
+                    if cp.returncode != 3 and os.path.getsize(local) > (2 << 30):
+                        raise RuntimeError("Rust parser failed on a large file; not falling back to Python")
             if meta is None:
                 seen = set()
                 if os.path.exists(seen_path):
