@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: read
-  actions: write   # dispatch reduce.yml and map.yml
+  actions: write   # dispatch reduce, map, serve, cloud and shop runs
   id-token: write  # delete finished waves' map output from the work bucket
 
 concurrency:

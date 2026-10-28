@@ -17,6 +17,8 @@ BUCKET = "ratecommons/work"
 # map -> reduce -> delete map output wave by wave.
 PIPELINE = {"uhc": 1024}
 MAX_WAVES_IN_FLIGHT = 2
+# payers whose serving pack (serve.yml) and cloud pack (cloud.yml) are built automatically once merged
+AUTO_PACK = ["bcbs", "anthem"]
 
 
 def gh(path, tries=4):
@@ -133,12 +135,47 @@ def start_maps(waves):
         print(f"{payer}: {in_flight} mapped wave(s) wait for reduce; next map: {nxt and nxt[2]}")
 
 
+def packs(waves):
+    """After a merge of an AUTO_PACK payer: serving pack, then cloud pack (each started once per release)."""
+    def started(wf, title):
+        runs = gh(f"repos/{REPO}/actions/workflows/{wf}/runs?per_page=50")["workflow_runs"]
+        return [r for r in runs if title in (r.get("display_title") or "")]
+
+    for payer in AUTO_PACK:
+        rel = next((w[1] for w in waves if w[0] == payer), None)
+        if not rel or not merge_done(payer, rel):
+            continue
+        serve = started("serve.yml", f"serve {payer}:dataset")
+        if not serve:
+            print(f"starting serving pack of {payer}")
+            subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/workflows/serve.yml/dispatches",
+                                   "-f", "ref=main", "-f", f"inputs[request]={payer}:dataset"])
+            continue
+        if serve[0]["status"] != "completed" or serve[0]["conclusion"] != "success":
+            continue
+        cloud = started("cloud.yml", f"cloud {payer} prefix=serve/v2")
+        if not cloud:
+            print(f"starting cloud pack of {payer}")
+            subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/workflows/cloud.yml/dispatches",
+                                   "-f", "ref=main", "-f", f"inputs[request]={payer} prefix=serve/v2"])
+            continue
+        if cloud[0]["status"] != "completed" or cloud[0]["conclusion"] != "success":
+            continue
+        # CareCompass picks up a payer when its cloud pack exists: rebuild every state once after the pack
+        shop = gh(f"repos/{REPO}/actions/workflows/shop.yml/runs?per_page=20")["workflow_runs"]
+        if not any(r["created_at"] > cloud[0]["updated_at"] for r in shop):
+            print(f"rebuilding CareCompass data with {payer}")
+            subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/workflows/shop.yml/dispatches",
+                                   "-f", "ref=main", "-f", "inputs[request]=all"])
+            return
+
+
 def main():
     import os
 
     me = os.environ.get("SELF_RUN_ID")  # when called at the end of a reduce run, ignore that run
     waves = [l.split() for l in open("ops/waves.txt") if l.strip() and not l.startswith("#")]
-    for step in (clean, start_maps):  # independent of the reduce chain below; a failure here must not stop it
+    for step in (clean, start_maps, packs):  # independent of the reduce chain below; a failure here must not stop it
         try:
             step(waves)
         except Exception as e:
