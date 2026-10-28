@@ -99,3 +99,17 @@ def test_presplit_price_table_dedups_with_duckdb(tmp_path):
     assert res["tables"]["price_term"]["rows_out"] == len(got) == 10
     assert sorted((r["pt_id"], r["rate_raw"]) for r in got) == [(ids[i], str(i)) for i in range(10)]
     assert "_slice" not in got[0]
+
+
+def test_shares_of_a_split_cover_every_slice_once(tmp_path):
+    ids = [bytes([i]) * 16 for i in range(40)]
+    pq.write_table(pa.table({"ps_id": pa.array(ids, pa.binary(16)),
+                             "pli_ids": pa.array([[x] for x in ids], pa.list_(pa.binary(16)))}), tmp_path / "a.parquet")
+    got = []
+    for j in range(3):
+        split = tmp_path / f"s{j}"
+        reduce.split_stream([str(tmp_path / "a.parquet")], str(split), "ps_id", 8, keep=lambda i, j=j: i % 3 == j)
+        for d in split.glob("_slice=*"):
+            assert int(d.name.split("=")[1]) % 3 == j
+            got += pq.read_table(d).column("ps_id").to_pylist()
+    assert sorted(got) == ids

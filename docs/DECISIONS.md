@@ -3,6 +3,18 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: big merges are sliced: fact parts by fact_id hash, provider_set across 8 jobs
+- Aetna's merge (16 waves) failed in every fact part: DuckDB's `GROUP BY fact_id` over ~9.5 GB of wave facts per
+  part ran out of 6.5 GB. `merge_part_local` now cuts a part into hash slices of fact_id (~600 MB each,
+  `RC_MERGE_SLICE_BYTES`); every row of a fact is in one slice, so each slice merges alone, then one sorted COPY
+  writes the part. Same facts and network sets (test). Each slice needs its own temp file name: DuckDB applied a
+  reused file's Parquet statistics to its new content ("perfect hash aggregate ... statistics corrupt").
+- dims-provider_set lost its runner after an hour: Aetna's wave provider sets are 137.6 GB, past one runner's disk.
+  A merge now runs `dims-provider_set.<j>of8` jobs; each downloads every input in batches but keeps only slices
+  i % 8 == j. Streamed batches are sized to ~64 MB of rows instead of 500 rows.
+- Note: a network is a file's content identity, so byte-identical files in two waves would fail the merge's
+  set check (loudly); not seen so far.
+
 ## 2026-10-28: every bucket download takes a fresh OIDC token
 - Aetna wave 16 dims-price_term: the streamed split ran ~80 minutes (it refreshes its own token), then
   `reduce_dims` fetched the metas with the job's first token: 401 Unauthorized. `reduce._fetch` now exchanges

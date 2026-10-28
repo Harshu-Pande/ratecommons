@@ -349,7 +349,10 @@ def merge_part_local(local: str, release: str, part: int, out: str) -> dict:
 
     Waves hold disjoint sets of files, hence disjoint networks, so a fact's full set key is the
     XOR of its per-wave keys and the member count is their sum; members of each final set are
-    the union of the wave sets of one representative fact."""
+    the union of the wave sets of one representative fact. A big part (Aetna: 16 waves, ~9.5 GB per part)
+    is cut into hash slices of fact_id first; every row of a fact lands in one slice, so slices merge alone."""
+    import shutil
+
     t0 = time.time()
     facts = sorted(str(p) for p in Path(local).glob(f"*/rate_fact/part-{part:02d}.parquet"))
     sets = sorted(str(p) for p in Path(local).glob(f"*/network_set/part-{part:02d}.parquet"))
@@ -359,34 +362,60 @@ def merge_part_local(local: str, release: str, part: int, out: str) -> dict:
     if not facts:
         return res
     con = _duck(local)
-    tmp = f"{local}/merged_tmp.parquet"
     res["rows_in"] = con.execute(f"SELECT count(*) FROM read_parquet({facts!r})").fetchone()[0]
-    con.execute(f"""COPY (SELECT fact_id, {ANY_COLS}, bit_xor(x1) x1, bit_xor(x2) x2, sum(n_net)::INTEGER n_net
-                          FROM read_parquet({facts!r}) GROUP BY fact_id) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)""")
-    t = f"read_parquet('{tmp}')"
+    k = sum(os.path.getsize(f) for f in facts) // int(os.environ.get("RC_MERGE_SLICE_BYTES", 600 << 20)) + 1
+    res["slices"] = k
+    if k == 1:
+        groups = [facts]
+    else:
+        split = f"{local}/fact_split"
+        con.execute(f"""COPY (SELECT *, (hash(fact_id) % {k})::INTEGER AS _slice FROM read_parquet({facts!r}))
+                        TO '{split}' (FORMAT parquet, PARTITION_BY (_slice), OVERWRITE_OR_IGNORE true)""")
+        for f in facts:
+            os.remove(f)
+        groups = [sorted(str(p) for p in Path(f"{split}/_slice={i}").glob("*.parquet")) for i in range(k)]
+        groups = [g for g in groups if g]
     con.execute(f"CREATE TABLE wsets AS SELECT DISTINCT x1, x2, n_net, network_ids FROM read_parquet({sets!r})")
-    con.execute(f"CREATE TABLE reps AS SELECT x1, x2, n_net, any_value(fact_id) fact_id FROM {t} GROUP BY ALL")
+    merged = f"{local}/merged"
+    os.makedirs(merged, exist_ok=True)
+    for i, g in enumerate(groups):
+        src = f"(SELECT * EXCLUDE (_slice) FROM read_parquet({g!r}))" if k > 1 else f"read_parquet({g!r})"
+        tmp = f"{local}/merged_tmp_{i:04d}.parquet"  # one name per slice: DuckDB kept a reused file's stats
+        con.execute(f"""COPY (SELECT fact_id, {ANY_COLS}, bit_xor(x1) x1, bit_xor(x2) x2, sum(n_net)::INTEGER n_net
+                              FROM {src} GROUP BY fact_id) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)""")
+        t = f"read_parquet('{tmp}')"
+        con.execute(f"CREATE OR REPLACE TABLE reps AS SELECT x1, x2, n_net, any_value(fact_id) fact_id FROM {t} GROUP BY ALL")
+        con.execute(f"""
+            CREATE OR REPLACE TABLE fns AS
+            WITH m AS (SELECT r.x1, r.x2, r.n_net, list_sort(list_distinct(flatten(list(w.network_ids)))) network_ids
+                       FROM reps r JOIN {src} f ON f.fact_id = r.fact_id
+                       JOIN wsets w ON w.x1 = f.x1 AND w.x2 = f.x2 AND w.n_net = f.n_net
+                       GROUP BY r.x1, r.x2, r.n_net)
+            SELECT x1, x2, n_net, {NS_SQL} AS ns_id, network_ids FROM m""")
+        bad = con.execute("SELECT count(*) FROM fns WHERE len(network_ids) <> n_net").fetchone()[0]
+        if bad or con.execute("SELECT count(*) FROM fns").fetchone()[0] != con.execute("SELECT count(*) FROM reps").fetchone()[0]:
+            raise RuntimeError(f"{bad} merged network sets disagree with their keys")
+        con.execute(f"""
+            COPY (SELECT f.{FACT_COLS.replace(', ', ', f.')}, s.ns_id, '{release}' AS valid_from
+                  FROM {t} f JOIN fns s USING (x1, x2, n_net))
+            TO '{merged}/s{i:04d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+        con.execute("CREATE TABLE IF NOT EXISTS fns_all AS SELECT * FROM fns WHERE false")
+        con.execute("INSERT INTO fns_all SELECT * FROM fns")
+        os.remove(tmp)
+        if k > 1:
+            for f in g:
+                os.remove(f)
+    if k > 1:
+        shutil.rmtree(f"{local}/fact_split", ignore_errors=True)
     con.execute(f"""
-        CREATE TABLE fns AS
-        WITH m AS (SELECT r.x1, r.x2, r.n_net, list_sort(list_distinct(flatten(list(w.network_ids)))) network_ids
-                   FROM reps r JOIN read_parquet({facts!r}) f ON f.fact_id = r.fact_id
-                   JOIN wsets w ON w.x1 = f.x1 AND w.x2 = f.x2 AND w.n_net = f.n_net
-                   GROUP BY r.x1, r.x2, r.n_net)
-        SELECT x1, x2, n_net, {NS_SQL} AS ns_id, network_ids FROM m""")
-    bad = con.execute("SELECT count(*) FROM fns WHERE len(network_ids) <> n_net").fetchone()[0]
-    if bad or con.execute("SELECT count(*) FROM fns").fetchone()[0] != con.execute("SELECT count(*) FROM reps").fetchone()[0]:
-        raise RuntimeError(f"{bad} merged network sets disagree with their keys")
-    con.execute(f"""
-        COPY (SELECT f.{FACT_COLS.replace(', ', ', f.')}, s.ns_id, '{release}' AS valid_from
-              FROM {t} f JOIN fns s USING (x1, x2, n_net)
-              ORDER BY f.billing_code_type, f.billing_code, f.ps_id)
+        COPY (SELECT * FROM read_parquet('{merged}/*.parquet') ORDER BY billing_code_type, billing_code, ps_id)
         TO '{out}/rate_fact/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)""")
-    con.execute(f"""COPY (SELECT ns_id, network_ids FROM fns UNION
+    shutil.rmtree(merged, ignore_errors=True)
+    con.execute(f"""COPY (SELECT DISTINCT ns_id, network_ids FROM fns_all UNION
                           SELECT DISTINCT ns_id, network_ids FROM read_parquet({sets!r}))
                     TO '{out}/network_set/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
     res["facts"] = con.execute(f"SELECT count(*) FROM read_parquet('{out}/rate_fact/part-{part:02d}.parquet')").fetchone()[0]
-    res["network_sets"] = con.execute("SELECT count(*) FROM fns").fetchone()[0]
-    os.remove(tmp)
+    res["network_sets"] = con.execute("SELECT count(DISTINCT ns_id) FROM fns_all").fetchone()[0]
     res["seconds"] = round(time.time() - t0, 1)
     return res
 
@@ -427,10 +456,12 @@ def reduce_dims(payer: str, release: str, bucket: str, out: str, token=None, wor
     return res
 
 
-def _fetch_split(bucket: str, paths: list[str], local: str, prefix: str, token, name: str) -> int:
+def _fetch_split(bucket: str, paths: list[str], local: str, prefix: str, token, name: str,
+                 share: tuple[int, int] | None = None) -> int:
     """Download one table's inputs a batch at a time, append each batch to a hash-sliced copy, delete the batch.
     Returns the slice count. Peak disk is the sliced copy plus one batch (the whole input at once ran a
-    runner with 105 GB free out of space on Aetna wave 6)."""
+    runner with 105 GB free out of space on Aetna wave 6). share=(j, n) keeps only slices i with i % n == j, so
+    n jobs split a table too big for one runner's disk (Aetna's merged provider_set: 137.6 GB of wave outputs)."""
     from huggingface_hub import list_bucket_tree
 
     size = {i.path: getattr(i, "size", 0) or 0 for i in list_bucket_tree(bucket, prefix=prefix, recursive=True, token=token)
@@ -455,7 +486,8 @@ def _fetch_split(bucket: str, paths: list[str], local: str, prefix: str, token, 
             if oidc_available():
                 token = token_for(bk(bucket))
         files = _fetch(bucket, b, f"{local}/batch", prefix, token)
-        split_stream(files, split, DIMS[name], k, tag=f"b{n}", rows=STREAM_ROWS if name in STREAMED else 50_000)
+        split_stream(files, split, DIMS[name], k, tag=f"b{n}", rows=0 if name in STREAMED else 50_000,
+                     keep=(lambda i: i % share[1] == share[0]) if share else None)
         import shutil
 
         shutil.rmtree(f"{local}/batch", ignore_errors=True)
@@ -483,27 +515,36 @@ def _slice_of(keys, k: int):
     return s
 
 
-def split_stream(files: list[str], split: str, key: str, k: int, tag: str = "b0", rows: int = 0) -> None:
-    """Hash-slice Parquet files by `key` into {split}/_slice=<i>/<tag>_f<j>.parquet, a few hundred rows at a time
-    (pyarrow). A DuckDB COPY of BCBS provider sets and lists (rows of thousands of ids) ran out of 6.5 GB."""
+def split_stream(files: list[str], split: str, key: str, k: int, tag: str = "b0", rows: int = 0, keep=None) -> None:
+    """Hash-slice Parquet files by `key` into {split}/_slice=<i>/<tag>_f<j>.parquet, batch by batch (pyarrow).
+    A DuckDB COPY of BCBS provider sets and lists (rows of thousands of ids) ran out of 6.5 GB. rows=0 sizes
+    batches to ~64 MB of uncompressed rows (500 BCBS sets of ~4,000 ids; far more of Aetna's small sets).
+    keep(i): write only those slices (a share of a table split across jobs)."""
     import pyarrow as pa
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
 
     for j, f in enumerate(files):  # pyarrow only: numpy is not installed on the runners
         pf = pq.ParquetFile(f, buffer_size=1 << 20, pre_buffer=False)
+        n_rows = rows
+        if not n_rows:
+            md = pf.metadata
+            width = sum(md.row_group(g).total_byte_size for g in range(md.num_row_groups)) / max(md.num_rows, 1)
+            n_rows = int(min(100_000, max(STREAM_ROWS, (64 << 20) / max(width, 1))))
         writers: dict = {}
-        for b in pf.iter_batches(batch_size=rows or STREAM_ROWS, use_threads=False):
+        for b in pf.iter_batches(batch_size=n_rows, use_threads=False):
             if "_slice" in b.schema.names:
                 b = b.drop_columns(["_slice"])
             sl = _slice_of(b.column(key), k)
             for i in pc.unique(sl).to_pylist():
+                if keep and not keep(int(i)):
+                    continue
                 piece = pa.Table.from_batches([b]).filter(pc.equal(sl, i))
                 if int(i) not in writers:
                     os.makedirs(f"{split}/_slice={int(i)}", exist_ok=True)
                     writers[int(i)] = pq.ParquetWriter(f"{split}/_slice={int(i)}/{tag}_f{j}.parquet", piece.schema,
                                                        compression="zstd", use_dictionary=False, write_statistics=False)
-                writers[int(i)].write_table(piece, row_group_size=rows or STREAM_ROWS)
+                writers[int(i)].write_table(piece, row_group_size=n_rows)
             del b
             pa.default_memory_pool().release_unused()
         for w in writers.values():

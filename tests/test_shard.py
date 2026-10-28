@@ -162,3 +162,44 @@ def test_packs_follow_the_newest_successful_merge(monkeypatch):
     monkeypatch.setenv("SELF_RUN_ID", "9")
     orchestrate.packs([["p", "2026-10", "merge"]])
     assert len(calls) == 1
+
+
+def test_sliced_merge_equals_unsliced(tmp_path, monkeypatch):
+    """merge_part_local cut into fact_id hash slices gives the same facts and network sets."""
+    import shutil
+
+    from ticdata.pipeline import run_shard
+    from ticdata.reduce import merge_part_local, reduce_part_local
+
+    web = tmp_path / "web"
+    web.mkdir()
+    docs = {}
+    for i in range(4):
+        d = copy.deepcopy(DOC)
+        d["in_network"][0]["negotiated_rates"][0]["negotiated_prices"][0]["negotiated_rate"] = 50.0 + (i % 2)
+        d["last_updated_on"] = f"2026-10-0{i + 1}"  # distinct files (a network is a file's content identity)
+        docs[f"2026-10-01_{i}.json.gz"] = d
+    for n, d in docs.items():
+        (web / n).write_bytes(gzip.compress(json.dumps(d).encode()))
+    srv = _serve(web)
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    plan = {"payer": "test", "shards": [{"shard": i, "files": [{"name": n, "url": f"{base}/{n}"}]}
+                                        for i, n in enumerate(docs)]}
+    for sh in range(4):
+        run_shard(plan, sh, workdir=str(tmp_path / "work"), chunk_out=str(tmp_path / "map"))
+    srv.shutdown()
+    for w in range(4):
+        (tmp_path / f"w{w}").mkdir()
+        shutil.copytree(tmp_path / "map" / f"shard-00{w}-00", tmp_path / f"w{w}" / f"shard-00{w}-00")
+        for k in range(16):
+            reduce_part_local(str(tmp_path / f"w{w}"), "test", "2026-10", k, str(tmp_path / "waves" / f"wave-{w}"),
+                              keys=True)
+    shutil.copytree(tmp_path / "waves", tmp_path / "waves2")
+    for k in range(16):
+        merge_part_local(str(tmp_path / "waves"), "2026-10", k, str(tmp_path / "one"))
+    monkeypatch.setenv("RC_MERGE_SLICE_BYTES", "1")
+    for k in range(16):
+        merge_part_local(str(tmp_path / "waves2"), "2026-10", k, str(tmp_path / "sliced"))
+    assert _fact_sets(tmp_path / "one") == _fact_sets(tmp_path / "sliced")
+    ns = lambda d: sorted((r["ns_id"], tuple(r["network_ids"])) for r in pq.read_table(d / "network_set").to_pylist())  # noqa: E731
+    assert ns(tmp_path / "one") == ns(tmp_path / "sliced")

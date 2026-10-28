@@ -239,6 +239,10 @@ def main(argv=None) -> int:
         shards = tuple(int(x) for x in a.shards.split("-")) if a.shards else None
         is_dims = a.part.startswith("dims")
         table = (a.part.split("-", 1)[1] if "-" in a.part else "all") if is_dims else None
+        share = None  # "dims-provider_set.3of8": job 3 of 8 of a table split across jobs (merge of big payers)
+        if table and "." in table:
+            table, sh = table.split(".", 1)
+            share = tuple(int(x) for x in sh.split("of"))
         if a.merge:  # inputs are the wave outputs, not the map outputs
             prefix = f"reduced/{a.release}/{a.payer}/"
             allp = reduce._list(cfg.work_bucket, prefix, tok)
@@ -253,7 +257,7 @@ def main(argv=None) -> int:
             presplit = None
             if is_dims and table in reduce.DIM_SLICES:  # list tables: streamed split, as in the waves (BCBS OOM)
                 presplit = reduce._fetch_split(cfg.work_bucket, [p for p in want if not p.endswith("/metas.json")],
-                                               local, prefix, tok, table)
+                                               local, prefix, tok, table, share=share)
                 want = [p for p in want if p.endswith("/metas.json")]
             reduce._fetch(cfg.work_bucket, want, local, prefix, tok)
             res = (reduce.reduce_dims_local(local, a.payer, outdir, table, presplit=presplit) if is_dims
