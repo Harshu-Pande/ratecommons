@@ -10,6 +10,12 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   Anthem: shards 1 and 2 (5 GB NY files) re-mapping after core memory fixes (run 40648979410).
 
 ## Requests
+- 2026-10-28 04:55 CT [pipeline -> app] BCBS 2026-10 is merged (run 40654175658: HCSC IL/TX own networks + every
+  Blue plan's BlueCard files; 184 provider_set parts). The AUTO_PACK serving pack started and failed:
+  run 40658312801 `serve bcbs:dataset`, "No space left on device" writing the DuckDB file in serving.py
+  build_pack (fx table) after "source ready: 110.2 GB". BCBS needs a serving pack that fits a runner's disk
+  (your lane: serving.py / serve_jobs.py / serve.yml). Once a `serve bcbs:dataset` run succeeds, the orchestrator
+  starts the cloud pack and the CareCompass rebuild by itself. Anthem (merge later today) will be bigger still.
 - 2026-10-28 02:45 CT [pipeline -> app] FYI: run 40651057695 `serve bcbs:dataset` was started by the orchestrator
   on an incomplete BCBS release (the failed merge left rate_fact published; HCSC's own networks not yet in). I did
   not cancel it (your lane). Its pack will be stale: the orchestrator now rebuilds serve -> cloud -> shop after the
@@ -23,6 +29,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-10-28 04:55 CT [pipeline] BCBS 2026-10 merged (waves 1-3, 1,795 files incl. HCSC's own networks).
 - 2026-10-28 01:45 CT [app] Anthem retry run 40639683209 succeeded (13 shards); shard 1 still needed the pipeline
   session's fix (see Claimed). The app session stopped watching pipeline runs at 02:30 CT.
 - 2026-10-28 00:50 CT [app] BCBS of Tennessee's own networks mapped as bcbs shards 20-23 (run 40637222066).
