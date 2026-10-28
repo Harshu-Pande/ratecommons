@@ -162,3 +162,62 @@ def bcbs(s: requests.Session | None = None):
 
 
 PAYERS["bcbs"] = bcbs
+
+ANTHEM_INDEX = "https://antm-pt-prod-dataz-nogbd-nophi-us-east1.s3.amazonaws.com/anthem/{date}_anthem_index.json.gz"
+
+
+def anthem(s: requests.Session | None = None, exclude_names: set | None = None):
+    """Anthem (Elevance): one index, 11.4 GB gzip (October 2026), every employer's plans repeating the same files.
+    Streamed once with a regex for (description, location) pairs; in-network files only. Own networks live on
+    Anthem's S3 bucket (`<ST>_<network code>MED<suffix>.json.gz`, 0.8 TB); BlueCard files of other Blue plans on
+    `anthem*.mrf.bcbs.com`, labelled e.g. "BCBS Tennessee, Inc. : Network P". BlueCard files already listed by
+    payer `bcbs` (exclude_names) are skipped, so each file is parsed once across payers."""
+    import datetime
+    import re
+    import zlib
+
+    s = s or new_session()
+    today = datetime.date.today().replace(day=1)
+    prev = (today - datetime.timedelta(days=1)).replace(day=1)
+    url = None
+    for d in (today, prev):
+        u = ANTHEM_INDEX.format(date=d.isoformat())
+        if s.head(u, timeout=60).status_code == 200:
+            url = u
+            break
+    if url is None:
+        raise RuntimeError("no Anthem index for this or last month")
+    exclude_names = exclude_names if exclude_names is not None else {e["name"] for e in bcbs(s)[1]}
+    pat = re.compile(rb'"description":"([^"]*)","location":"(https://[^"]+)"')
+    seen, entries, n_refs = set(), [], 0
+    d, tail = zlib.decompressobj(31), b""
+    with s.get(url, stream=True, timeout=600) as r:
+        r.raise_for_status()
+        for chunk in r.iter_content(8 << 20):
+            buf = tail + d.decompress(chunk)
+            last = 0
+            for m in pat.finditer(buf):
+                last = m.end()
+                desc, loc = m.group(1).decode("utf8", "replace"), m.group(2).decode()
+                n_refs += 1
+                if "allowed" in desc.lower():
+                    continue
+                base = loc.split("?")[0]
+                name = base.rsplit("/", 1)[-1]
+                bluecard = ".mrf.bcbs.com" in base
+                key = name if bluecard else base
+                if key in seen or (bluecard and name in exclude_names) or "allowed-amounts" in name:
+                    continue
+                seen.add(key)
+                m2 = re.match(r"\d{4}-\d{2}_(\d{3})_([0-9A-Z]{4})_", name)
+                entries.append({
+                    "payer": "anthem", "kind": "in_network", "name": name, "size": None, "url": loc, "key": key,
+                    "host": urllib.parse.urlparse(base).netloc, "label": desc,
+                    "bluecard_plan": m2 and m2.group(1), "bluecard_prefix": m2 and m2.group(2),
+                })
+            tail = buf[max(last, len(buf) - 65536):]
+    summary = json.dumps({"index": url, "location_refs": n_refs, "files": len(entries)}).encode()
+    return {"anthem/index-summary.json": summary}, entries
+
+
+PAYERS["anthem"] = anthem

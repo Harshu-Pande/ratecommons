@@ -5,6 +5,21 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-27
 
+- **Blue Cross Blue Shield: one BlueCard file per Blue plan network covers the country for 0.12 TB.** Every Blue
+  plan's index lists, besides its own networks, the BlueCard files of all Blue plans:
+  `<YYYY-MM>_<plan code>_<network prefix>_in-network-rates[_k_of_n].json.gz` on `<plan>.mrf.bcbs.com`
+  (CloudFront, signed about a month). BCBS Illinois' index (32 MB, Azure blob `.../toc/`) names 113 such
+  networks of 56 Blue plans, 0.12 TB in all (Anthem Indiana 30 GB, BCBS North Carolina 19 GB, BCBS Tennessee
+  `890_58A0/B0/D0` 0.95 GB each, BCBS Texas `400_59C0/H0` 2 GB each). The same file name is listed by every
+  Blue plan under its own subdomain, so files are keyed by name and fetched once. HCSC's own networks (IL, TX)
+  add 1,143 files but only ~6 GB. Payer `bcbs` = HCSC IL/TX indexes; payer `anthem` = Anthem's index.
+- **Anthem's index is 11.4 GB gzip of one JSON line; streamed with a regex in 8 minutes.** It repeats the same
+  files once per employer (43.1M location references): 708 distinct own in-network files on Anthem's S3
+  (`<ST>_<network code>MED<suffix>.json.gz`, ~0.8 TB, up to 5.3 GB each) and 294 BlueCard files that HCSC's
+  index does not list (more networks per Blue plan, e.g. CareFirst BlueEssential). Descriptions name the
+  BlueCard network ("BCBS Tennessee, Inc. : Network P") and are kept as labels. BCBS Tennessee's own
+  index is not linked from its site; its networks come through BlueCard for now.
+
 - **UHC flows map -> reduce -> delete, wave by wave (bucket has ~7.8 TB free).** The 256-shard map run
   would have written ~20 TB. Now `ops/waves.txt` lists 86 UHC waves of 12 shards (~1 TB of map output each);
   the orchestrator (`PIPELINE` in `ops/orchestrate.py`) starts a wave's map run itself (map.yml `range`

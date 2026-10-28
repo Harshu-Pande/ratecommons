@@ -20,7 +20,7 @@ from . import discover
 from .identity import _fetch as fetch_to_file
 from .net import new_session, resolve
 
-PAYERS = {"cigna": discover.cigna, "uhc": discover.uhc, "aetna": discover.aetna, "bcbs": discover.bcbs}
+PAYERS = {"cigna": discover.cigna, "uhc": discover.uhc, "aetna": discover.aetna, "bcbs": discover.bcbs, "anthem": discover.anthem}
 
 
 def file_key(name: str) -> str:
