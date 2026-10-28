@@ -5,6 +5,14 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-27
 
+- **New payers run hands-off to the app.** Payers `bcbs` and `anthem` have datasets (`ratecommons/bcbs`,
+  `ratecommons/anthem`, trusted publisher set) and wave lines; once a merge lands, the orchestrator starts the
+  serving pack, then the cloud pack (`prefix=serve/v2`), then a CareCompass rebuild (`AUTO_PACK`).
+  CareCompass and the cloud app list a payer only when its cloud pack exists (`shop._published`,
+  `payers_loaded`). Map runs now have one concurrency lane per dispatched payer plus one for pushed requests,
+  so a request for one payer no longer cancels another payer's map. First BCBS shards parsed cleanly with the
+  Rust core (BCBS Texas BlueCard 2 GB in 86 s).
+
 - **Blue Cross Blue Shield: one BlueCard file per Blue plan network covers the country for 0.12 TB.** Every Blue
   plan's index lists, besides its own networks, the BlueCard files of all Blue plans:
   `<YYYY-MM>_<plan code>_<network prefix>_in-network-rates[_k_of_n].json.gz` on `<plan>.mrf.bcbs.com`
