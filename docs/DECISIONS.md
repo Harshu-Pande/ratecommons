@@ -3,6 +3,13 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: list dimension reduce (provider_set, provider_list, price_list, price_term) is streamed with pyarrow
+- BCBS wave 1: dims-provider_set and dims-provider_list ran DuckDB out of memory (6.5 GiB) in the hash-split COPY;
+  BlueCard provider sets hold thousands of list ids per row.
+- `split_stream` now slices each downloaded batch 500 rows at a time (slice = DuckDB `hash(key) % k` on the key
+  column alone, so slices match the old ones) and `dedup_stream` keeps the first row per key within a slice,
+  holding only that slice's keys in memory. Same output as `DISTINCT ON (key)`, since IDs are content hashes.
+
 ## 2026-10-28: chunk consolidation streams file_block and provider_reference too
 - Anthem retry: 13 of 18 shards parsed every file, then ran out of DuckDB memory (7.4 GiB) in the chunk's
   `SELECT *, file_key ... UNION ALL` of provider_reference (Anthem references carry very wide NPI lists).
