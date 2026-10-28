@@ -80,3 +80,22 @@ def test_fetch_takes_a_fresh_oidc_token(tmp_path, monkeypatch):
     monkeypatch.setattr(huggingface_hub, "download_bucket_files", lambda b, files, token: seen.append(token))
     reduce._fetch("org/work", ["pre/a.json"], str(tmp_path), "pre/", "stale")
     assert seen == ["fresh:buckets/org/work"]
+
+
+def test_presplit_price_table_dedups_with_duckdb(tmp_path):
+    """price_term: big-batch split, then DuckDB DISTINCT ON per slice, Rust and Python ID types mixed."""
+    ids = [bytes([i]) * 16 for i in range(10)]
+    a = pa.table({"pt_id": pa.array(ids[:6], pa.binary(16)), "rate_raw": [str(i) for i in range(6)],
+                  "service_code": pa.array([["11"]] * 6, pa.list_(pa.string()))})
+    b = pa.table({"pt_id": pa.array(ids[4:], pa.binary()), "rate_raw": [str(i) for i in range(4, 10)],
+                  "service_code": pa.array([["11"]] * 6, pa.list_(pa.string()))})
+    pq.write_table(a, tmp_path / "a.parquet")
+    pq.write_table(b, tmp_path / "b.parquet")
+    root = tmp_path / "local"
+    reduce.split_stream([str(tmp_path / "a.parquet"), str(tmp_path / "b.parquet")], str(root / "split-price_term"),
+                        "pt_id", 4, rows=50_000)
+    res = reduce.reduce_dims_local(str(root), "p", str(tmp_path / "out"), "price_term", presplit=4)
+    got = pq.read_table(tmp_path / "out/price_term").to_pylist()
+    assert res["tables"]["price_term"]["rows_out"] == len(got) == 10
+    assert sorted((r["pt_id"], r["rate_raw"]) for r in got) == [(ids[i], str(i)) for i in range(10)]
+    assert "_slice" not in got[0]

@@ -392,6 +392,10 @@ def merge_part_local(local: str, release: str, part: int, out: str) -> dict:
 
 
 DIM_SLICES = {"price_list": 8, "price_term": 4, "provider_set": 4, "provider_list": 4}
+# tables whose rows hold thousands of ids (BCBS BlueCard): split and deduplicated with pyarrow a few hundred rows
+# at a time; the price tables are split in big batches and deduplicated per slice with DuckDB (500-row batches
+# took 83 minutes for one Aetna wave's price_term)
+STREAMED = {"provider_set", "provider_list"}
 
 
 def restricted_dir(out: str) -> str:
@@ -451,7 +455,7 @@ def _fetch_split(bucket: str, paths: list[str], local: str, prefix: str, token, 
             if oidc_available():
                 token = token_for(bk(bucket))
         files = _fetch(bucket, b, f"{local}/batch", prefix, token)
-        split_stream(files, split, DIMS[name], k, tag=f"b{n}")
+        split_stream(files, split, DIMS[name], k, tag=f"b{n}", rows=STREAM_ROWS if name in STREAMED else 50_000)
         import shutil
 
         shutil.rmtree(f"{local}/batch", ignore_errors=True)
@@ -479,7 +483,7 @@ def _slice_of(keys, k: int):
     return s
 
 
-def split_stream(files: list[str], split: str, key: str, k: int, tag: str = "b0") -> None:
+def split_stream(files: list[str], split: str, key: str, k: int, tag: str = "b0", rows: int = 0) -> None:
     """Hash-slice Parquet files by `key` into {split}/_slice=<i>/<tag>_f<j>.parquet, a few hundred rows at a time
     (pyarrow). A DuckDB COPY of BCBS provider sets and lists (rows of thousands of ids) ran out of 6.5 GB."""
     import pyarrow as pa
@@ -489,7 +493,7 @@ def split_stream(files: list[str], split: str, key: str, k: int, tag: str = "b0"
     for j, f in enumerate(files):  # pyarrow only: numpy is not installed on the runners
         pf = pq.ParquetFile(f, buffer_size=1 << 20, pre_buffer=False)
         writers: dict = {}
-        for b in pf.iter_batches(batch_size=STREAM_ROWS, use_threads=False):
+        for b in pf.iter_batches(batch_size=rows or STREAM_ROWS, use_threads=False):
             if "_slice" in b.schema.names:
                 b = b.drop_columns(["_slice"])
             sl = _slice_of(b.column(key), k)
@@ -499,7 +503,7 @@ def split_stream(files: list[str], split: str, key: str, k: int, tag: str = "b0"
                     os.makedirs(f"{split}/_slice={int(i)}", exist_ok=True)
                     writers[int(i)] = pq.ParquetWriter(f"{split}/_slice={int(i)}/{tag}_f{j}.parquet", piece.schema,
                                                        compression="zstd", use_dictionary=False, write_statistics=False)
-                writers[int(i)].write_table(piece, row_group_size=STREAM_ROWS)
+                writers[int(i)].write_table(piece, row_group_size=rows or STREAM_ROWS)
             del b
             pa.default_memory_pool().release_unused()
         for w in writers.values():
@@ -579,7 +583,7 @@ def reduce_dims_local(local: str, payer: str, out: str, table: str = "all", dele
             files = sorted(str(p) for p in Path(f"{local}/split-{name}").glob("*/*.parquet"))
         if not files:
             continue
-        if presplit and name in DIM_SLICES:  # sliced by split_stream: dedup each slice with pyarrow, never DuckDB
+        if presplit and name in STREAMED:  # sliced by split_stream: dedup each slice with pyarrow, never DuckDB
             import shutil
 
             import pyarrow.parquet as pq

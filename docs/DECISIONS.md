@@ -7,6 +7,9 @@ Newest first. One entry per lesson: what we saw, what we changed.
 - Aetna wave 16 dims-price_term: the streamed split ran ~80 minutes (it refreshes its own token), then
   `reduce_dims` fetched the metas with the job's first token: 401 Unauthorized. `reduce._fetch` now exchanges
   a fresh token per 200-file batch when running on OIDC (the merge path had the same gap).
+- The same split moved price_term 500 rows at a time (a size meant for BCBS provider sets): 83 minutes for one
+  wave, so a 16-wave merge would pass the 300-minute job limit. Only provider_set/provider_list stream with
+  pyarrow now; price_term/price_list split in 50k-row batches and are deduplicated per slice with DuckDB.
 
 ## 2026-10-28: single-file dims (provider_group, code) are joined from their slices with pyarrow
 - BCBS wave 3 (HCSC's own networks): dims-provider_group deduplicated its slices, then ran DuckDB out of memory
