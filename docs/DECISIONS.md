@@ -3,6 +3,12 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: chunk consolidation streams file_block and provider_reference too
+- Anthem retry: 13 of 18 shards parsed every file, then ran out of DuckDB memory (7.4 GiB) in the chunk's
+  `SELECT *, file_key ... UNION ALL` of provider_reference (Anthem references carry very wide NPI lists).
+- Both tables now go through `concat_parquet` (pyarrow, batch by batch) with the file_key added per input file;
+  same columns and order as before. The provider_group fallback (when DISTINCT runs out of memory) streams too.
+
 ## 2026-10-28: BCBS of Tennessee's own files come from its CloudFront index, added as shards 20-23
 - bcbst.com/tcr links two directories on `d7k0rj9u1dp84.cloudfront.net`: `non_aso_directory.json` (one index,
   "BCBST Fully Insured" + individual/group EHB plans) and `aso_directory.json` (one index per self-funded employer).

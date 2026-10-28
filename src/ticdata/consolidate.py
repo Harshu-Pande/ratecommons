@@ -44,9 +44,9 @@ def consolidate(items: list[tuple[str, str]], dest: str) -> dict:
 
     for table in ("file_block", "provider_reference"):
         fs = have(table)
-        if fs:
-            sql = " UNION ALL ".join(f"SELECT *, '{k}' AS file_key FROM read_parquet('{f}')" for k, f in fs)
-            copy(sql, f"{dest}/{table}.parquet", table)
+        if fs:  # streamed: Anthem provider references carry huge NPI lists (a DuckDB UNION ran out of 7.4 GB)
+            out["tables"][table] = concat_parquet([f for _, f in fs], f"{dest}/{table}.parquet",
+                                                  consts=[{"file_key": k} for k, _ in fs])
     for table, key in KEYED.items():
         fs = [f for _, f in have(table)]
         if fs:  # the shard's files share seen-sets for dims, so a plain concatenation
@@ -59,8 +59,7 @@ def consolidate(items: list[tuple[str, str]], dest: str) -> dict:
         except Exception as e:  # out of memory on huge groups: keep duplicates, the reduce dedups them anyway
             if "Out of Memory" not in str(e):
                 raise
-            copy(f"SELECT * FROM read_parquet({fs!r}, union_by_name = true)", f"{dest}/provider_group.parquet",
-                 "provider_group")
+            out["tables"]["provider_group"] = concat_parquet(fs, f"{dest}/provider_group.parquet")
             out["provider_group_not_deduped"] = True
     parts = sorted({p.name for _, d in items for p in Path(d).glob("rate_fact/part-*.parquet")})
     n = 0
@@ -76,25 +75,31 @@ def consolidate(items: list[tuple[str, str]], dest: str) -> dict:
     shutil.rmtree(f"{dest}/.duck_tmp", ignore_errors=True)
     return out
 
-def concat_parquet(files: list[str], dest: str, batch_rows: int = 2000) -> int:
+def concat_parquet(files: list[str], dest: str, batch_rows: int = 2000, consts: list[dict] | None = None) -> int:
     """Concatenate Parquet files batch by batch with pyarrow (bounded memory). Provider sets can be huge lists:
     one BCBS North Carolina BlueCard file has 100k sets averaging 4,232 provider lists (6.8 GB of ids), which a
-    DuckDB COPY could not hold in 8 GB. A single input is copied as is."""
+    DuckDB COPY could not hold in 8 GB. A single input is copied as is. consts: per input file, constant string
+    columns to add (file_key), appended after the file's own columns."""
     import shutil
 
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    if len(files) == 1:
+    if len(files) == 1 and not consts:
         shutil.copyfile(files[0], dest)
         return pq.ParquetFile(dest).metadata.num_rows
     schema = pa.unify_schemas([pq.ParquetFile(f).schema_arrow for f in files])
+    for name in (consts or [{}])[0]:
+        if name not in schema.names:
+            schema = schema.append(pa.field(name, pa.string()))
     n = 0
     with pq.ParquetWriter(dest, schema, compression="zstd", use_dictionary=False, write_statistics=False) as w:
-        for f in files:
+        for i, f in enumerate(files):
             pf = pq.ParquetFile(f, buffer_size=1 << 20, pre_buffer=False)  # stream column chunks: 1.4 GB, not 5.8
             for b in pf.iter_batches(batch_size=batch_rows, use_threads=False):
                 t = pa.Table.from_batches([b])
+                for name, v in (consts[i] if consts else {}).items():
+                    t = t.append_column(name, pa.array([v] * t.num_rows, pa.string()))
                 for name in schema.names:  # union by name: add missing columns as nulls
                     if name not in t.column_names:
                         t = t.append_column(name, pa.nulls(t.num_rows, schema.field(name).type))
