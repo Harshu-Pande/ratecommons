@@ -468,7 +468,8 @@ def _slice_of(keys, k: int):
         _HASH_CON = duckdb.connect()
         _HASH_CON.execute("SET threads = 1")
     _HASH_CON.register("t", pa.table({"key": keys}))
-    s = _HASH_CON.execute(f"SELECT (hash(key) % {k})::INTEGER AS s FROM t").fetchnumpy()["s"]
+    r = _HASH_CON.execute(f"SELECT (hash(key) % {k})::INTEGER AS s FROM t").arrow()
+    s = (r.read_all() if hasattr(r, "read_all") else r).column("s")  # reader or table, by DuckDB version
     _HASH_CON.unregister("t")
     return s
 
@@ -476,19 +477,19 @@ def _slice_of(keys, k: int):
 def split_stream(files: list[str], split: str, key: str, k: int, tag: str = "b0") -> None:
     """Hash-slice Parquet files by `key` into {split}/_slice=<i>/<tag>_f<j>.parquet, a few hundred rows at a time
     (pyarrow). A DuckDB COPY of BCBS provider sets and lists (rows of thousands of ids) ran out of 6.5 GB."""
-    import numpy as np
     import pyarrow as pa
+    import pyarrow.compute as pc
     import pyarrow.parquet as pq
 
-    for j, f in enumerate(files):
+    for j, f in enumerate(files):  # pyarrow only: numpy is not installed on the runners
         pf = pq.ParquetFile(f, buffer_size=1 << 20, pre_buffer=False)
         writers: dict = {}
         for b in pf.iter_batches(batch_size=STREAM_ROWS, use_threads=False):
             if "_slice" in b.schema.names:
                 b = b.drop_columns(["_slice"])
             sl = _slice_of(b.column(key), k)
-            for i in np.unique(sl):
-                piece = pa.Table.from_batches([b]).filter(pa.array(sl == i))
+            for i in pc.unique(sl).to_pylist():
+                piece = pa.Table.from_batches([b]).filter(pc.equal(sl, i))
                 if int(i) not in writers:
                     os.makedirs(f"{split}/_slice={int(i)}", exist_ok=True)
                     writers[int(i)] = pq.ParquetWriter(f"{split}/_slice={int(i)}/{tag}_f{j}.parquet", piece.schema,
