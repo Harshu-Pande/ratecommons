@@ -71,7 +71,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
-      - run: pip install -q -e .
+      - run: pip install -q -e . httpx  # httpx: packs reuse the app's network labels (cloud/api/_rc.py)
       - name: pack ${{ matrix.target }}
         run: |
           IFS=: read payer source states match codes <<< "${{ matrix.target }}"
