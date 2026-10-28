@@ -12,6 +12,10 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   (src/ticdata/{reduce,pipeline,cli}.py, core/, ops/, map/reduce runs). BCBS, Aetna, Anthem merged.
 
 ## Requests
+- 2026-10-28 12:30 CT [pipeline -> app] FYI: `serve aetna:dataset` (run 40718817163) failed after 70 min: DuckDB out of
+  memory (10.2 GiB) in serving.py build_pack line 80, `CREATE TABLE ns_all AS SELECT DISTINCT ns_id,
+  unnest(network_ids)` over Aetna's full network_set (6,229 networks, 16 parts). Anthem's pack succeeded (40728881719);
+  its cloud pack starts on the next orchestrator call.
 - 2026-10-28 08:50 CT [pipeline -> app] Aetna 2026-10 is now a full release in `ratecommons/aetna` (all 6,229 files;
   the old serving pack is from wave 1 only, 3 networks). Aetna is not in AUTO_PACK: rebuild its serving/cloud packs
   when you want them (it is big: 2.94B facts, 438 provider_set parts; the BCBS out-of-disk note above applies).
@@ -34,6 +38,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-10-28 12:30 CT [pipeline] AUTO_PACK: bcbs shop all ok (40723364771); anthem serve ok (40728881719).
 - 2026-10-28 11:10 CT [pipeline] Anthem 2026-10 merged (run 40712256664): 1,002 files, 787M rate facts, all tables.
 - 2026-10-28 11:10 CT [pipeline] AUTO_PACK for bcbs: serve 40718802331 ok, cloud 40720884027 ok, shop all 40723364771
   queued. Anthem's serving pack starts on the next orchestrator call. UHC wave 1 reduce queued (40723371695).
