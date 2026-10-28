@@ -3,6 +3,17 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: serving packs for the big payers hold common services only, streamed from the release
+- The BCBS serving pack ran out of disk (110 GB release on one runner). Measured from Parquet footers: BCBS has
+  3.7 billion provider set -> list links (5M sets) and 940M facts; Aetna 41.8 billion links (207M sets), 2.94B facts
+  and 9.7B network-set entries. A full per-state pack of either does not fit free runners or storage.
+- CareCompass's 62 codes plus CSTM-ALL (flat all-services contracts) are ~0.5% of the facts: ~24M links for BCBS,
+  ~320M for Aetna. `serve_jobs.prefilter` streams the release one file at a time (download, keep matching rows,
+  delete) into a small release folder; `build_pack` runs on it unchanged. Cigna stays a full pack (FULL_PACK).
+- The pack records `code_subset`; the cloud pack copies it into meta.json, and the app adds a note whenever a
+  payer's pack lacks an asked code, so it never reads as "no published rate". Full packs for the big payers need
+  a distributed build (per state or per code slice) and a storage budget; not done yet.
+
 ## 2026-10-28: big merges are sliced: fact parts by fact_id hash, provider_set across 8 jobs
 - Aetna's merge (16 waves) failed in every fact part: DuckDB's `GROUP BY fact_id` over ~9.5 GB of wave facts per
   part ran out of 6.5 GB. `merge_part_local` now cuts a part into hash slices of fact_id (~600 MB each,
