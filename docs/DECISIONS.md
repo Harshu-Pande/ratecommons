@@ -3,6 +3,12 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: wave outputs are not sorted; the sliced copy is freed before the last write
+- UHC wave 1 (12 shards, ~32 GB of map facts per part): 9 of 16 fact parts filled the runner's 104 GB of disk in the
+  final `COPY ... ORDER BY` (DuckDB spill: "max_temp_directory_size"), with the sliced input copy, the merged facts
+  and the sort spill on disk at once. Wave outputs are read only by the merge, which sorts, so they are written
+  unsorted; and the sliced copy is deleted once network sets are resolved.
+
 ## 2026-10-28: serving packs for the big payers hold common services only, streamed from the release
 - The BCBS serving pack ran out of disk (110 GB release on one runner). Measured from Parquet footers: BCBS has
   3.7 billion provider set -> list links (5M sets) and 940M facts; Aetna 41.8 billion links (207M sets), 2.94B facts

@@ -320,11 +320,18 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
     t = f"read_parquet('{tmp}')"
     con.execute(f"CREATE TABLE reps AS SELECT x1, x2, n_net, any_value(fact_id) fact_id FROM {t} GROUP BY ALL")
     res["network_sets"] = _ns_map(con, "SELECT x1, x2, n_net, fact_id rep FROM reps", members, "fns")
+    if delete_inputs and fbs and k > 1:  # the sliced copy is not read again: free its disk for the last COPY
+        import shutil
+
+        shutil.rmtree(split, ignore_errors=True)
+    # wave outputs (keys) are read only by the merge, which sorts: sorting them too spilled a UHC wave part
+    # (12 shards, ~1 TB of map output per wave) past the runner's 104 GB of disk
+    order = "" if keys else "ORDER BY f.billing_code_type, f.billing_code, f.ps_id"
     con.execute(f"""
         COPY (SELECT f.{FACT_COLS.replace(', ', ', f.')}, s.ns_id, '{release}' AS valid_from
                      {", f.x1, f.x2, f.n_net" if keys else ""}
               FROM {t} f JOIN fns s USING (x1, x2, n_net)
-              ORDER BY f.billing_code_type, f.billing_code, f.ps_id)
+              {order})
         TO '{out}/rate_fact/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)""")
     kc = ", x1, x2, n_net" if keys else ""  # wave outputs keep set keys for the cross-wave merge
     extra = f"UNION SELECT ns_id, network_ids{kc} FROM bns" if fbs else ""
