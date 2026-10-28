@@ -6,9 +6,8 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
 - 2026-10-28 10:35 CT [app] Serving packs that fit a runner for BCBS and the full Aetna release (and Anthem
   next), then cloud packs and CareCompass rebuild (src/ticdata/serving.py, serve_jobs.py, serve.yml, cloud.yml,
   shop runs). 11:00 CT: common-services packs (4ef9e1f); serve runs dispatched for bcbs and aetna.
-- 2026-10-28 01:15 CT [pipeline] Pipeline lane: BCBS and Anthem to merged, Aetna/UHC down ops/waves.txt
-  (src/ticdata/{reduce,pipeline,cli}.py, core/, ops/, map/reduce runs). 08:50 CT: BCBS and Aetna merged;
-  Anthem wave 1 of 5 reducing (run 40699575306), then Anthem merge, then UHC waves.
+- 2026-10-28 01:15 CT [pipeline] Pipeline lane: UHC down ops/waves.txt; watch the Anthem pack chain
+  (src/ticdata/{reduce,pipeline,cli}.py, core/, ops/, map/reduce runs). BCBS, Aetna, Anthem merged.
 
 ## Requests
 - 2026-10-28 08:50 CT [pipeline -> app] Aetna 2026-10 is now a full release in `ratecommons/aetna` (all 6,229 files;
@@ -33,6 +32,9 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-10-28 11:10 CT [pipeline] Anthem 2026-10 merged (run 40712256664): 1,002 files, 787M rate facts, all tables.
+- 2026-10-28 11:10 CT [pipeline] AUTO_PACK for bcbs: serve 40718802331 ok, cloud 40720884027 ok, shop all 40723364771
+  queued. Anthem's serving pack starts on the next orchestrator call. UHC wave 1 reduce queued (40723371695).
 - 2026-10-28 08:50 CT [pipeline] Aetna 2026-10 merged (run 40693836067): 6,229 files, 2.94B rate facts, all tables.
 - 2026-10-28 04:55 CT [pipeline] BCBS 2026-10 merged (waves 1-3, 1,795 files incl. HCSC's own networks).
 - 2026-10-28 01:45 CT [app] Anthem retry run 40639683209 succeeded (13 shards); shard 1 still needed the pipeline
