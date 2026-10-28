@@ -46,6 +46,11 @@ def _fetch(bucket: str, paths: list[str], dest: str, prefix: str, token) -> list
     for _, local in files:
         os.makedirs(os.path.dirname(local), exist_ok=True)
     for i in range(0, len(files), 200):
+        if token:  # OIDC tokens last an hour: Aetna wave 16's price_term fetched its metas after a 90-minute split
+            from .hfio import bucket as bk, oidc_available, token_for
+
+            if oidc_available():
+                token = token_for(bk(bucket))
         for attempt in range(4):  # transient CAS/xet errors ("error decoding response body") happen
             try:
                 download_bucket_files(bucket, files=files[i:i + 200], token=token)

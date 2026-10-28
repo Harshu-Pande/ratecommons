@@ -3,6 +3,11 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: every bucket download takes a fresh OIDC token
+- Aetna wave 16 dims-price_term: the streamed split ran ~80 minutes (it refreshes its own token), then
+  `reduce_dims` fetched the metas with the job's first token: 401 Unauthorized. `reduce._fetch` now exchanges
+  a fresh token per 200-file batch when running on OIDC (the merge path had the same gap).
+
 ## 2026-10-28: single-file dims (provider_group, code) are joined from their slices with pyarrow
 - BCBS wave 3 (HCSC's own networks): dims-provider_group deduplicated its slices, then ran DuckDB out of memory
   (6.5 GB) in the COPY that joins them into one `provider_group.parquet`. The join now streams through

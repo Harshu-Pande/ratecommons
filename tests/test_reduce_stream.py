@@ -67,3 +67,16 @@ def test_sliced_single_table_is_concatenated_whole(tmp_path, monkeypatch):
     t = pq.read_table(tmp_path / "out/provider_group.parquet")
     assert res["tables"]["provider_group"]["rows_out"] == t.num_rows == 30
     assert sorted(t.column("pg_id").to_pylist()) == sorted(r["pg_id"] for r in rows)
+
+
+def test_fetch_takes_a_fresh_oidc_token(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    from ticdata import hfio
+
+    seen = []
+    monkeypatch.setattr(hfio, "oidc_available", lambda: True)
+    monkeypatch.setattr(hfio, "token_for", lambda resource: f"fresh:{resource}")
+    monkeypatch.setattr(huggingface_hub, "download_bucket_files", lambda b, files, token: seen.append(token))
+    reduce._fetch("org/work", ["pre/a.json"], str(tmp_path), "pre/", "stale")
+    assert seen == ["fresh:buckets/org/work"]
