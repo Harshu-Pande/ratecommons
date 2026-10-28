@@ -198,6 +198,7 @@ def test_sliced_merge_equals_unsliced(tmp_path, monkeypatch):
     for k in range(16):
         merge_part_local(str(tmp_path / "waves"), "2026-10", k, str(tmp_path / "one"))
     monkeypatch.setenv("RC_MERGE_SLICE_BYTES", "1")
+    monkeypatch.setenv("RC_SET_SLICE_ROWS", "1")
     for k in range(16):
         merge_part_local(str(tmp_path / "waves2"), "2026-10", k, str(tmp_path / "sliced"))
     assert _fact_sets(tmp_path / "one") == _fact_sets(tmp_path / "sliced")

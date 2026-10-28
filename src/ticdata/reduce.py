@@ -375,47 +375,58 @@ def merge_part_local(local: str, release: str, part: int, out: str) -> dict:
             os.remove(f)
         groups = [sorted(str(p) for p in Path(f"{split}/_slice={i}").glob("*.parquet")) for i in range(k)]
         groups = [g for g in groups if g]
-    con.execute(f"CREATE TABLE wsets AS SELECT DISTINCT x1, x2, n_net, network_ids FROM read_parquet({sets!r})")
-    merged = f"{local}/merged"
-    os.makedirs(merged, exist_ok=True)
+    # 1. per fact slice: merged facts (set key = XOR of wave keys) and, for one fact per merged set key, its wave keys
+    w = f"{local}/mwork"
+    for d in ("facts", "rw", "fns"):
+        os.makedirs(f"{w}/{d}", exist_ok=True)
     for i, g in enumerate(groups):
         src = f"(SELECT * EXCLUDE (_slice) FROM read_parquet({g!r}))" if k > 1 else f"read_parquet({g!r})"
-        tmp = f"{local}/merged_tmp_{i:04d}.parquet"  # one name per slice: DuckDB kept a reused file's stats
+        tmp = f"{w}/facts/s{i:04d}.parquet"  # one name per slice: DuckDB kept a reused file's stats
         con.execute(f"""COPY (SELECT fact_id, {ANY_COLS}, bit_xor(x1) x1, bit_xor(x2) x2, sum(n_net)::INTEGER n_net
                               FROM {src} GROUP BY fact_id) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd)""")
-        t = f"read_parquet('{tmp}')"
-        con.execute(f"CREATE OR REPLACE TABLE reps AS SELECT x1, x2, n_net, any_value(fact_id) fact_id FROM {t} GROUP BY ALL")
-        con.execute(f"""
-            CREATE OR REPLACE TABLE fns AS
-            WITH m AS (SELECT r.x1, r.x2, r.n_net, list_sort(list_distinct(flatten(list(w.network_ids)))) network_ids
-                       FROM reps r JOIN {src} f ON f.fact_id = r.fact_id
-                       JOIN wsets w ON w.x1 = f.x1 AND w.x2 = f.x2 AND w.n_net = f.n_net
-                       GROUP BY r.x1, r.x2, r.n_net)
-            SELECT x1, x2, n_net, {NS_SQL} AS ns_id, network_ids FROM m""")
-        bad = con.execute("SELECT count(*) FROM fns WHERE len(network_ids) <> n_net").fetchone()[0]
-        if bad or con.execute("SELECT count(*) FROM fns").fetchone()[0] != con.execute("SELECT count(*) FROM reps").fetchone()[0]:
-            raise RuntimeError(f"{bad} merged network sets disagree with their keys")
-        con.execute(f"""
-            COPY (SELECT f.{FACT_COLS.replace(', ', ', f.')}, s.ns_id, '{release}' AS valid_from
-                  FROM {t} f JOIN fns s USING (x1, x2, n_net))
-            TO '{merged}/s{i:04d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
-        con.execute("CREATE TABLE IF NOT EXISTS fns_all AS SELECT * FROM fns WHERE false")
-        con.execute("INSERT INTO fns_all SELECT * FROM fns")
-        os.remove(tmp)
+        con.execute(f"""COPY (WITH r AS (SELECT x1, x2, n_net, any_value(fact_id) fact_id FROM read_parquet('{tmp}')
+                                         GROUP BY x1, x2, n_net)
+                              SELECT r.x1, r.x2, r.n_net, f.x1 wx1, f.x2 wx2, f.n_net wn
+                              FROM r JOIN {src} f ON f.fact_id = r.fact_id)
+                        TO '{w}/rw/s{i:04d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
         if k > 1:
             for f in g:
                 os.remove(f)
     if k > 1:
         shutil.rmtree(f"{local}/fact_split", ignore_errors=True)
+    # 2. members of each merged set: the union of its wave sets (waves hold disjoint networks), resolved in hash
+    #    slices of the set key: one list aggregate over every set at once ran Aetna's merge out of memory
+    con.execute(f"CREATE TABLE wsets AS SELECT DISTINCT x1, x2, n_net, network_ids FROM read_parquet({sets!r})")
+    rw = f"read_parquet('{w}/rw/*.parquet')"
+    n_rw = con.execute(f"SELECT count(*) FROM {rw}").fetchone()[0]
+    q = max(1, n_rw // int(os.environ.get("RC_SET_SLICE_ROWS", 2_000_000)) + 1)
+    res["set_slices"] = q
+    for j in range(q):
+        con.execute(f"""
+            COPY (WITH m AS (SELECT r.x1, r.x2, r.n_net, list_sort(list_distinct(flatten(list(s.network_ids)))) network_ids
+                             FROM (SELECT DISTINCT * FROM {rw} WHERE hash(x1, x2, n_net) % {q} = {j}) r
+                             JOIN wsets s ON s.x1 = r.wx1 AND s.x2 = r.wx2 AND s.n_net = r.wn
+                             GROUP BY r.x1, r.x2, r.n_net)
+                  SELECT x1, x2, n_net, {NS_SQL} AS ns_id, network_ids FROM m)
+            TO '{w}/fns/q{j:04d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+    fns = f"read_parquet('{w}/fns/*.parquet')"
+    bad = con.execute(f"SELECT count(*) FROM {fns} WHERE len(network_ids) <> n_net").fetchone()[0]
+    n_keys = con.execute(f"SELECT count(*) FROM (SELECT DISTINCT x1, x2, n_net FROM {rw})").fetchone()[0]
+    if bad or con.execute(f"SELECT count(*) FROM {fns}").fetchone()[0] != n_keys:
+        raise RuntimeError(f"{bad} merged network sets disagree with their keys")
+    # 3. facts get their set's ns_id (a narrow key -> ns_id table), sorted into one part
+    con.execute(f"CREATE TABLE nsmap AS SELECT x1, x2, n_net, ns_id FROM {fns}")
     con.execute(f"""
-        COPY (SELECT * FROM read_parquet('{merged}/*.parquet') ORDER BY billing_code_type, billing_code, ps_id)
+        COPY (SELECT f.{FACT_COLS.replace(', ', ', f.')}, s.ns_id, '{release}' AS valid_from
+              FROM read_parquet('{w}/facts/*.parquet') f JOIN nsmap s USING (x1, x2, n_net)
+              ORDER BY f.billing_code_type, f.billing_code, f.ps_id)
         TO '{out}/rate_fact/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)""")
-    shutil.rmtree(merged, ignore_errors=True)
-    con.execute(f"""COPY (SELECT DISTINCT ns_id, network_ids FROM fns_all UNION
+    con.execute(f"""COPY (SELECT ns_id, network_ids FROM {fns} UNION
                           SELECT DISTINCT ns_id, network_ids FROM read_parquet({sets!r}))
                     TO '{out}/network_set/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+    res["network_sets"] = n_keys
+    shutil.rmtree(w, ignore_errors=True)
     res["facts"] = con.execute(f"SELECT count(*) FROM read_parquet('{out}/rate_fact/part-{part:02d}.parquet')").fetchone()[0]
-    res["network_sets"] = con.execute("SELECT count(DISTINCT ns_id) FROM fns_all").fetchone()[0]
     res["seconds"] = round(time.time() - t0, 1)
     return res
 

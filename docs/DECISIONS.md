@@ -12,6 +12,10 @@ Newest first. One entry per lesson: what we saw, what we changed.
 - dims-provider_set lost its runner after an hour: Aetna's wave provider sets are 137.6 GB, past one runner's disk.
   A merge now runs `dims-provider_set.<j>of8` jobs; each downloads every input in batches but keeps only slices
   i % 8 == j. Streamed batches are sized to ~64 MB of rows instead of 500 rows.
+- The sliced fact merge still ran out of memory resolving network sets: merged set keys recur in every slice and
+  their member lists were aggregated per slice. Now each slice only records (merged key -> wave keys) for one
+  fact per key; those mappings are deduplicated and resolved into member lists in hash slices of the key
+  (`RC_SET_SLICE_ROWS`, 2M), and facts join a narrow key -> ns_id table.
 - Note: a network is a file's content identity, so byte-identical files in two waves would fail the merge's
   set check (loudly); not seen so far.
 
