@@ -4,7 +4,8 @@ name: map
 # non-comment line is "<payer> <shards> [limit] [a-b]", for example "cigna 40" or "aetna 252 0 0-59"
 # (limit 0 = all files; a-b runs only those shards of the plan; an optional 5th word
 # "match=A,B" plans only files whose names contain A or B; a 6th word "base=N" numbers the shards from N,
-# for files added to a payer after its map, e.g. "bcbs 4 0 20-23 match=2026-10-27_890_ base=20").
+# for files added to a payer after its map, e.g. "bcbs 4 0 20-23 match=2026-10-27_890_ base=20"; a 7th word
+# "release=YYYY-MM" files them under that release instead of the date in their names).
 on:
   workflow_dispatch:
     inputs:
@@ -42,14 +43,14 @@ jobs:
       - run: pip install -q -e .
       - id: plan
         run: |
-          read payer shards limit range match base <<< "$(grep -v '^#' ops/map-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
+          read payer shards limit range match base release <<< "$(grep -v '^#' ops/map-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
           [ "$limit" = "0" ] && limit=""
           [ -n "${{ github.event.inputs.payer }}" ] && payer="${{ github.event.inputs.payer }}" && shards="${{ github.event.inputs.shards }}" && limit="${{ github.event.inputs.limit }}"
-          [ -n "${{ github.event.inputs.payer }}" ] && range="${{ github.event.inputs.range }}" && match="" && base=""
+          [ -n "${{ github.event.inputs.payer }}" ] && range="${{ github.event.inputs.range }}" && match="" && base="" && release=""
           echo "payer=$payer shards=$shards limit=$limit"
           # UHC: parse one file per identical-content group (gzip trailer fingerprints from uhc-tails)
           [ "$payer" = uhc ] && export TIC_DUP_TAILS="runs/2026-10-27-gha-run-40546293263/uhc-tails.json"
-          ticdata plan --payer "$payer" --shards "$shards" ${limit:+--limit $limit} --match "${match#match=}" --first-shard "$(b=${base#base=}; echo ${b:-0})" --out plan.json > /dev/null
+          ticdata plan --payer "$payer" --shards "$shards" ${limit:+--limit $limit} --match "${match#match=}" --first-shard "$(b=${base#base=}; echo ${b:-0})" --release "${release#release=}" --out plan.json > /dev/null
           # optional 4th word "a-b": run only shards a..b of the plan (waves that fit storage)
           # range: "a-b", or a comma list of shards and ranges ("0,1,8,12-15") to retry failed shards
           RANGE="$range" python -c "import json, os; d=json.load(open('plan.json')); r=os.environ['RANGE'] or '0-1000000'; want=set(); [want.update(range(int(x.split('-')[0]), int(x.split('-')[-1]) + 1)) for x in r.split(',') if x]; print(json.dumps([s['shard'] for s in d['shards'] if s['files'] and s['shard'] in want]))" > shards.json

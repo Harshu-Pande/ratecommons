@@ -58,6 +58,8 @@ def main(argv=None) -> int:
     p.add_argument("--limit", type=int)
     p.add_argument("--match", default="", help="comma-separated name substrings: plan only those files")
     p.add_argument("--first-shard", type=int, default=0, help="number shards from N (files added after a map)")
+    p.add_argument("--release", default="", help="file every planned file under this release (YYYY-MM) instead of "
+                   "the date in its name: HCSC lists files named 2026-09-14_... as current in October")
     p.add_argument("--out", required=True)
 
     p = sub.add_parser("parse-shard", help="download, parse and upload one shard of a plan")
@@ -202,8 +204,13 @@ def main(argv=None) -> int:
     elif a.cmd == "plan":
         from . import pipeline
 
-        _write(pipeline.plan(a.payer, a.shards, limit=a.limit, match=[m for m in a.match.split(',') if m] or None,
-                                    first_shard=a.first_shard), a.out)
+        doc = pipeline.plan(a.payer, a.shards, limit=a.limit, match=[m for m in a.match.split(',') if m] or None,
+                            first_shard=a.first_shard)
+        if a.release:
+            for sh in doc["shards"]:
+                for f in sh["files"]:
+                    f["release"] = a.release
+        _write(doc, a.out)
     elif a.cmd == "parse-shard":
         from . import hfio, pipeline
 
@@ -243,8 +250,13 @@ def main(argv=None) -> int:
                 want = [p for p in allp if p.endswith(f"/rate_fact/part-{k:02d}.parquet")
                         or p.endswith(f"/network_set/part-{k:02d}.parquet")]
             local = f"/tmp/reduce/merge-{a.part}"
+            presplit = None
+            if is_dims and table in reduce.DIM_SLICES:  # list tables: streamed split, as in the waves (BCBS OOM)
+                presplit = reduce._fetch_split(cfg.work_bucket, [p for p in want if not p.endswith("/metas.json")],
+                                               local, prefix, tok, table)
+                want = [p for p in want if p.endswith("/metas.json")]
             reduce._fetch(cfg.work_bucket, want, local, prefix, tok)
-            res = (reduce.reduce_dims_local(local, a.payer, outdir, table) if is_dims
+            res = (reduce.reduce_dims_local(local, a.payer, outdir, table, presplit=presplit) if is_dims
                    else reduce.merge_part_local(local, a.release, int(a.part), outdir))
         elif is_dims:
             res = reduce.reduce_dims(a.payer, a.release, cfg.work_bucket, outdir, token=tok, table=table, shards=shards)

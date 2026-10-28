@@ -3,6 +3,16 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: HCSC's own networks belong to release 2026-10 (their file names say 2026-09); merge streams list dims
+- 1,142 HCSC files (IL/TX own networks, 15.6 GB) are named `2026-09-12_...` (13 `-14`, 3 `-15`) but listed as
+  current in October's index. `release_of` filed them under `map/2026-09/bcbs/`, so the 2026-10 waves and merge
+  left them out (found by comparing the plan with the waves' metas.json). `ticdata plan --release` and a 7th
+  map-request word `release=YYYY-MM` now stamp a release on planned files; they are re-mapped as bcbs shards 24-27
+  (wave 3). The old `map/2026-09/bcbs/` output (60 chunk folders) is left for a clean-up step, not deleted by hand.
+  Next month: HCSC's names will again lag the listing month.
+- The bcbs merge's dims-provider_set ran DuckDB out of memory: the merge path used the DuckDB split, not the
+  streamed one. Merge dims of list tables now go through `_fetch_split` + `dedup_stream` like the waves.
+
 ## 2026-10-28: a shard with a failed file is not "mapped"; each shard run writes shard-NNN-status.json
 - Anthem shard 2 counted as mapped (its chunks had metas.json) although `NY_HXSQMEDDORC.json.gz` (5 GB) had failed
   in the Rust core: its wave would have been reduced without that file. Found by comparing the stored plan with

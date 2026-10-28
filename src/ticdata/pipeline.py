@@ -207,7 +207,7 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
         shutil.rmtree(cdir, ignore_errors=True)
 
     for e in files:
-        key, rel = file_key(e["name"]), release_of(e["name"])
+        key, rel = file_key(e["name"]), e.get("release") or release_of(e["name"])
         staged_bytes = sum(f.stat().st_size for _, d, _ in staged for f in __import__("pathlib").Path(d).rglob("*")
                            if f.is_file())
         if staged and (staged[0][2] != rel or len(staged) >= chunk_files or staged_bytes >= CHUNK_BYTES):
@@ -276,8 +276,9 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
     flush()
     # a shard whose chunks are uploaded can still have failed files: the status file says which, so the
     # orchestrator does not reduce a wave without them (it is rewritten by every run of the shard)
-    for rel in sorted({release_of(e["name"]) for e in files}):
-        status = {"shard": shard, "files": sum(1 for e in files if release_of(e["name"]) == rel),
+    rel_of = lambda e: e.get("release") or release_of(e["name"])  # noqa: E731
+    for rel in sorted({rel_of(e) for e in files}):
+        status = {"shard": shard, "files": sum(1 for e in files if rel_of(e) == rel),
                   "failed": [r["name"] for r in results if not r["ok"] and r["release"] == rel]}
         name = f"shard-{shard:03d}-status.json"
         path = os.path.join(workdir, name)
