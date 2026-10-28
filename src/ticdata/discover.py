@@ -166,7 +166,8 @@ def bcbs(s: requests.Session | None = None):
                                     "url": x["location"], "key": base, "host": urllib.parse.urlparse(base).netloc,
                                     "listed_by": "bcbst", "description": x.get("description")})
     except Exception as e:  # BCBST's site down: the HCSC part still plans
-        print("bcbst index unavailable:", repr(e)[:200])
+        import sys
+        print("bcbst index unavailable:", repr(e)[:300], file=sys.stderr)
     for plan, landing in BCBS_LANDINGS.items():
         for toc_url in _hcsc_index_urls(s, landing):
             raw = _get(s, toc_url, timeout=600).content
