@@ -182,7 +182,7 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
                     FROM {_src(src, 'provider_list')} SEMI JOIN (SELECT DISTINCT pli_id FROM ps_pli) USING (pli_id)""")
     if states:  # only the groups practicing in the chosen states
         con.execute("DELETE FROM pli_pg WHERE pg_id NOT IN (SELECT pg_id FROM geo_pg)")
-    con.execute(f"COPY (SELECT * FROM pli_pg ORDER BY pli_id) TO '{out}/pli_pg.parquet' {W}")
+    con.execute(f"COPY (SELECT * FROM pli_pg) TO '{out}/pli_pg.parquet' {W}")  # unsorted: sorting Anthem's filled the disk
     # which networks each provider group has any rate in (network breadth, "is X in network Y"): network sets
     # become bitmasks (64 networks per word) OR-ed up ps -> list -> group, so nothing explodes by network
     nn = con.execute("SELECT count(DISTINCT network_id) FROM ns").fetchone()[0]
