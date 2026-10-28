@@ -1,8 +1,21 @@
 import { BadgeCheck, Calculator, CircleHelp, Database, EyeOff, MapPinned, ShieldCheck, TriangleAlert, Users } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { PROCS } from '../lib/data'
+import { PROCS, loadProducts } from '../lib/data'
+import { PAYER_NAMES } from '../lib/format'
+
+const listOf = (xs) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`
 
 export default function About() {
+  // insurers whose prices are published right now (the data's products list), in display order
+  const [payers, setPayers] = useState(['aetna', 'cigna', 'uhc'])
+  useEffect(() => {
+    loadProducts().then((p) => {
+      const have = Object.keys(PAYER_NAMES).filter((k) => p && p[k])
+      if (have.length) setPayers(have.sort((a, b) => PAYER_NAMES[a].localeCompare(PAYER_NAMES[b])))
+    }).catch(() => {})
+  }, [])
+  const names = listOf(payers.map((k) => PAYER_NAMES[k]))
   return (
     <>
       <section className="bg-gradient-to-b from-brand-800 to-brand-700 pb-14 pt-12 text-white">
@@ -16,7 +29,7 @@ export default function About() {
       </section>
       <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6">
         <div className="grid gap-4 sm:grid-cols-4">
-          {[['3', 'national insurers: Aetna, Cigna, UnitedHealthcare'], ['50 + DC', 'states covered'], [String(PROCS.length), 'common scans, visits, tests and therapies'], ['$0', 'cost, no accounts, no ads']].map(([v, l]) => (
+          {[[String(payers.length), `insurers: ${names}`], ['50 + DC', 'states covered'], [String(PROCS.length), 'common scans, visits, tests and therapies'], ['$0', 'cost, no accounts, no ads']].map(([v, l]) => (
             <div className="card p-4 text-center" key={l}>
               <div className="font-display text-3xl font-extrabold text-brand-700">{v}</div>
               <div className="mt-1 text-xs text-ink-mute">{l}</div>
@@ -27,7 +40,7 @@ export default function About() {
           <section>
             <h2 className="flex items-center gap-2 text-2xl font-bold text-ink"><Database className="h-6 w-6 text-brand-600" /> 1. Source data</h2>
             <p>
-              Prices come from the in-network negotiated-rate files that Aetna, Cigna and UnitedHealthcare publish every month under
+              Prices come from the in-network negotiated-rate files that {names} publish every month under
               the federal Transparency in Coverage rule. The open <a href="https://huggingface.co/ratecommons" target="_blank" rel="noreferrer">RateCommons</a> project
               downloads, de-duplicates and publishes them free. CareCompass uses a cleaned extract for the services in its list.
             </p>
