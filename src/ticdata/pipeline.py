@@ -15,6 +15,7 @@ import shutil
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from . import discover
 from .identity import _fetch as fetch_to_file
@@ -235,6 +236,7 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
                     meta = json.loads(cp.stdout)
                     rec["parser"] = "rust"
                 else:  # zip input (exit 3) or a failure: fall back to the Python parser
+                    rec["rust_exit"] = cp.returncode  # negative: killed by that signal (-9: out of memory)
                     rec["rust_error"] = (cp.stderr or "")[-1500:]
                     shutil.rmtree(outdir, ignore_errors=True)
                     # the Python parser is ~10x slower and holds more in memory: on a big file after a Rust
@@ -272,5 +274,21 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
         results.append(rec)
         print(json.dumps({k: rec.get(k) for k in ("name", "ok", "wall_seconds", "error")}), flush=True)
     flush()
+    # a shard whose chunks are uploaded can still have failed files: the status file says which, so the
+    # orchestrator does not reduce a wave without them (it is rewritten by every run of the shard)
+    for rel in sorted({release_of(e["name"]) for e in files}):
+        status = {"shard": shard, "files": sum(1 for e in files if release_of(e["name"]) == rel),
+                  "failed": [r["name"] for r in results if not r["ok"] and r["release"] == rel]}
+        name = f"shard-{shard:03d}-status.json"
+        path = os.path.join(workdir, name)
+        Path(path).write_text(json.dumps(status))
+        if upload_bucket:
+            from huggingface_hub import batch_bucket_files
+
+            batch_bucket_files(upload_bucket, add=[(path, f"map/{rel}/{payer}/{name}")],
+                               token=token() if callable(token) else token)
+        if chunk_out:
+            os.makedirs(chunk_out, exist_ok=True)
+            shutil.copy(path, os.path.join(chunk_out, name))
     return {"payer": payer, "shard": shard, "files": len(files), "ok": sum(r["ok"] for r in results),
             "chunks": chunks, "results": results}

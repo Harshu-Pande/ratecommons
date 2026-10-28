@@ -49,16 +49,28 @@ def merge_done(payer, release):
 
 
 def mapped_shards(payer, release):
-    """Shard numbers whose map output is complete in the work bucket (metas.json is written last).
+    """Shard numbers whose map output is complete in the work bucket (metas.json is written last) and whose
+    last run left no failed file (shard-NNN-status.json; shards mapped before it existed have none).
     (It used to read recent map runs' job names, which mixed payers and broke when a run page failed.)"""
     import re
 
+    from huggingface_hub import HfFileSystem
+
     prefix = f"map/{release}/{payer}/"
-    done = set()
+    done, status = set(), {}
     for i in list_bucket_tree("ratecommons/work", prefix=prefix, recursive=True):
         m = re.search(r"/shard-(\d+)-\d+/metas\.json$", i.path)
         if m:
             done.add(int(m.group(1)))
+        m = re.search(r"/shard-(\d+)-status\.json$", i.path)
+        if m:
+            status[int(m.group(1))] = i.path
+    fs = HfFileSystem()
+    for shard, path in status.items():
+        failed = json.loads(fs.read_text(f"buckets/{BUCKET}/{path}"))["failed"]
+        if failed and shard in done:
+            print(f"{payer} shard {shard}: {len(failed)} failed file(s), e.g. {failed[0]}; not mapped until retried")
+            done.discard(shard)
     return done
 
 

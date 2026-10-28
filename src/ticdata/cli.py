@@ -210,9 +210,12 @@ def main(argv=None) -> int:
         doc = json.loads(Path(a.plan).read_text())
         tok = (lambda: hfio.token_for(hfio.bucket(cfg.work_bucket))) if a.upload else None
         rtok = (lambda: hfio.token_for(hfio.bucket(cfg.restricted_bucket))) if a.upload else None
-        _write(pipeline.run_shard(doc, a.shard, upload_bucket=cfg.work_bucket if a.upload else None,
-                                  token=tok, restricted_bucket=cfg.restricted_bucket if a.upload else None,
-                                  restricted_token=rtok), a.out)
+        res = pipeline.run_shard(doc, a.shard, upload_bucket=cfg.work_bucket if a.upload else None,
+                                 token=tok, restricted_bucket=cfg.restricted_bucket if a.upload else None,
+                                 restricted_token=rtok)
+        _write(res, a.out)
+        if res["ok"] < res["files"]:  # the parsed files are uploaded; the job fails so the shard gets retried
+            sys.exit(f"{res['files'] - res['ok']} of {res['files']} files failed")
     elif a.cmd == "parse-file":
         from .parse import parse_file
 

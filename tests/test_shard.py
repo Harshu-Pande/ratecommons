@@ -99,3 +99,40 @@ def test_wave_reduce_then_merge_equals_one_reduce(tmp_path):
     a = pq.read_table(tmp_path / "mdims/provider_group.parquet").sort_by("pg_id").to_pylist()
     b = pq.read_table(tmp_path / "sdims/provider_group.parquet").sort_by("pg_id").to_pylist()
     assert [sorted(r["tin_raws"]) for r in a] == [sorted(r["tin_raws"]) for r in b]
+
+
+def test_shard_status_lists_failed_files(tmp_path, monkeypatch):
+    """A shard uploads what parsed and says which files failed, so the orchestrator waits for a retry."""
+    from ticdata.pipeline import run_shard
+
+    monkeypatch.setenv("TIC_CORE", "")
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "2026-10-01_a.json.gz").write_bytes(gzip.compress(json.dumps(DOC).encode()))
+    srv = _serve(web)
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    names = ["2026-10-01_a.json.gz", "2026-10-01_gone.json.gz"]
+    plan = {"payer": "test", "shards": [{"shard": 0, "files": [{"name": n, "url": f"{base}/{n}"} for n in names]}]}
+    res = run_shard(plan, 0, workdir=str(tmp_path / "work"), chunk_out=str(tmp_path / "map"))
+    srv.shutdown()
+    assert res["ok"] == 1
+    status = json.loads((tmp_path / "map/shard-000-status.json").read_text())
+    assert status == {"shard": 0, "files": 2, "failed": ["2026-10-01_gone.json.gz"]}
+
+
+def test_orchestrator_skips_shards_with_failed_files(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ops"))
+    import orchestrate
+    import huggingface_hub
+
+    pre = "map/2026-10/p/"
+    paths = [f"{pre}shard-000-00/metas.json", f"{pre}shard-001-00/metas.json", f"{pre}shard-002-00/metas.json",
+             f"{pre}shard-001-status.json", f"{pre}shard-002-status.json"]
+    texts = {f"buckets/{orchestrate.BUCKET}/{pre}shard-001-status.json": '{"failed": ["x.json.gz"]}',
+             f"buckets/{orchestrate.BUCKET}/{pre}shard-002-status.json": '{"failed": []}'}
+    monkeypatch.setattr(orchestrate, "list_bucket_tree", lambda *a, **k: [SimpleNamespace(path=p) for p in paths])
+    monkeypatch.setattr(huggingface_hub, "HfFileSystem", lambda: SimpleNamespace(read_text=texts.__getitem__))
+    assert orchestrate.mapped_shards("p", "2026-10") == {0, 2}

@@ -3,6 +3,14 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: a shard with a failed file is not "mapped"; each shard run writes shard-NNN-status.json
+- Anthem shard 2 counted as mapped (its chunks had metas.json) although `NY_HXSQMEDDORC.json.gz` (5 GB) had failed
+  in the Rust core: its wave would have been reduced without that file. Found by comparing the stored plan with
+  every chunk's metas.json (shards 1 and 2 only; shard 70's nameless 2.8 KB index page parses as an empty file).
+- `run_shard` now writes `map/<release>/<payer>/shard-NNN-status.json` (`{"files", "failed": [names]}`), rewritten
+  by every run of the shard; `orchestrate.mapped_shards` leaves out shards whose status lists failures, and
+  `parse-shard` exits non-zero so the job shows red. Rust failures record `rust_exit` (negative = signal).
+
 ## 2026-10-28: streamed dims dedup casts IDs to plain binary (Rust and Python map files mix)
 - BCBS wave 1 dims (after the numpy fix): provider_set, provider_list and price_list failed in `dedup_stream`:
   `pa.unify_schemas` cannot merge the Rust core's `fixed_size_binary[16]` IDs with parse.py's `binary` (files that
