@@ -30,3 +30,27 @@
 - Never put tokens in code, docs, commits or memory.
 - In writing, call the user's older pipeline "our in-house pipeline", never by its product name.
 - Record each lesson in `docs/DECISIONS.md` the moment it is learned.
+
+## Two sessions share this repo (from 2026-10-28)
+Two Claude sessions work here at once. Each owns a lane and changes only its own files and runs.
+- **Pipeline session** (Claude Code, claude.ai/code): getting payer data parsed, merged and published.
+  Owns `src/ticdata/` except `shop.py`/`shopcatalog.py`/`serving.py`; `core/`; `ops/` (waves, request files,
+  `orchestrate.py`); workflows `map`, `reduce`, `orchestrate`, `core`, `kaggle`, `run`, `smoke`, `archive-manifests`.
+  It is the only session that dispatches or cancels map/reduce runs.
+- **App session** (Claude chat with the browser, Vercel and the Project): `carecompass/`, `cloud/`, `gateway/`,
+  `space/`, `shop.py`, `shopcatalog.py`, `serving.py`; workflows `shop`, `cloud`, `serve`; Vercel, domains,
+  Hugging Face settings, Project docs.
+- **Shared, append-only:** `docs/DECISIONS.md` (newest first), `docs/HANDOFF.md`, `docs/WORKLOG.md`, `CLAUDE.md`.
+
+Rules for both:
+1. `git pull --rebase` before editing and before pushing. Never force-push, amend or rebase pushed commits, or
+   revert the other session's commits. Start commit messages with `[pipeline]` or `[app]`.
+2. Before a task, add a line under "Claimed" in `docs/WORKLOG.md` (time, session, task, files); move it to "Done"
+   with the result when finished. Don't touch files the other session has claimed.
+3. Need something in the other lane? Write it under "Requests" in `docs/WORKLOG.md` instead of doing it.
+4. A dispatched map run cancels the running one in the same payer lane (`cancel-in-progress`). Check
+   `gh api repos/Harshu-Pande/ratecommons/actions/runs?status=in_progress` before dispatching; never cancel a run
+   you did not start.
+5. Never delete anything in Hugging Face buckets or datasets by hand; the orchestrator's `clean()` is the only deleter.
+6. Save usage: wait in the background instead of polling often (2+ minutes between checks), grep logs instead of
+   printing them, and don't re-read large files.
