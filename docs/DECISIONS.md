@@ -5,6 +5,12 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-27
 
+- **BCBS BlueCard provider sets are enormous: dims are concatenated with pyarrow, streaming.** BCBS North
+  Carolina's 7.3 GB file yields 100,125 provider sets averaging 4,232 provider lists (max 102,890): 424M ids,
+  a 4.6 GB `provider_set.parquet` from one file. DuckDB's COPY of it ran out of 7.4 GB even with byte-sized
+  row groups. `consolidate.concat_parquet` copies a single input as is and streams several with pyarrow
+  (`pre_buffer=False`, 1 MB buffers, no dictionary): 1.6 GB peak instead of 5.8 GB for reading alone.
+
 - **BCBS BlueCard files end with a few bytes that are not gzip.** BCBS North Carolina's 7.3 GB BlueCard file is
   three gzip members (19.7 MB header/providers, 30.2 GB of rates, 2 bytes `]}`) followed by 8 stray bytes.
   `gzip -t` accepts it; flate2's `MultiGzDecoder` failed with UnexpectedEof after 42 GB of JSON. The Rust

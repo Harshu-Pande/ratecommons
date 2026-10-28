@@ -49,8 +49,8 @@ def consolidate(items: list[tuple[str, str]], dest: str) -> dict:
             copy(sql, f"{dest}/{table}.parquet", table)
     for table, key in KEYED.items():
         fs = [f for _, f in have(table)]
-        if fs:  # the shard's files share seen-sets for dims, so a plain concatenation (streams, no spill)
-            copy(f"SELECT * FROM read_parquet({fs!r}, union_by_name = true)", f"{dest}/{table}.parquet", table)
+        if fs:  # the shard's files share seen-sets for dims, so a plain concatenation
+            out["tables"][table] = concat_parquet(fs, f"{dest}/{table}.parquet")
     fs = [f for _, f in have("provider_group")]
     if fs:
         try:
@@ -75,3 +75,31 @@ def consolidate(items: list[tuple[str, str]], dest: str) -> dict:
 
     shutil.rmtree(f"{dest}/.duck_tmp", ignore_errors=True)
     return out
+
+def concat_parquet(files: list[str], dest: str, batch_rows: int = 2000) -> int:
+    """Concatenate Parquet files batch by batch with pyarrow (bounded memory). Provider sets can be huge lists:
+    one BCBS North Carolina BlueCard file has 100k sets averaging 4,232 provider lists (6.8 GB of ids), which a
+    DuckDB COPY could not hold in 8 GB. A single input is copied as is."""
+    import shutil
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    if len(files) == 1:
+        shutil.copyfile(files[0], dest)
+        return pq.ParquetFile(dest).metadata.num_rows
+    schema = pa.unify_schemas([pq.ParquetFile(f).schema_arrow for f in files])
+    n = 0
+    with pq.ParquetWriter(dest, schema, compression="zstd", use_dictionary=False, write_statistics=False) as w:
+        for f in files:
+            pf = pq.ParquetFile(f, buffer_size=1 << 20, pre_buffer=False)  # stream column chunks: 1.4 GB, not 5.8
+            for b in pf.iter_batches(batch_size=batch_rows, use_threads=False):
+                t = pa.Table.from_batches([b])
+                for name in schema.names:  # union by name: add missing columns as nulls
+                    if name not in t.column_names:
+                        t = t.append_column(name, pa.nulls(t.num_rows, schema.field(name).type))
+                w.write_table(t.select(schema.names).cast(schema), row_group_size=batch_rows)
+                n += t.num_rows
+                del t, b
+                pa.default_memory_pool().release_unused()  # else the allocator keeps every batch's pages
+    return n
