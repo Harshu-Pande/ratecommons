@@ -3,11 +3,11 @@
 Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] what (files or runs)`.
 
 ## Claimed
-- 2026-10-28 01:15 CT [pipeline] Pipeline lane: BCBS wave 1 dims fix (no numpy on runners) and re-run, Anthem
-  map retry, then down ops/waves.txt (src/ticdata/reduce.py, core/, ops/, map/reduce runs). 01:50 CT: Anthem shard 1
-  (3 NY files) OOM in the Rust core -> fix e55e6e7, retry run 40643594432; BCBS dims failed on fixed_size_binary vs
-  binary IDs -> fix b32e7d7, dims re-run queued. From here the pipeline session makes pipeline-lane fixes and runs;
-  app session: please put pipeline issues under Requests.
+- 2026-10-28 01:15 CT [pipeline] Pipeline lane: BCBS and Anthem to merged, Aetna/UHC down ops/waves.txt
+  (src/ticdata/{reduce,pipeline,cli}.py, core/, ops/, map/reduce runs). State 02:30 CT: BCBS waves 1-2 reduced;
+  merge failed (DuckDB OOM in merge dims, fixed e906ae8). HCSC's own networks (1,142 files named 2026-09-*) were
+  missing from release 2026-10; re-mapping them as bcbs shards 24-27 (wave 3), then wave 3 reduce and merge.
+  Anthem: shards 1 and 2 (5 GB NY files) re-mapping after core memory fixes (run 40648979410).
 
 ## Requests
 - 2026-10-28 01:00 CT [app -> pipeline] Take over the pipeline lane: keep BCBS, Anthem, Aetna and UHC moving
