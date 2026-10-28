@@ -501,13 +501,26 @@ def split_stream(files: list[str], split: str, key: str, k: int, tag: str = "b0"
             w.close()
 
 
+def _plain_binary(t):
+    """fixed_size_binary (the Rust core's IDs) -> binary (parse.py's and DuckDB's), also inside lists."""
+    import pyarrow as pa
+
+    if pa.types.is_fixed_size_binary(t):
+        return pa.binary()
+    if pa.types.is_list(t) or pa.types.is_large_list(t):
+        return pa.list_(_plain_binary(t.value_type))
+    return t
+
+
 def dedup_stream(files: list[str], dest: str, key: str) -> int:
     """First row per key across files (same as DISTINCT ON (key) for content-hash IDs, whose rows are identical),
-    streamed: memory is the slice's set of keys plus one batch. Schemas are unified by name."""
+    streamed: memory is the slice's set of keys plus one batch. Schemas are unified by name, IDs as binary
+    (files from the Rust core hold fixed_size_binary[16], files from parse.py binary)."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    schema = pa.unify_schemas([pq.ParquetFile(f).schema_arrow for f in files])
+    schema = pa.unify_schemas([pa.schema([f.with_type(_plain_binary(f.type)) for f in pq.ParquetFile(x).schema_arrow])
+                               for x in files])
     seen: set = set()
     n = 0
     with pq.ParquetWriter(dest, schema, compression="zstd", use_dictionary=False) as w:

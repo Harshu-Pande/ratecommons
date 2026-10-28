@@ -3,6 +3,12 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: streamed dims dedup casts IDs to plain binary (Rust and Python map files mix)
+- BCBS wave 1 dims (after the numpy fix): provider_set, provider_list and price_list failed in `dedup_stream`:
+  `pa.unify_schemas` cannot merge the Rust core's `fixed_size_binary[16]` IDs with parse.py's `binary` (files that
+  fell back to Python). DuckDB had read both as BLOB. dedup_stream now unifies on `binary`, inside lists too
+  (DuckDB's `hash()` slices both types the same way); test `tests/test_reduce_stream.py`.
+
 ## 2026-10-28: the Rust core's reference pass flushes provider lists by id count, and holds each reference's ids once
 - Anthem shard 1 (three NY files, `NY_HX*MED*.json.gz`, 5 GB gzip each) died in the Rust core at ~240 s, max RSS
   15 GB of 16, before any rate was written: 17 GB of provider_references (~48k groups, each reference listing
