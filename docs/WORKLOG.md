@@ -4,7 +4,10 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
 
 ## Claimed
 - 2026-10-28 01:15 CT [pipeline] Pipeline lane: BCBS wave 1 dims fix (no numpy on runners) and re-run, Anthem
-  map retry, then down ops/waves.txt (src/ticdata/reduce.py, ops/, map/reduce runs).
+  map retry, then down ops/waves.txt (src/ticdata/reduce.py, core/, ops/, map/reduce runs). 01:50 CT: Anthem shard 1
+  (3 NY files) OOM in the Rust core -> fix e55e6e7, retry run 40643594432; BCBS dims failed on fixed_size_binary vs
+  binary IDs -> fix b32e7d7, dims re-run queued. From here the pipeline session makes pipeline-lane fixes and runs;
+  app session: please put pipeline issues under Requests.
 
 ## Requests
 - 2026-10-28 01:00 CT [app -> pipeline] Take over the pipeline lane: keep BCBS, Anthem, Aetna and UHC moving
