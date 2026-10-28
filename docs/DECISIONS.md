@@ -5,6 +5,17 @@ Newest first. One entry per lesson: what we saw, what we changed.
 
 ## 2026-10-27
 
+- **BCBS BlueCard files end with a few bytes that are not gzip.** BCBS North Carolina's 7.3 GB BlueCard file is
+  three gzip members (19.7 MB header/providers, 30.2 GB of rates, 2 bytes `]}`) followed by 8 stray bytes.
+  `gzip -t` accepts it; flate2's `MultiGzDecoder` failed with UnexpectedEof after 42 GB of JSON. The Rust
+  reader now walks members itself and stops at non-gzip trailing bytes, reported as `gzip_trailing_bytes`.
+  After that panic the Python fallback ran on the same 30 GB file and took the runner down ~10 minutes
+  later, so files over 2 GB no longer fall back to Python after a Rust failure (only zip input does).
+- **Anthem chunk consolidation ran out of DuckDB memory (5.5 GB of 6) on its first shards**, after every file
+  parsed. Consolidation now uses 2 threads, 8 GB, 250k-row groups, and keeps provider_group duplicates
+  (the reduce dedups them) if the DISTINCT still runs out. map.yml `range` accepts a list ("0,1,8,12-14")
+  to retry only failed shards.
+
 - **New payers run hands-off to the app.** Payers `bcbs` and `anthem` have datasets (`ratecommons/bcbs`,
   `ratecommons/anthem`, trusted publisher set) and wave lines; once a merge lands, the orchestrator starts the
   serving pack, then the cloud pack (`prefix=serve/v2`), then a CareCompass rebuild (`AUTO_PACK`).
