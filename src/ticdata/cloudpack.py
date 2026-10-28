@@ -174,7 +174,10 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
                           FROM pgx x, unnest(coalesce(x.states, ['XX'])) AS u(s) GROUP BY 1 ORDER BY 1)
                     TO '{out}/tin.parquet' {W}""")
     nets = con.execute("SELECT net, hex(network_id), file_names, plan_names, bytes FROM net ORDER BY net").fetchall()
+    pj = f"{pack}/pack.json"  # a common-services serving pack says which codes it holds
+    subset = (json.load(open(pj)).get("code_subset") if os.path.exists(pj) else None)
     meta = {"payer": payer, "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "pspli": "bucket3", **res,
+            **({"code_subset": subset} if subset else {}),
             "networks": [{"net": a, "network_id": b, "file_names": c, "plan_names": d or [], "bytes": e}
                          for a, b, c, d, e in nets]}
     json.dump(meta, open(f"{out}/meta.json", "w"), default=str)

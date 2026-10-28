@@ -776,7 +776,46 @@ def data_status():
         m = meta(p)
         if m:
             out["payers"][p] = {"networks": len(m["networks"]), "codes": m.get("codes"), "built": m.get("built")}
+            if m.get("code_subset"):
+                out["payers"][p]["coverage"] = (f"common services only: {len(m['code_subset'].get('codes') or [])} "
+                                                "billing codes plus flat all-services contracts")
     return out
+
+
+PAYER_LABEL = {"cigna": "Cigna", "aetna": "Aetna", "uhc": "UnitedHealthcare", "bcbs": "Blue Cross Blue Shield",
+               "anthem": "Anthem"}
+
+
+def coverage_notes(args: dict) -> list[str]:
+    """Payers whose pack holds only common services (meta code_subset): say so, and name the asked codes it lacks,
+    so a code outside the pack is never read as "no published rate"."""
+    notes = []
+    try:
+        ps = _payers(args.get("payer") or "")
+    except Exception:
+        return notes
+    asked = []
+    for k in ("code", "codes"):
+        if args.get(k):
+            try:
+                asked += _codes(args[k])
+            except Exception:
+                pass
+    for p in ps:
+        sub = (meta(p) or {}).get("code_subset")
+        if not sub:
+            continue
+        have = set(sub.get("codes") or [])
+        missing = [c for c in asked if c not in have]
+        name = PAYER_LABEL.get(p, p)
+        if missing:
+            notes.append(f"{name}: this version holds only common services ({len(have)} codes + flat all-services "
+                         f"contracts); {', '.join(missing[:10])} not included here. That is not the same as "
+                         "'no published rate': the payer's full file has more.")
+        elif not asked:
+            notes.append(f"{name}: this version holds only common services ({len(have)} codes + flat all-services "
+                         "contracts); network and provider lists come from those rates.")
+    return notes
 
 
 # ------------------------------------------------------------------ custom SQL (sandboxed)

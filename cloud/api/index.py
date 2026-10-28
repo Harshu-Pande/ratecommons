@@ -55,7 +55,14 @@ def _call(name: str, args: dict):
     fn = TOOLS[name]
     sig = inspect.signature(fn)
     kw = {k: (int(v) if k in INT_ARGS and v not in (None, "") else v) for k, v in (args or {}).items() if k in sig.parameters}
-    return fn(**kw)
+    res = fn(**kw)
+    notes = E.coverage_notes(kw) if name not in ("data_status", "medicare_rate", "code_info") else []
+    if notes:  # common-services packs: never let a missing code read as "no published rate"
+        if isinstance(res, list):
+            res = {"rows": res, "notes": notes}
+        elif isinstance(res, dict):
+            res = {**res, "notes": list(res.get("notes") or []) + notes}
+    return res
 
 
 def _json(o):

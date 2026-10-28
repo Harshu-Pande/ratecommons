@@ -3,7 +3,9 @@ name: serve
 # on main; its last non-comment line lists targets, for example "shared cigna:dataset aetna:wave-1".
 # "shared" rebuilds identity/serving (NPPES lite, Medicare PFS) first; "<payer>:<source>" builds
 # <payer>/serving from the published release ("dataset") or a reduce wave ("wave-N"); an optional
-# third part limits it to providers in some states, e.g. "aetna:wave-1:MO,IL,KS".
+# third part limits it to providers in some states, e.g. "aetna:wave-1:MO,IL,KS"; a fifth part picks the codes:
+# "all", "common" (CareCompass procedures + CSTM-ALL, streamed from the release) or empty = auto (all for cigna,
+# common for the big payers; see serve_jobs.FULL_PACK), e.g. "bcbs:dataset:::common".
 on:
   workflow_dispatch:
     inputs:
@@ -72,7 +74,7 @@ jobs:
       - run: pip install -q -e .
       - name: pack ${{ matrix.target }}
         run: |
-          IFS=: read payer source states match <<< "${{ matrix.target }}"
-          ticdata serve-pack --payer "$payer" --source "$source" --states "$states" --match "$match"
+          IFS=: read payer source states match codes <<< "${{ matrix.target }}"
+          RC_PACK_CODES="$codes" ticdata serve-pack --payer "$payer" --source "$source" --states "$states" --match "$match"
       - if: always()
         run: df -h / | tail -1

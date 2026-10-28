@@ -88,16 +88,136 @@ def aetna_plans() -> dict[str, list[str]]:
     return out
 
 
+# Payers whose whole release fits one runner's serving pack. The others get a common-services pack: the codes
+# CareCompass prices plus flat all-services contracts (CSTM-ALL). Measured 2026-10-28: the full BCBS release has
+# 3.7 billion provider set -> list links and Aetna's 41.8 billion; the common services are about 0.5% of the facts.
+FULL_PACK = {"cigna"}
+
+
+def common_codes() -> list[str]:
+    from .shopcatalog import all_codes
+
+    return sorted(set(all_codes()))
+
+
+def _stream_files(repo: str, paths: list[str], dest: str, ahead: int = 3):
+    """Download dataset files a few at a time, in order; yields (repo path, local path). The caller deletes each."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from huggingface_hub import hf_hub_download
+
+    def get(path):
+        for attempt in range(5):
+            try:
+                return hf_hub_download(repo, path, repo_type="dataset", local_dir=dest)
+            except Exception as e:  # noqa: PERF203
+                _log(f"download retry {attempt} {path}: {e!r}")
+                import time
+
+                time.sleep(15 * (attempt + 1))
+        raise RuntimeError(f"download failed: {path}")
+
+    with ThreadPoolExecutor(ahead) as ex:
+        futs = [ex.submit(get, p) for p in paths[:ahead]]
+        for i, path in enumerate(paths):
+            local = futs[i].result()
+            if i + ahead < len(paths):
+                futs.append(ex.submit(get, paths[i + ahead]))
+            yield path, local
+
+
+def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str) -> dict:
+    """Write a release folder holding only the facts for `codes` (plus CSTM-ALL) and the dimension rows they
+    use, streaming the published release one file at a time (the whole BCBS release is 110 GB, Aetna's 600 GB).
+    build_pack then runs on it unchanged."""
+    from huggingface_hub import HfApi
+
+    from .serving import _duck
+
+    repo = f"{ORG}/{payer}"
+    root = f"release={release}"
+    files = sorted(f.path for f in HfApi().list_repo_tree(repo, repo_type="dataset", path_in_repo=root, recursive=True)
+                   if f.path.endswith(".parquet"))
+
+    def table(t):
+        return [f for f in files if f.startswith(f"{root}/{t}/") or f == f"{root}/{t}.parquet"]
+
+    shutil.rmtree(dest, ignore_errors=True)
+    os.makedirs(dest)
+    dl = f"{work}/dl"
+    con = _duck(f"{work}/duck")
+    res: dict = {"codes": len(codes)}
+
+    def out_path(path):
+        o = f"{dest}/{path[len(root) + 1:]}"
+        os.makedirs(os.path.dirname(o), exist_ok=True)
+        return o
+
+    for t in ("source_file", "network", "code"):
+        for path, local in _stream_files(repo, table(t), dl):
+            shutil.move(local, out_path(path))
+    cl = ", ".join("'" + c.replace("'", "''") + "'" for c in codes)
+    n = 0
+    for path, local in _stream_files(repo, table("rate_fact"), dl):
+        o = out_path(path)
+        con.execute(f"COPY (SELECT * FROM read_parquet('{local}') WHERE billing_code IN ({cl}) "
+                    f"OR billing_code_type = 'CSTM-ALL') TO '{o}' (FORMAT parquet, COMPRESSION zstd)")
+        os.remove(local)
+        n += con.execute(f"SELECT count(*) FROM read_parquet('{o}')").fetchone()[0]
+    res["facts"] = n
+    _log(f"facts kept: {n:,}")
+    F = f"read_parquet('{dest}/rate_fact/*.parquet')"
+    con.execute(f"CREATE TABLE k_ns AS SELECT DISTINCT ns_id FROM {F}")
+    con.execute(f"CREATE TABLE k_pl AS SELECT DISTINCT pl_id FROM {F}")
+    con.execute(f"CREATE TABLE k_ps AS SELECT DISTINCT ps_id FROM {F}")
+
+    def keep(t, key, keys, then=None):
+        """Copy the rows of table t whose key is in table `keys`; `then` = (new key table, SQL over the output)."""
+        outs = []
+        for path, local in _stream_files(repo, table(t), dl):
+            o = out_path(path)
+            con.execute(f"COPY (SELECT * FROM read_parquet('{local}') SEMI JOIN {keys} USING ({key})) TO '{o}' "
+                        "(FORMAT parquet, COMPRESSION zstd)")
+            os.remove(local)
+            outs.append(o)
+        res[t] = con.execute(f"SELECT count(*) FROM read_parquet({outs!r})").fetchone()[0] if outs else 0
+        _log(f"{t} kept: {res[t]:,}")
+        if then and outs:
+            con.execute(f"CREATE TABLE {then[0]} AS SELECT DISTINCT {then[1]} FROM read_parquet({outs!r})")
+
+    keep("network_set", "ns_id", "k_ns")
+    keep("price_list", "pl_id", "k_pl", ("k_pt", "unnest(pt_ids) AS pt_id"))
+    keep("price_term", "pt_id", "k_pt")
+    keep("provider_set", "ps_id", "k_ps", ("k_pli", "unnest(pli_ids) AS pli_id"))
+    keep("provider_list", "pli_id", "k_pli", ("k_pg", "unnest(pg_ids) AS pg_id"))
+    keep("provider_group", "pg_id", "k_pg")
+    con.close()
+    shutil.rmtree(dl, ignore_errors=True)
+    shutil.rmtree(f"{work}/duck", ignore_errors=True)
+    return res
+
+
 def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload: bool = True,
-         states: list[str] | None = None, match: list[str] | None = None) -> dict:
-    """source: "dataset" (the published release) or "wave-N" (a reduce wave in the work bucket)."""
+         states: list[str] | None = None, match: list[str] | None = None, codes: str | None = None) -> dict:
+    """source: "dataset" (the published release) or "wave-N" (a reduce wave in the work bucket).
+    codes: "all", "common" (common_codes() + CSTM-ALL, streamed from the release), or "auto" (all for FULL_PACK
+    payers, common for the rest)."""
     from huggingface_hub import hf_hub_download, snapshot_download
 
     from .config import load
 
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
-    if source == "dataset":
+    codes = codes or os.environ.get("RC_PACK_CODES") or "auto"  # serve.yml passes a target's 5th field here
+    if codes == "auto":
+        codes = "all" if payer in FULL_PACK else "common"
+    subset = None
+    if codes == "common" and source == "dataset":
+        subset = common_codes()
+        pre = prefilter(payer, release, subset, f"{work}/src/release={release}", f"{work}/pre")
+        _log(f"prefilter: {json.dumps(pre)}")
+        src = f"{work}/src/release={release}"
+    elif source == "dataset":
         snapshot_download(f"{ORG}/{payer}", repo_type="dataset", local_dir=f"{work}/src",
                           allow_patterns=[f"release={release}/*"])
         src = f"{work}/src/release={release}"
@@ -127,6 +247,9 @@ def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload:
     res = build_pack(payer, src, f"{work}/out", nppes, irs, networks=networks, plans=plans, work=f"{work}/duck",
                      states=states)
     res.update({"source": source, "release": release, "states": states})
+    if subset:  # the app says when a code is outside the pack instead of "no published rate"
+        res["code_subset"] = {"name": "common services (CareCompass procedures + flat all-services contracts)",
+                              "codes": subset}
     json.dump(res, open(f"{work}/out/pack.json", "w"), indent=1, default=str)
     shutil.rmtree(f"{work}/src", ignore_errors=True)
     shutil.rmtree(f"{work}/duck", ignore_errors=True)
