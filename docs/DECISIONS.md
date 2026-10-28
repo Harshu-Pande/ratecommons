@@ -3,6 +3,14 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: a UHC shard is mapped only when its run wrote its status file; reduce refuses unfinished waves
+- The orchestrator dispatched UHC wave 3's reduce (run 40770018611) while the wave's map was still running: every chunk
+  of a shard uploads its own metas.json, and `mapped_shards` counted a shard as mapped once its first chunk landed.
+  Reduced, the wave would have been missing most files, and `clean()` would then have deleted their map output.
+- For payers in `pipeline.STATUS_REQUIRED` (uhc), a shard counts only when `shard-NNN-status.json` (written at the end
+  of each shard run) exists with no failures. The reduce workflow's args job runs `ticdata wave-ready` for wave
+  requests and stops before any reduce job when a shard is unfinished.
+
 ## 2026-10-28: wave outputs are not sorted; the sliced copy is freed before the last write
 - UHC wave 1 (12 shards, ~32 GB of map facts per part): 9 of 16 fact parts filled the runner's 104 GB of disk in the
   final `COPY ... ORDER BY` (DuckDB spill: "max_temp_directory_size"), with the sliced input copy, the merged facts

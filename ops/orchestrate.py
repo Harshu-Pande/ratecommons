@@ -75,6 +75,10 @@ def mapped_shards(payer, release):
         if failed and shard in done:
             print(f"{payer} shard {shard}: {len(failed)} failed file(s), e.g. {failed[0]}; not mapped until retried")
             done.discard(shard)
+    from ticdata.pipeline import STATUS_REQUIRED
+
+    if payer in STATUS_REQUIRED:  # a running shard has metas.json for each chunk uploaded so far
+        done &= set(status)
     return done
 
 

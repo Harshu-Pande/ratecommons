@@ -32,6 +32,8 @@ jobs:
       flags: ${{ steps.a.outputs.flags }}
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
       - id: a
         run: |
           line="${{ github.event.inputs.request }}"
@@ -52,6 +54,8 @@ jobs:
           fi
           case "${which:-all}" in dims) parts="[$dims]";; facts) parts="[$facts]";; *) parts="[$dims,$facts]";; esac
           echo "payer=$payer" >> "$GITHUB_OUTPUT"; echo "release=$release" >> "$GITHUB_OUTPUT"; echo "parts=$parts" >> "$GITHUB_OUTPUT"
+          # never reduce a wave whose shards are still mapping (partial output would be reduced, then deleted)
+          case "$mode" in wave=*) pip install -q -e . && ticdata wave-ready --payer "$payer" --release "$release" --shards "$shards";; esac
 
   reduce:
     needs: args

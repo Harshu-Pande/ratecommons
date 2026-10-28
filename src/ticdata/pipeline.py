@@ -29,6 +29,41 @@ def file_key(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", base)[:200]
 
 
+# payers whose shards count as mapped only once their run has written shard-NNN-status.json with no failures:
+# each chunk of a running shard uploads its own metas.json, so "has a metas.json" let the orchestrator reduce
+# UHC wave 3 while its shards were still parsing (2026-10-28)
+STATUS_REQUIRED = {"uhc"}
+
+
+def shard_status(bucket: str, release: str, payer: str) -> dict[int, list[str]]:
+    """{shard: failed file names} from the shard status files in the work bucket."""
+    import json as _json
+    import re as _re
+
+    from huggingface_hub import HfFileSystem, list_bucket_tree
+
+    fs, out = HfFileSystem(), {}
+    for i in list_bucket_tree(bucket, prefix=f"map/{release}/{payer}/", recursive=False):
+        m = _re.search(r"/shard-(\d+)-status\.json$", i.path)
+        if m:
+            out[int(m.group(1))] = _json.loads(fs.read_text(f"buckets/{bucket}/{i.path}"))["failed"]
+    return out
+
+
+def wave_ready(bucket: str, release: str, payer: str, shards: tuple[int, int]) -> list[str]:
+    """Reasons a wave's shards are not ready to reduce (empty when ready)."""
+    if payer not in STATUS_REQUIRED:
+        return []
+    st = shard_status(bucket, release, payer)
+    why = []
+    for sh in range(shards[0], shards[1] + 1):
+        if sh not in st:
+            why.append(f"shard {sh}: no status file (still mapping, or mapped before status files)")
+        elif st[sh]:
+            why.append(f"shard {sh}: {len(st[sh])} failed file(s), e.g. {st[sh][0]}")
+    return why
+
+
 def release_of(name: str) -> str:
     m = re.match(r"(\d{4})-(\d{2})-\d{2}", name.rsplit("/", 1)[-1])
     return f"{m.group(1)}-{m.group(2)}" if m else time.strftime("%Y-%m")

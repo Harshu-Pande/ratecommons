@@ -62,6 +62,11 @@ def main(argv=None) -> int:
                    "the date in its name: HCSC lists files named 2026-09-14_... as current in October")
     p.add_argument("--out", required=True)
 
+    p = sub.add_parser("wave-ready", help="exit 1 unless every shard of a wave finished mapping without failures")
+    p.add_argument("--payer", required=True)
+    p.add_argument("--release", required=True)
+    p.add_argument("--shards", required=True, help="a-b")
+
     p = sub.add_parser("parse-shard", help="download, parse and upload one shard of a plan")
     p.add_argument("plan")
     p.add_argument("--shard", type=int, required=True)
@@ -211,6 +216,13 @@ def main(argv=None) -> int:
                 for f in sh["files"]:
                     f["release"] = a.release
         _write(doc, a.out)
+    elif a.cmd == "wave-ready":
+        from . import pipeline
+
+        why = pipeline.wave_ready(cfg.work_bucket, a.release, a.payer, tuple(int(x) for x in a.shards.split("-")))
+        print("\n".join(why) or "ready")
+        if why:
+            sys.exit(1)
     elif a.cmd == "parse-shard":
         from . import hfio, pipeline
 

@@ -204,3 +204,25 @@ def test_sliced_merge_equals_unsliced(tmp_path, monkeypatch):
     assert _fact_sets(tmp_path / "one") == _fact_sets(tmp_path / "sliced")
     ns = lambda d: sorted((r["ns_id"], tuple(r["network_ids"])) for r in pq.read_table(d / "network_set").to_pylist())  # noqa: E731
     assert ns(tmp_path / "one") == ns(tmp_path / "sliced")
+
+
+def test_uhc_shards_are_mapped_only_after_their_status_file(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ops"))
+    import orchestrate
+    import huggingface_hub
+
+    pre = "map/2026-10/uhc/"
+    paths = [f"{pre}shard-024-00/metas.json", f"{pre}shard-025-00/metas.json", f"{pre}shard-025-status.json"]
+    texts = {f"buckets/{orchestrate.BUCKET}/{pre}shard-025-status.json": '{"failed": []}'}
+    monkeypatch.setattr(orchestrate, "list_bucket_tree", lambda *a, **k: [SimpleNamespace(path=p) for p in paths])
+    monkeypatch.setattr(huggingface_hub, "HfFileSystem", lambda: SimpleNamespace(read_text=texts.__getitem__))
+    assert orchestrate.mapped_shards("uhc", "2026-10") == {25}  # 24 is still mapping (a chunk is in, no status)
+    from ticdata import pipeline
+
+    monkeypatch.setattr(huggingface_hub, "list_bucket_tree", lambda *a, **k: [SimpleNamespace(path=p) for p in paths])
+    assert pipeline.wave_ready("ratecommons/work", "2026-10", "uhc", (25, 25)) == []
+    assert pipeline.wave_ready("ratecommons/work", "2026-10", "uhc", (24, 25))[0].startswith("shard 24")
+    assert pipeline.wave_ready("ratecommons/work", "2026-10", "aetna", (0, 7)) == []
