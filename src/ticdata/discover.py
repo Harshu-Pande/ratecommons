@@ -112,3 +112,53 @@ def cigna(s: requests.Session | None = None):
 
 
 PAYERS = {"uhc": uhc, "aetna": aetna, "cigna": cigna}
+
+# Blue Cross Blue Shield. Every Blue plan's index lists two kinds of in-network files:
+#  - its own networks (HCSC: Azure blob `.../output/<date>_Blue-Cross-and-Blue-Shield-of-<State>_<network>_...`);
+#  - the BlueCard files of every Blue plan, `<YYYY-MM>_<plan code>_<network prefix>_in-network-rates[_k_of_n]`
+#    on `<plan>.mrf.bcbs.com` (CloudFront, signed ~1 month). The same BlueCard file is listed by every Blue plan
+#    under its own subdomain; it is keyed by file name so it is fetched once. In October 2026 these were 113
+#    networks of 56 Blue plans, 0.12 TB in all (Anthem Indiana 30 GB, BCBS North Carolina 19 GB, ...).
+BCBS_LANDINGS = {
+    "bcbsil": "https://www.bcbsil.com/member/machine-readable-files",
+    "bcbstx": "https://www.bcbstx.com/member/machine-readable-files",
+}
+
+
+def _hcsc_index_urls(s: requests.Session, landing: str) -> list[str]:
+    import re
+
+    html = _get(s, landing).text
+    return sorted({u for u in re.findall(r'https://[A-Za-z0-9.-]+\.blob\.core\.windows\.net/toc/[^"\\ <>]+_index\.json', html)
+                   if "Prescription" not in u})
+
+
+def bcbs(s: requests.Session | None = None):
+    import re
+
+    s = s or new_session()
+    raw_files, entries, seen = {}, [], set()
+    for plan, landing in BCBS_LANDINGS.items():
+        for toc_url in _hcsc_index_urls(s, landing):
+            raw = _get(s, toc_url, timeout=600).content
+            raw_files[f"bcbs/{toc_url.rsplit('/', 1)[1]}"] = raw
+            toc = json.loads(raw)
+            for rs in toc.get("reporting_structure", []):
+                for x in rs.get("in_network_files", []):
+                    base = x["location"].split("?")[0]
+                    name = base.rsplit("/", 1)[-1]
+                    bluecard = ".mrf.bcbs.com" in base
+                    key = name if bluecard else base
+                    if key in seen or not name.endswith((".json.gz", ".json")):
+                        continue
+                    seen.add(key)
+                    m = re.match(r"\d{4}-\d{2}_(\d{3})_([0-9A-Z]{4})_", name)
+                    entries.append({
+                        "payer": "bcbs", "kind": "in_network", "name": name, "size": None, "url": x["location"],
+                        "key": key, "host": urllib.parse.urlparse(base).netloc, "listed_by": plan,
+                        "bluecard_plan": m and m.group(1), "bluecard_prefix": m and m.group(2),
+                    })
+    return raw_files, entries
+
+
+PAYERS["bcbs"] = bcbs

@@ -19,10 +19,12 @@ permissions:
   contents: read
   id-token: write   # Hugging Face Trusted Publishers (work bucket, ops dataset)
 
+run-name: "map ${{ github.event.inputs.payer && format('{0} {1}', github.event.inputs.payer, github.event.inputs.range) || github.event.head_commit.message }}"
+
 concurrency:
-  group: map
-  # a new map run replaces a running one: the orchestrator starts UHC waves one at a time and only when
-  # no map run is going, so this only bites when a person pushes a request over a running map
+  # one lane per payer for dispatched runs (the orchestrator's UHC waves), one lane for pushed requests;
+  # a new run in a lane replaces the running one
+  group: map-${{ github.event.inputs.payer || 'push' }}
   cancel-in-progress: true
 
 jobs:

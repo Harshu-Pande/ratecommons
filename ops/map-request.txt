@@ -18,3 +18,5 @@ uhc 8 0 0-7 match=HEALTHSCOPE-BENEFITS_Third-Party-Administrator_UNITEDHEALTHCAR
 uhc 1024 0 0-255
 # wave-by-wave from here (orchestrator starts later waves): replaces the 256-shard run
 uhc 1024 0 0-11
+# Blue Cross Blue Shield: HCSC (IL, TX) own networks + every Blue plan's BlueCard files (~0.13 TB)
+bcbs 20

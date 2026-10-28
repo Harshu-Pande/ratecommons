@@ -100,12 +100,15 @@ def start_maps(waves):
     import os
 
     me = os.environ.get("SELF_RUN_ID")
-    runs = [r for r in gh(f"repos/{REPO}/actions/workflows/map.yml/runs?per_page=5")["workflow_runs"]
-            if str(r["id"]) != me]
-    if any(r["status"] != "completed" for r in runs):
-        print("a map run is in progress")
-        return
+    runs = [r for r in gh(f"repos/{REPO}/actions/workflows/map.yml/runs?per_page=20")["workflow_runs"]
+            if str(r["id"]) != me and r["status"] != "completed"]
     for payer, shards in PIPELINE.items():
+        # this payer's wave runs are dispatched and named "map <payer> <range>"; other payers' runs don't block it
+        busy = [r for r in runs if (r.get("display_title") or "").startswith(f"map {payer} ")
+                or (r.get("event") == "push" and f"{payer} " in (r.get("display_title") or "").lower())]
+        if busy:
+            print(f"{payer}: a map run is in progress ({busy[0]['id']})")
+            continue
         mine = [w for w in waves if w[0] == payer and w[2] != "merge"]
         if not mine:
             continue
