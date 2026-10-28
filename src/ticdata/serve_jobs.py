@@ -303,17 +303,20 @@ def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NE
     else:
         score = {nid: b for nid, names, b in rows}
     top = [k for k, _ in sorted(score.items(), key=lambda x: -(x[1] or 0))]
-    if payer == "bcbs":  # the largest home networks of each Blue plan we read (TN, IL, TX), n/3 each
+    if payer == "bcbs":  # the largest home networks of the Blue plans in RC_BCBS_MAIN_PLANS (default TN: Illinois
+        # and Texas home networks hold provider sets of thousands of lists; with them a pack had 1 billion
+        # set -> list links and filled a runner's disk, so they wait for a build split across runners)
         names = {nid: " ".join(nm) for nid, nm, _ in rows}
 
         def plan(nid):
             x = names[nid]
             return "TN" if "_890_" in x else "IL" if "Illinois" in x else "TX" if "Texas" in x else "other"
-        per = max(1, -(-n // 3))
+        want = os.environ.get("RC_BCBS_MAIN_PLANS", "TN").split(",")
+        per = max(1, -(-n // len(want)))
         out, cnt = [], {}
         for k in top:
             g = plan(k)
-            if g != "other" and cnt.get(g, 0) < per:
+            if g in want and cnt.get(g, 0) < per:
                 out.append(k)
                 cnt[g] = cnt.get(g, 0) + 1
         return out

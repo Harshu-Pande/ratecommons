@@ -176,7 +176,9 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
         con.execute(f"""CREATE TABLE ps_pli AS SELECT ps_id, unnest(pli_ids) pli_id
                         FROM {_src(src, 'provider_set')} SEMI JOIN ps_used USING (ps_id)""")
     _log(f"ps_pli {con.execute('SELECT count(*) FROM ps_pli').fetchone()[0]:,}")
-    con.execute(f"""CREATE TABLE pli_pg AS SELECT DISTINCT pli_id, unnest(pg_ids) pg_id
+    # no DISTINCT: a provider list's groups are already distinct (it is a content-hashed sorted list), and the
+    # DISTINCT over Anthem's wide lists ran a runner out of memory
+    con.execute(f"""CREATE TABLE pli_pg AS SELECT pli_id, unnest(pg_ids) pg_id
                     FROM {_src(src, 'provider_list')} SEMI JOIN (SELECT DISTINCT pli_id FROM ps_pli) USING (pli_id)""")
     if states:  # only the groups practicing in the chosen states
         con.execute("DELETE FROM pli_pg WHERE pg_id NOT IN (SELECT pg_id FROM geo_pg)")
