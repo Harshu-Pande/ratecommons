@@ -6,4 +6,4 @@ export function money(v, opts = {}) {
   })
 }
 export const moneyRound = (v) => money(v, { cents: false })
-export const PAYER_NAMES = { cigna: 'Cigna', aetna: 'Aetna', uhc: 'UnitedHealthcare' }
+export const PAYER_NAMES = { cigna: 'Cigna', aetna: 'Aetna', uhc: 'UnitedHealthcare', bcbs: 'Blue Cross Blue Shield', anthem: 'Anthem Blue Cross' }

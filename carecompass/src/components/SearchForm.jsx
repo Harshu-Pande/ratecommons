@@ -8,12 +8,18 @@ import { useProfile } from '../lib/store'
 import { PROC_BY_ID, loadProducts, zipToPoint } from '../lib/data'
 import { PAYER_NAMES } from '../lib/format'
 
-export const PAYERS = ['aetna', 'cigna', 'uhc']
+export const PAYERS = ['aetna', 'anthem', 'bcbs', 'cigna', 'uhc']
 
 export function searchUrl(s) {
   const q = new URLSearchParams()
   for (const [k, v] of Object.entries(s)) if (v !== '' && v != null && v !== false) q.set(k, v === true ? '1' : v)
   return `/results?${q}`
+}
+
+export function useAllPlans() {
+  const [all, setAll] = useState(null)
+  useEffect(() => { loadProducts().then((p) => setAll(p || {})) }, [])
+  return all
 }
 
 export function usePlans(payer) {
@@ -36,6 +42,7 @@ export default function SearchForm({ initial = {}, onDone }) {
   const [err, setErr] = useState({})
   const [busy, setBusy] = useState(false)
   const plans = usePlans(payer)
+  const all = useAllPlans()
   const p = PROC_BY_ID[proc]
   const twoVisitTypes = p && p.kind === 'visit' && p.codes.length > 1
   useEffect(() => { if (initial.payer !== payer) setProd('') }, [payer]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -63,7 +70,7 @@ export default function SearchForm({ initial = {}, onDone }) {
         <label className="block md:col-span-3" htmlFor="payer">
           <span className="text-sm font-medium text-ink">Insurance company</span>
           <select id="payer" value={payer} onChange={(e) => setPayer(e.target.value)} className="field mt-1.5 w-full">
-            {PAYERS.map((k) => <option value={k} key={k}>{PAYER_NAMES[k]}</option>)}
+            {PAYERS.filter((k) => !all || all[k]).map((k) => <option value={k} key={k}>{PAYER_NAMES[k]}</option>)}
           </select>
         </label>
         <label className="block md:col-span-4" htmlFor="prod">

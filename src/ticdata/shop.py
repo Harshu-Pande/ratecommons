@@ -199,7 +199,17 @@ def sources(work: str = "/tmp/shop-src", upload_to: str | None = "ratecommons/wo
 CLOUD = "https://huggingface.co/buckets/ratecommons/work/resolve/serve/v2"
 SRC = "https://huggingface.co/buckets/ratecommons/work/resolve/shop/sources"
 ONAMES = "https://huggingface.co/datasets/ratecommons/identity/resolve/main/nppes/release=2026-10/other_names.parquet"
-PAYERS = ["cigna", "aetna", "uhc"]
+ALL_PAYERS = ["cigna", "aetna", "uhc", "bcbs", "anthem"]
+
+
+def _published(payers=ALL_PAYERS) -> list[str]:
+    """Payers whose cloud pack exists (a payer is added to CareCompass once its pack is built)."""
+    import requests
+
+    return [p for p in payers if requests.head(f"{CLOUD}/{p}/meta.json", timeout=60, allow_redirects=True).status_code == 200]
+
+
+PAYERS = ALL_PAYERS
 STATES = ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY",
           "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH",
           "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "PR"]
@@ -334,6 +344,8 @@ def build(states: list[str], work: str = "/tmp/shop", out: str = "/tmp/shop-out"
     env = _setup(con, work)
     res: dict = {"states": {}, "products": {}}
     pf = {}
+    global PAYERS
+    PAYERS = _published()
     for p in PAYERS:
         pf[p] = _payer_files(p, env["codes"], states, work)
         names, netmap = _products(p, pf[p]["meta"])
@@ -604,7 +616,7 @@ def meta(work: str = "/tmp/shop-meta", out: str = "/tmp/shop-meta-out", upload_t
     src = {f: f"{work}/src/{f}.parquet" for f in ("addr", "zip")}
     _fetch_many([(f"{SRC}/{f}.parquet", d) for f, d in src.items()], 2)
     prods = {}
-    for p in PAYERS:
+    for p in _published():
         m = json.load(open(_fetch(f"{CLOUD}/{p}/meta.json", f"{work}/{p}/meta.json")))
         prods[p] = _products(p, m)[0]
     json.dump(prods, open(f"{out}/meta/products.json", "w"), separators=(",", ":"))
