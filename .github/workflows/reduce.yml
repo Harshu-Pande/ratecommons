@@ -44,8 +44,12 @@ jobs:
           echo "flags=$flags" >> "$GITHUB_OUTPUT"
           dims='"dims-meta","dims-code","dims-provider_group","dims-provider_set","dims-provider_list","dims-price_term","dims-price_list"'
           facts='"0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"'
-          # a merge splits provider_set across 8 jobs by hash slice (Aetna's 16 waves: 137.6 GB, past one runner's disk)
-          [ "$mode" = merge ] && dims="${dims/\"dims-provider_set\"/$(seq 0 7 | sed 's/.*/"dims-provider_set.&of8"/' | paste -sd,)}"
+          # a merge splits provider_set across 8 jobs by hash slice (Aetna's 16 waves: 137.6 GB, past one runner's
+          # 104 GB of free disk) and provider_list across 2 (Anthem's waves hold ~60 GB of it)
+          if [ "$mode" = merge ]; then
+            dims="${dims/\"dims-provider_set\"/$(seq 0 7 | sed 's/.*/"dims-provider_set.&of8"/' | paste -sd,)}"
+            dims="${dims/\"dims-provider_list\"/$(seq 0 1 | sed 's/.*/"dims-provider_list.&of2"/' | paste -sd,)}"
+          fi
           case "${which:-all}" in dims) parts="[$dims]";; facts) parts="[$facts]";; *) parts="[$dims,$facts]";; esac
           echo "payer=$payer" >> "$GITHUB_OUTPUT"; echo "release=$release" >> "$GITHUB_OUTPUT"; echo "parts=$parts" >> "$GITHUB_OUTPUT"
 
