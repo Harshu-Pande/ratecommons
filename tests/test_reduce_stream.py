@@ -52,3 +52,18 @@ def test_streamed_merge_of_wave_outputs_matches_duckdb(tmp_path):
     assert duck["tables"]["provider_set"]["rows_out"] == streamed["tables"]["provider_set"]["rows_out"] == 12
     rows = lambda d: sorted((r["ps_id"], tuple(r["pli_ids"])) for r in pq.read_table(d).to_pylist())  # noqa: E731
     assert rows(tmp_path / "duck/provider_set") == rows(tmp_path / "stream/provider_set")
+
+
+def test_sliced_single_table_is_concatenated_whole(tmp_path, monkeypatch):
+    """provider_group is deduplicated in slices, then written as one file (streamed concat)."""
+    monkeypatch.setenv("RC_DIM_SLICE_BYTES", "1")  # force several slices
+    rows = [{"pg_id": bytes([i]) * 16, "tin_type": "ein", "tin_value": f"{i:09d}", "tin_raw": f"{i:09d}",
+             "npis": [1000000000 + i], "npi_count": 1, "tin_wide": False, "business_names": [f"n{i}"]} for i in range(30)]
+    for j, part in enumerate((rows[:20], rows[10:])):
+        d = tmp_path / "map" / f"shard-00{j}-00"
+        d.mkdir(parents=True)
+        pq.write_table(pa.Table.from_pylist(part), d / "provider_group.parquet")
+    res = reduce.reduce_dims_local(str(tmp_path / "map"), "p", str(tmp_path / "out"), "provider_group")
+    t = pq.read_table(tmp_path / "out/provider_group.parquet")
+    assert res["tables"]["provider_group"]["rows_out"] == t.num_rows == 30
+    assert sorted(t.column("pg_id").to_pylist()) == sorted(r["pg_id"] for r in rows)

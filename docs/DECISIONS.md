@@ -3,6 +3,11 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: single-file dims (provider_group, code) are joined from their slices with pyarrow
+- BCBS wave 3 (HCSC's own networks): dims-provider_group deduplicated its slices, then ran DuckDB out of memory
+  (6.5 GB) in the COPY that joins them into one `provider_group.parquet`. The join now streams through
+  `consolidate.concat_parquet` (20k-row batches); same rows.
+
 ## 2026-10-28: packs start only after a successful merge run, and again after a newer one
 - The failed bcbs merge (dims-provider_set OOM) had published rate_fact and source_file, which was all
   `merge_done` checked, so the orchestrator started `serve bcbs:dataset` on an incomplete release (07:35 UTC).

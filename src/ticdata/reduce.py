@@ -640,9 +640,11 @@ def reduce_dims_local(local: str, payer: str, out: str, table: str = "all", dele
                 con.execute(f"COPY ({dedup(piece)}) TO '{dest}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)")
                 n_out += con.execute(f"SELECT count(*) FROM read_parquet('{dest}')").fetchone()[0]
             shutil.rmtree(split, ignore_errors=True)
-            if single:
-                con.execute(f"""COPY (SELECT * FROM read_parquet('{parts_dir}/*.parquet')) TO '{out}/{name}.parquet'
-                                (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)""")
+            if single:  # streamed with pyarrow: a DuckDB COPY of BCBS wave 3's provider groups ran out of 6.5 GB
+                from .consolidate import concat_parquet
+
+                concat_parquet(sorted(str(p) for p in Path(parts_dir).glob("*.parquet")), f"{out}/{name}.parquet",
+                               batch_rows=20000)
                 shutil.rmtree(parts_dir, ignore_errors=True)
         res["tables"][name] = {"rows_in": n_in, "rows_out": n_out}
         if name == "code":  # never publish licensed descriptor text (licensing.py); keep it privately
