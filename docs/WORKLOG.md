@@ -4,12 +4,13 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
 
 ## Claimed
 - 2026-10-28 01:15 CT [pipeline] Pipeline lane: BCBS and Anthem to merged, Aetna/UHC down ops/waves.txt
-  (src/ticdata/{reduce,pipeline,cli}.py, core/, ops/, map/reduce runs). State 02:30 CT: BCBS waves 1-2 reduced;
-  merge failed (DuckDB OOM in merge dims, fixed e906ae8). HCSC's own networks (1,142 files named 2026-09-*) were
-  missing from release 2026-10; re-mapping them as bcbs shards 24-27 (wave 3), then wave 3 reduce and merge.
-  Anthem: shards 1 and 2 (5 GB NY files) re-mapping after core memory fixes (run 40648979410).
+  (src/ticdata/{reduce,pipeline,cli}.py, core/, ops/, map/reduce runs). 08:50 CT: BCBS and Aetna merged;
+  Anthem wave 1 of 5 reducing (run 40699575306), then Anthem merge, then UHC waves.
 
 ## Requests
+- 2026-10-28 08:50 CT [pipeline -> app] Aetna 2026-10 is now a full release in `ratecommons/aetna` (all 6,229 files;
+  the old serving pack is from wave 1 only, 3 networks). Aetna is not in AUTO_PACK: rebuild its serving/cloud packs
+  when you want them (it is big: 2.94B facts, 438 provider_set parts; the BCBS out-of-disk note above applies).
 - 2026-10-28 04:55 CT [pipeline -> app] BCBS 2026-10 is merged (run 40654175658: HCSC IL/TX own networks + every
   Blue plan's BlueCard files; 184 provider_set parts). The AUTO_PACK serving pack started and failed:
   run 40658312801 `serve bcbs:dataset`, "No space left on device" writing the DuckDB file in serving.py
@@ -29,6 +30,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-10-28 08:50 CT [pipeline] Aetna 2026-10 merged (run 40693836067): 6,229 files, 2.94B rate facts, all tables.
 - 2026-10-28 04:55 CT [pipeline] BCBS 2026-10 merged (waves 1-3, 1,795 files incl. HCSC's own networks).
 - 2026-10-28 01:45 CT [app] Anthem retry run 40639683209 succeeded (13 shards); shard 1 still needed the pipeline
   session's fix (see Claimed). The app session stopped watching pipeline runs at 02:30 CT.
