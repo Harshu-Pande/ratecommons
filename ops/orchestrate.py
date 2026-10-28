@@ -18,7 +18,8 @@ BUCKET = "ratecommons/work"
 PIPELINE = {"uhc": 1024}
 MAX_WAVES_IN_FLIGHT = 2
 # payers whose serving pack (serve.yml) and cloud pack (cloud.yml) are built automatically once merged
-AUTO_PACK = ["bcbs", "anthem"]
+# bcbs is paused until its full merge (with wave 3) lands: a failed merge left rate_fact published (2026-10-28)
+AUTO_PACK = ["anthem"]
 
 
 def gh(path, tries=4):
