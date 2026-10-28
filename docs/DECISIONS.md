@@ -3,6 +3,15 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28: the Rust core's reference pass flushes provider lists by id count, and holds each reference's ids once
+- Anthem shard 1 (three NY files, `NY_HX*MED*.json.gz`, 5 GB gzip each) died in the Rust core at ~240 s, max RSS
+  15 GB of 16, before any rate was written: 17 GB of provider_references (~48k groups, each reference listing
+  thousands of them). RSS climbed ~0.4 GB per GB of references and spiked by ~8 GB whenever the main thread sent
+  its batch of 20,000 provider lists to the writer (no size cap there, unlike the workers' 2M-id cap).
+- The reference pass now sends provider lists every 2M ids (`TIC_PLI_BATCH_IDS`, counted as `ref_pli_batches`),
+  and the lookup map and the provider_reference rows share one `Arc` of each reference's ids instead of two copies.
+  Same tables and IDs (parity test with small batches); retry anthem shard 1.
+
 ## 2026-10-28: list dimension reduce (provider_set, provider_list, price_list, price_term) is streamed with pyarrow
 - BCBS wave 1: dims-provider_set and dims-provider_list ran DuckDB out of memory (6.5 GiB) in the hash-split COPY;
   BlueCard provider sets hold thousands of list ids per row.

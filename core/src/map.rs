@@ -236,7 +236,7 @@ struct Outs {
 struct Worker<'s> {
     sh: &'s Shared,
     rc: Option<&'s RecordCache>,
-    refs: &'s HashMap<String, (Id, Vec<Id>)>,
+    refs: &'s HashMap<String, (Id, Arc<Vec<Id>>)>,
     out: Outs,
     flags: Flags,
     counts: HashMap<&'static str, u64>,
@@ -394,7 +394,7 @@ impl<'s> Worker<'s> {
     /// stored as the provider lists (one per reference, or one inline list) it was built from,
     /// because Aetna sets name thousands of groups and the same lists recur across sets.
     fn resolve_set(&mut self, nr: &RawObject) -> Id {
-        let mut packed: Vec<&(Id, Vec<Id>)> = Vec::new();
+        let mut packed: Vec<&(Id, Arc<Vec<Id>>)> = Vec::new();
         let refs_v = nr.get("provider_references");
         if let Some(a) = arr(refs_v) {
             for rid in a.0 {
@@ -818,8 +818,11 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
 
     let mut main_flags = Flags::default();
     let mut main_counts: HashMap<&'static str, u64> = HashMap::default();
-    let mut refs: HashMap<String, (Id, Vec<Id>)> = HashMap::default();
+    // a reference's group ids are held once, shared by the lookup map and the provider_reference rows
+    let mut refs: HashMap<String, (Id, Arc<Vec<Id>>)> = HashMap::default();
     let mut pli_rows: Vec<(Id, Vec<Id>)> = Vec::new();
+    let mut pli_row_ids: usize = 0;
+    let pli_batch_ids: usize = std::env::var("TIC_PLI_BATCH_IDS").ok().and_then(|v| v.parse().ok()).unwrap_or(2_000_000);
     let mut ref_rows: Vec<RefRow> = Vec::new();
     let mut ref_index: HashMap<Option<String>, usize> = HashMap::default();
     let mut header = serde_json::Map::new();
@@ -834,7 +837,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     // workers start lazily, when the first in_network record arrives (references are complete then)
     let mut item_tx: Option<Sender<(u128, Vec<u8>)>> = None;
     let mut handles: Vec<std::thread::JoinHandle<(Flags, HashMap<&'static str, u64>, HashSet<&'static str>)>> = Vec::new();
-    let mut refs_arc: Option<Arc<HashMap<String, (Id, Vec<Id>)>>> = None;
+    let mut refs_arc: Option<Arc<HashMap<String, (Id, Arc<Vec<Id>>)>>> = None;
 
     // records waiting for or inside workers are bounded by bytes, not only by count: one in_network
     // record can be hundreds of MB, and 256 of those would exhaust a 16 GB runner
@@ -910,6 +913,7 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                 }
                 ids.sort_unstable();
                 ids.dedup();
+                let ids = Arc::new(ids);
                 if r.has("location") {
                     main_flags.add("remote_provider_reference");
                 }
@@ -929,12 +933,16 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
                         ref_rows.push(row);
                     }
                 }
-                let mut lid_src = ids.clone();
-                let lid = h_ids(b"pli", &mut lid_src);
-                // provider lists are written here, once per distinct reference list (parse.py does the same)
+                let lid = h_sorted(b"pli", &ids); // ids are sorted and distinct: same hash as h_ids, no copy
+                // provider lists are written here, once per distinct reference list (parse.py does the same);
+                // batches are bounded by ids too: Anthem NY references list ~25k groups each, and 20,000 of
+                // them (8 GB) took a 16 GB runner down
                 if sh.pli_seen.insert(&lid) {
-                    pli_rows.push((lid, ids.clone()));
-                    if pli_rows.len() >= 20_000 {
+                    pli_row_ids += ids.len();
+                    pli_rows.push((lid, (*ids).clone()));
+                    if pli_rows.len() >= 20_000 || pli_row_ids >= pli_batch_ids {
+                        pli_row_ids = 0;
+                        *main_counts.entry("ref_pli_batches").or_insert(0) += 1;
                         wtx.other.send(Msg::Pli(std::mem::take(&mut pli_rows))).unwrap();
                     }
                 }

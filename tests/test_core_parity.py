@@ -80,3 +80,29 @@ def test_rust_matches_python_on_real_files(tmp_path):
     for i, f in enumerate(os.environ["TIC_PARITY_FILES"].split(",")):
         d = run_both(f, tmp_path / str(i), threads=3)
         assert d == {}, (f, d)
+
+
+@pytest.mark.skipif(not BIN.exists(), reason="Rust core not built")
+def test_rust_matches_python_with_wide_references_in_small_batches(tmp_path):
+    """Provider lists of the reference pass flush by id count (Anthem NY: ~25k groups per reference)."""
+    import gzip
+
+    groups = [{"npi": [1000000000 + i], "tin": {"type": "ein", "value": f"{100000000 + i // 7}"}} for i in range(300)]
+    refs = [{"provider_group_id": r, "provider_groups": groups[r % 50:r % 50 + 120 + r]} for r in range(40)]
+    items = [{"negotiation_arrangement": "ffs", "name": "x", "billing_code_type": "CPT", "billing_code_type_version": "2026",
+              "billing_code": f"{99200 + c}", "description": "d",
+              "negotiated_rates": [{"provider_references": [c, c + 1, 39 - c],
+                                    "negotiated_prices": [{"negotiated_type": "negotiated", "negotiated_rate": 10.5 + c,
+                                                           "expiration_date": "9999-12-31", "billing_class": "professional"}]}]}
+             for c in range(20)]
+    doc = {"reporting_entity_name": "t", "reporting_entity_type": "payer", "last_updated_on": "2026-10-01", "version": "1.0.0",
+           "provider_references": refs, "in_network": items}
+    src = tmp_path / "wide.json.gz"
+    with gzip.open(src, "wt") as f:
+        json.dump(doc, f)
+    os.environ["TIC_PLI_BATCH_IDS"] = "500"
+    try:
+        assert run_both(str(src), tmp_path) == {}
+    finally:
+        del os.environ["TIC_PLI_BATCH_IDS"]
+    assert json.loads((tmp_path / "rs/meta.json").read_text())["counts"]["ref_pli_batches"] >= 2

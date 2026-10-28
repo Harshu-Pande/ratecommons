@@ -131,7 +131,7 @@ pub struct CodeRow {
 }
 pub struct RefRow {
     pub provider_group_id: Option<String>,
-    pub pg_ids: Vec<Id>,
+    pub pg_ids: std::sync::Arc<Vec<Id>>,
     pub network_name: Vec<String>,
     pub location: Option<String>,
 }
@@ -215,7 +215,7 @@ pub fn ps_cols(rows: &[(Id, Vec<Id>)]) -> Vec<ArrayRef> {
 pub fn ref_cols(rows: &[RefRow]) -> Vec<ArrayRef> {
     vec![
         strs(rows.iter().map(|r| r.provider_group_id.as_deref())),
-        id_lists(rows.iter().map(|r| &r.pg_ids)),
+        id_lists(rows.iter().map(|r| r.pg_ids.as_ref())),
         str_lists(rows.iter().map(|r| &r.network_name)),
         strs(rows.iter().map(|r| r.location.as_deref())),
     ]
