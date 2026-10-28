@@ -864,8 +864,16 @@ def coverage_notes(args: dict) -> list[str]:
                                                  f"({', '.join(_lit(c) for c in outside)})")} if outside else set()
         main_only = [c for c in outside if c in packed]
         absent = [c for c in outside if c not in packed]
-        scope = (f"its {len(mains)} main networks ({'; '.join(mains[:8])}{' ...' if len(mains) > 8 else ''})"
-                 if mains else "no network")
+        if not mains:  # a common-services pack without main networks
+            if outside:
+                notes.append(f"{name}: this version holds only common services ({len(have)} codes + flat all-services "
+                             f"contracts); {', '.join(outside[:10])} not included here. That is not the same as "
+                             "'no published rate': the payer's full file has more.")
+            elif not asked:
+                notes.append(f"{name}: this version holds only common services ({len(have)} codes + flat all-services "
+                             "contracts); network and provider lists come from those rates.")
+            continue
+        scope = f"its {len(mains)} main networks ({'; '.join(mains[:8])}{' ...' if len(mains) > 8 else ''})"
         if main_only:
             notes.append(f"{name}: for {', '.join(main_only[:10])} this version has rates for {scope} only; its other "
                          f"networks are loaded for {len(have)} common services. A network missing here may still "
