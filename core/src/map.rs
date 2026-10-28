@@ -1101,7 +1101,19 @@ pub fn map_file(path: &str, outdir: &str, threads: usize, source: serde_json::Va
     let (r, b) = w.close();
     tables["provider_group"] = serde_json::json!({"rows": r, "bytes": b});
     let mut w = Pq::create(&format!("{outdir}/provider_reference.parquet"), "provider_reference");
-    w.write(ref_cols(&ref_rows), "provider_reference");
+    // in batches of ~2M ids: one Arrow batch of every reference of an Anthem NY file did not fit in 16 GB
+    let (mut start, mut n_ids) = (0usize, 0usize);
+    for (i, r) in ref_rows.iter().enumerate() {
+        n_ids += r.pg_ids.len();
+        if n_ids >= pli_batch_ids || i + 1 == ref_rows.len() {
+            w.write(ref_cols(&ref_rows[start..=i]), "provider_reference");
+            start = i + 1;
+            n_ids = 0;
+        }
+    }
+    if ref_rows.is_empty() {
+        w.write(ref_cols(&[]), "provider_reference");
+    }
     let (r, b) = w.close();
     tables["provider_reference"] = serde_json::json!({"rows": r, "bytes": b});
     if refs_after_items {

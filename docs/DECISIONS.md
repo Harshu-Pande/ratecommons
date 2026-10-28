@@ -17,6 +17,8 @@ Newest first. One entry per lesson: what we saw, what we changed.
 - The reference pass now sends provider lists every 2M ids (`TIC_PLI_BATCH_IDS`, counted as `ref_pli_batches`),
   and the lookup map and the provider_reference rows share one `Arc` of each reference's ids instead of two copies.
   Same tables and IDs (parity test with small batches); retry anthem shard 1.
+- The retry still failed. Run locally under a 12 GB cap, the core aborted at the end of the file: provider_reference
+  was written as one Arrow batch of every reference's ids. It is now written in batches of ~2M ids as well.
 
 ## 2026-10-28: list dimension reduce (provider_set, provider_list, price_list, price_term) is streamed with pyarrow
 - BCBS wave 1: dims-provider_set and dims-provider_list ran DuckDB out of memory (6.5 GiB) in the hash-split COPY;
