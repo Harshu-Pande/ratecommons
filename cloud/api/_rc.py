@@ -549,10 +549,15 @@ def _per_pg_sql(place: str, modifier: str) -> tuple[str, str]:
 def market_distribution(code, state, payer="all", network="", city="", zip_prefix="", specialty="",
                         billing_class="professional", group_by="payer", place="office", modifier=""):
     code, state = _code(code), _st(state)
-    where, sel = _per_pg_sql(place, modifier)
-    per = _for_payers(payer, lambda p: _rows(p, [code], state, None, network or None, city or None, zip_prefix or None,
-                                             specialty or None, None, billing_class or None, where=where, select=sel,
-                                             group="payer, product, billing_class, setting, code, pg"))
+
+    def run(place):
+        where, sel = _per_pg_sql(place, modifier)
+        return _for_payers(payer, lambda p: _rows(p, [code], state, None, network or None, city or None, zip_prefix or None,
+                                                  specialty or None, None, billing_class or None, where=where, select=sel,
+                                                  group="payer, product, billing_class, setting, code, pg"))
+    per = run(place)
+    if not per and place == "office":  # surgeries are often priced only for facility places of service (Anthem 27447)
+        per, place = run("any"), "any (no office-setting rate published)"
     keys = {"payer": ["payer"], "product": ["payer", "product"], "network": ["payer", "product"],
             "setting": ["payer", "billing_class", "setting"], "none": []}.get(group_by or "payer", ["payer"])
     groups: dict = {}
@@ -563,7 +568,7 @@ def market_distribution(code, state, payer="all", network="", city="", zip_prefi
     nf, fa = m.get((code, mod), (None, None))
     med = fa if place == "facility" else nf
     out = []
-    for k, pgs in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+    for k, pgs in sorted(groups.items(), key=lambda kv: -len(kv[1])):  # noqa: B007
         vals = [sorted(v)[len(v) // 2] for v in pgs.values()]  # one value per provider group
         row = dict(zip(keys, k))
         row.update({"state": state, "code": code, "provider_groups": len(pgs), **_quantiles(vals), "medicare": med,
