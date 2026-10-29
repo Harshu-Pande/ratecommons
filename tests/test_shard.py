@@ -295,3 +295,25 @@ def test_batched_split_of_a_big_fact_part_gives_the_same_wave(tmp_path, monkeypa
             R.reduce_part("test", "2026-10", k, "b", str(tmp_path / label), workdir=str(tmp_path / f"w-{label}-{k}"),
                           shards=(0, 3), keys=True)
     assert _fact_sets(tmp_path / "one") == _fact_sets(tmp_path / "batched")
+
+
+def test_a_payer_waiting_for_shards_does_not_stall_the_next(monkeypatch):
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ops"))
+    import orchestrate
+
+    waves = [["bcbs", "2026-10", "3", "24-27"], ["bcbs", "2026-10", "4", "28-33"], ["bcbs", "2026-10", "merge"],
+             ["uhc", "2026-10", "4", "36-47"]]
+    calls = []
+    monkeypatch.setattr(orchestrate, "gh", lambda path: {"workflow_runs": []})
+    for step in ("clean", "start_maps", "packs"):
+        monkeypatch.setattr(orchestrate, step, lambda w: None)
+    monkeypatch.setattr(orchestrate, "wave_done", lambda p, r, w: (p, w) == ("bcbs", "3"))
+    monkeypatch.setattr(orchestrate, "merge_done", lambda *a: False)
+    monkeypatch.setattr(orchestrate, "mapped_shards", lambda p, r: set(range(0, 28)) if p == "bcbs" else set(range(48)))
+    monkeypatch.setattr(orchestrate.subprocess, "check_call", lambda cmd: calls.append(cmd))
+    monkeypatch.setattr("builtins.open", lambda *a, **k: __import__("io").StringIO(
+        "\n".join(" ".join(w) for w in waves)))
+    orchestrate.main()
+    assert calls and calls[0][-1] == "inputs[request]=uhc 2026-10 all wave=4 36-47"

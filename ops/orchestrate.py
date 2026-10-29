@@ -42,14 +42,35 @@ def wave_done(payer, release, wave):
     return parts and dims and f"{prefix}code.parquet" in paths and f"{prefix}metas.json" in paths
 
 
-def merge_done(payer, release):
+def merge_done(payer, release, waves=None):
     """Every merged table is in the payer dataset (a failed merge job can leave the others published:
-    BCBS's provider_set ran out of memory while rate_fact and source_file landed, 2026-10-28)."""
+    BCBS's provider_set ran out of memory while rate_fact and source_file landed, 2026-10-28), and, given the waves,
+    the release holds as many files as its waves (a wave added after the merge, e.g. more Blue companies, re-merges)."""
     files = HfApi().list_repo_files(f"ratecommons/{payer}", repo_type="dataset")
     r = f"release={release}/"
-    return all(f"{r}rate_fact/part-{k:02d}.parquet" in files for k in range(16)) and \
+    tables = all(f"{r}rate_fact/part-{k:02d}.parquet" in files for k in range(16)) and \
         all(f"{r}{t}.parquet" in files for t in ("source_file", "network", "code", "provider_group")) and \
         all(any(f.startswith(f"{r}{t}/") for f in files) for t in ("provider_set", "provider_list", "price_list", "price_term"))
+    if not tables or waves is None:
+        return tables
+    return merged_files(payer, release) >= sum(wave_files(payer, release, w[2]) for w in waves
+                                               if w[0] == payer and w[1] == release and w[2] != "merge")
+
+
+def merged_files(payer, release):
+    """Files in a merged release (rows of source_file.parquet)."""
+    import pyarrow.parquet as pq
+    from huggingface_hub import HfFileSystem
+
+    with HfFileSystem().open(f"datasets/ratecommons/{payer}/release={release}/source_file.parquet") as f:
+        return pq.ParquetFile(f).metadata.num_rows
+
+
+def wave_files(payer, release, wave):
+    """Files reduced into a wave (its metas.json lists one meta per file)."""
+    from huggingface_hub import HfFileSystem
+
+    return len(json.loads(HfFileSystem().read_text(f"buckets/{BUCKET}/reduced/{release}/{payer}/wave-{wave}/metas.json")))
 
 
 def mapped_shards(payer, release):
@@ -221,26 +242,33 @@ def main():
         print(f"last reduce run {runs[0]['id']} ended {runs[0]['conclusion']}; stopping until someone looks")
         return
 
-    mapped = None
+    # a payer waiting for shards (or for its waves, at the merge) holds only its own later lines: BCBS waves added
+    # after the merge must not stall UHC, nor wait behind 86 UHC waves
+    mapped, blocked = {}, set()
     for w in waves:
         payer, release = w[0], w[1]
+        if payer in blocked:
+            continue
         if w[2] == "merge":
-            if merge_done(payer, release):
+            if merge_done(payer, release, waves):
                 continue
             if all(wave_done(payer, release, x[2]) for x in waves if x[0] == payer and x[2] != "merge"):
                 req = f"{payer} {release} all merge"
             else:
-                print("merge waits for the waves")
-                return
+                print(f"{payer} merge waits for its waves")
+                blocked.add(payer)
+                continue
         else:
             if wave_done(payer, release, w[2]):
                 continue
             a, b = map(int, w[3].split("-"))
-            mapped = mapped if mapped is not None else mapped_shards(payer, release)
-            missing = [s for s in range(a, b + 1) if s not in mapped]
+            if (payer, release) not in mapped:
+                mapped[(payer, release)] = mapped_shards(payer, release)
+            missing = [s for s in range(a, b + 1) if s not in mapped[(payer, release)]]
             if missing:
-                print(f"wave {w[2]} waits for shards {missing[:10]}{'...' if len(missing) > 10 else ''}")
-                return
+                print(f"{payer} wave {w[2]} waits for shards {missing[:10]}{'...' if len(missing) > 10 else ''}")
+                blocked.add(payer)
+                continue
             req = f"{payer} {release} all wave={w[2]} {w[3]}"
         print("dispatching:", req)
         subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/workflows/reduce.yml/dispatches",

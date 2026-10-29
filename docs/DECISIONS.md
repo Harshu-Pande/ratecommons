@@ -3,6 +3,14 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-29: the reduce chain blocks per payer; a merge is redone when its waves hold more files
+- A wave waiting for its shards used to stop the whole chain: BCBS wave 4 (other Blue companies, added after the BCBS
+  merge) would have stalled every UHC wave, or waited behind 86 of them at the end of waves.txt. Now a payer waiting
+  for shards, or a merge waiting for its waves, only skips that payer's later lines.
+- `merge_done` also compares the release's files (rows of source_file.parquet) with the files of its waves (each wave's
+  metas.json), so the added wave re-merges BCBS; Aetna 6,229/6,229, Anthem 1,002/1,002, BCBS 1,911/1,911 today.
+  AUTO_PACK then rebuilds serve -> cloud -> shop after that newer merge. bcbs joins `STATUS_REQUIRED`.
+
 ## 2026-10-29: the other Blue companies' own networks: where they are, and how little is new
 - Research (index host, reachability, distinct own files and gzip size of the fully insured indexes, measured from a Claude
   session on 2026-10-29; self-funded employer indexes repeat the same networks):

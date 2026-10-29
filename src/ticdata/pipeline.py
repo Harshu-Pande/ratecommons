@@ -32,7 +32,7 @@ def file_key(name: str) -> str:
 # payers whose shards count as mapped only once their run has written shard-NNN-status.json with no failures:
 # each chunk of a running shard uploads its own metas.json, so "has a metas.json" let the orchestrator reduce
 # UHC wave 3 while its shards were still parsing (2026-10-28)
-STATUS_REQUIRED = {"uhc"}
+STATUS_REQUIRED = {"uhc", "bcbs"}  # bcbs: shards 24+ have status files; waves added later have several chunks per shard
 
 
 def shard_status(bucket: str, release: str, payer: str) -> dict[int, list[str]]:
