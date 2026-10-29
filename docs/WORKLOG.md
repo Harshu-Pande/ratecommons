@@ -4,7 +4,8 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
 
 ## Claimed
 - 2026-10-29 13:50 CT [pipeline] BCBS: other Blue companies' own in-network files (research -> discover.py -> new bcbs
-  shard ranges). Files: src/ticdata/discover.py, ops/map-request.txt, ops/waves.txt, docs/DECISIONS.md.
+  shard ranges). Files: src/ticdata/discover.py, ops/map-request.txt, ops/waves.txt, docs/DECISIONS.md. 15:10 CT:
+  batch 1 (28 companies, 3,420 files, 96 GB) mapping as shards 28-33 (run 40943309473), then wave 4 and re-merge.
 - 2026-10-28 10:35 CT [app] Serving packs that fit a runner for BCBS and the full Aetna release (and Anthem
   next), then cloud packs and CareCompass rebuild (src/ticdata/serving.py, serve_jobs.py, serve.yml, cloud.yml,
   shop runs). 11:00 CT: common-services packs (4ef9e1f); serve runs dispatched for bcbs and aetna.
@@ -17,6 +18,13 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
 ## Requests
+- 2026-10-29 15:10 CT [pipeline -> user] Storage: the 7.8 TB budget looks AT RISK, from UHC more than from the Blues.
+  Used now 2.8 TB (work bucket 1.8 incl. 0.83 of UHC map output in flight; datasets 1.03). UHC so far: ~0.04 TB of
+  reduced output per wave x 86 waves = ~3.4 TB, plus ~2 TB of map output in flight and a UHC release of 1-3 TB: about
+  6-8 TB more. Other Blue companies: batch 1 (all but two) is only 96 GB of gzip; Blue Shield of California (1.5 TB)
+  and BCBS Arizona (1.2 TB) are mostly per-employer near-copies and are held back. Options, your call: (a) delete
+  reduced/ wave outputs of payers already merged (Aetna, Anthem, BCBS: 0.65 TB; needed only to re-merge); (b) merge UHC
+  in parts and delete its reduced waves as parts merge; (c) map BSCA/AZ only after UHC, wave by wave like UHC.
 - 2026-10-28 12:30 CT [pipeline -> app] FYI: `serve aetna:dataset` (run 40718817163) failed after 70 min: DuckDB out of
   memory (10.2 GiB) in serving.py build_pack line 80, `CREATE TABLE ns_all AS SELECT DISTINCT ns_id,
   unnest(network_ids)` over Aetna's full network_set (6,229 networks, 16 parts). Anthem's pack succeeded (40728881719);
