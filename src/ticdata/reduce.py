@@ -110,10 +110,60 @@ def reduce_part(payer: str, release: str, part: int, bucket: str, out: str, toke
     want = [p for p in allp if p.endswith("/meta.json") or p.endswith("/metas.json")
             or p.endswith("/file_block.parquet") or p.endswith(f"/rate_fact/part-{part:02d}.parquet")]
     local = os.path.join(workdir, f"p{part:02d}")
+    facts = [p for p in want if p.endswith(f"/rate_fact/part-{part:02d}.parquet")]
+    presplit = None
+    if facts:
+        from huggingface_hub import list_bucket_tree
+
+        size = {i.path: getattr(i, "size", 0) or 0 for i in list_bucket_tree(bucket, prefix=prefix, recursive=True,
+                                                                             token=token)}
+        if sum(size.get(p, 0) for p in facts) > int(os.environ.get("RC_BATCH_SPLIT_BYTES", 20 << 30)):
+            # download and slice a batch at a time: UHC wave 3's ~44 GB per part plus its sliced copy filled
+            # the runner's 104 GB of disk
+            presplit = _fetch_split_facts(bucket, facts, local, prefix, token, part, size)
+            want = [p for p in want if p not in facts]
     _fetch(bucket, want, local, prefix, token)
-    res = reduce_part_local(local, payer, release, part, out, keys=keys, delete_inputs=True)
+    res = reduce_part_local(local, payer, release, part, out, keys=keys, delete_inputs=True, presplit=presplit)
     res["download_seconds"] = round(time.time() - t0, 1) - res["seconds"]
     return res
+
+
+def _fetch_split_facts(bucket: str, paths: list[str], local: str, prefix: str, token, part: int,
+                       size: dict) -> tuple[int, int]:
+    """Download fact files in batches (~12 GB) and hash-slice each batch by fact_id into fact_split-XX, deleting the
+    batch. Returns (slices, rows). The slice count comes from the first batch's rows per byte, plus 10%."""
+    import shutil
+
+    import pyarrow.parquet as pq
+
+    total = sum(size.get(p, 0) for p in paths)
+    cap = int(os.environ.get("RC_SPLIT_BATCH_BYTES", 12 << 30))
+    batches, cur, cb = [], [], 0
+    for p in paths:
+        cur.append(p)
+        cb += size.get(p, 0)
+        if cb >= cap:
+            batches.append(cur)
+            cur, cb = [], 0
+    if cur:
+        batches.append(cur)
+    split = f"{local}/fact_split-{part:02d}"
+    k, rows = None, 0
+    con = _duck(local)
+    for n, b in enumerate(batches):
+        files = _fetch(bucket, b, f"{local}/batch", prefix, token)
+        r = sum(pq.ParquetFile(f).metadata.num_rows for f in files)
+        if k is None:
+            est = r * total / max(sum(size.get(p, 0) for p in b), 1) * 1.1
+            k = max(2, int(est) // int(os.environ.get("RC_SLICE_ROWS", "15000000")) + 1)  # reduce reads slices
+        con.execute(f"""COPY (SELECT *, (hash(fact_id) % {k})::INTEGER AS _slice FROM read_parquet({files!r}))
+                        TO '{split}' (FORMAT parquet, PARTITION_BY (_slice), OVERWRITE_OR_IGNORE true,
+                                      FILENAME_PATTERN 'b{n}_{{uuid}}')""")
+        rows += r
+        shutil.rmtree(f"{local}/batch", ignore_errors=True)
+        _log(f"part {part}: split batch {n + 1}/{len(batches)}, {len(files)} files, {r:,} rows")
+    con.close()
+    return k, rows
 
 
 def _log(msg: str) -> None:
@@ -189,7 +239,7 @@ def _ns_map(con, keyed: str, members: str, name: str) -> int:
 
 
 def reduce_part_local(local: str, payer: str, release: str, part: int, out: str, keys: bool = False,
-                      delete_inputs: bool = False) -> dict:
+                      delete_inputs: bool = False, presplit: tuple[int, int] | None = None) -> dict:
     """Distinct facts of one partition, each with the set of networks (derived from files) it appears in.
 
     Memory stays flat: no list aggregates over the big input, only fixed-size group states.
@@ -202,9 +252,13 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
     os.makedirs(f"{out}/rate_fact", exist_ok=True)
     os.makedirs(f"{out}/network_set", exist_ok=True)
     res = {"part": part, "files": len(files), "networks": len({n["network_id"] for n in nets}), "seconds": 0.0}
-    if not files:
+    if presplit:  # facts already hash-sliced into fact_split-XX by _fetch_split_facts
+        res["rows_in"] = presplit[1]
+        res["files"] = len(nets)
+    elif not files:
         return res
-    res["rows_in"] = sum(pq.ParquetFile(f).metadata.num_rows for f in files)
+    else:
+        res["rows_in"] = sum(pq.ParquetFile(f).metadata.num_rows for f in files)
     _log(f"part {part}: {len(files)} fact files, {res['rows_in']:,} rows, "
          f"{sum(os.path.getsize(f) for f in files) / 1e9:.1f} GB")
     raw_con = _duck(local)
@@ -224,6 +278,8 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
     key = lambda p: Path(p).parts[-3]  # <file key>/rate_fact/part-XX.parquet
     tmp = f"{local}/facts_tmp.parquet"
     fbs = sorted(str(p) for p in Path(local).glob("*/file_block.parquet"))
+    if presplit and not fbs:
+        raise RuntimeError("pre-split facts need block-mode map output (file_block.parquet)")
     if fbs:
         # block membership: a fact's networks are the union over the blocks (billing-code records) it
         # appears in; the map wrote each block's facts once per shard and every file's block list
@@ -251,12 +307,12 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
                        FROM bnet b JOIN nets n USING (net) GROUP BY b.block_id""")
         # facts are grouped in slices by hash(fact_id): BLOB/VARCHAR aggregate states do not spill,
         # so each slice must fit in memory (about 15 million input rows per slice)
-        k = max(1, res["rows_in"] // int(os.environ.get("RC_SLICE_ROWS", "15000000")) + 1)
+        k = presplit[0] if presplit else max(1, res["rows_in"] // int(os.environ.get("RC_SLICE_ROWS", "15000000")) + 1)
         res["slices"] = k
         os.makedirs(f"{local}/facts_tmp", exist_ok=True)
         multi_n = 0
         split = f"{local}/fact_split-{part:02d}"
-        if k > 1:  # one streaming pass splits the input by slice, so each slice reads only its rows
+        if k > 1 and not presplit:  # one streaming pass splits the input by slice, so each slice reads only its rows
             con.execute(f"""COPY (SELECT *, (hash(fact_id) % {k})::INTEGER AS _slice FROM read_parquet({files!r}))
                             TO '{split}' (FORMAT parquet, PARTITION_BY (_slice), OVERWRITE_OR_IGNORE true)""")
             if delete_inputs:  # the split copy replaces the downloaded input on disk

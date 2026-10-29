@@ -242,3 +242,56 @@ def test_start_maps_reruns_only_missing_shards(monkeypatch):
     waves = [["uhc", "2026-10", "1", "0-11"], ["uhc", "2026-10", "2", "12-23"], ["uhc", "2026-10", "3", "24-35"]]
     orchestrate.start_maps(waves)
     assert calls and calls[0][-1] == "inputs[range]=32"
+
+
+def test_batched_split_of_a_big_fact_part_gives_the_same_wave(tmp_path, monkeypatch):
+    """reduce_part with facts downloaded and sliced batch by batch equals the one-download path."""
+    import shutil
+    from types import SimpleNamespace
+
+    import huggingface_hub
+
+    from ticdata import reduce as R
+    from ticdata.pipeline import run_shard
+
+    web = tmp_path / "web"
+    web.mkdir()
+    names = []
+    for i in range(4):
+        d = copy.deepcopy(DOC)
+        d["in_network"][0]["negotiated_rates"][0]["negotiated_prices"][0]["negotiated_rate"] = 50.0 + (i % 2)
+        d["last_updated_on"] = f"2026-10-0{i + 1}"
+        n = f"2026-10-01_{i}.json.gz"
+        (web / n).write_bytes(gzip.compress(json.dumps(d).encode()))
+        names.append(n)
+    srv = _serve(web)
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    plan = {"payer": "test", "shards": [{"shard": i, "files": [{"name": n, "url": f"{base}/{n}"}]}
+                                        for i, n in enumerate(names)]}
+    remote = tmp_path / "remote" / "map/2026-10/test"
+    for sh in range(4):
+        run_shard(plan, sh, workdir=str(tmp_path / "work"), chunk_out=str(remote))
+    srv.shutdown()
+    root = tmp_path / "remote"
+    paths = [str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()]
+
+    def fetch(bucket, ps, dest, prefix, token):
+        out = []
+        for p in ps:
+            d = os.path.join(dest, os.path.relpath(p, prefix))
+            os.makedirs(os.path.dirname(d), exist_ok=True)
+            shutil.copy(root / p, d)
+            out.append(d)
+        return out
+
+    monkeypatch.setattr(R, "_list", lambda b, prefix, t: [p for p in paths if p.startswith(prefix)])
+    monkeypatch.setattr(R, "_fetch", fetch)
+    monkeypatch.setattr(huggingface_hub, "list_bucket_tree", lambda *a, **k: [
+        SimpleNamespace(path=p, size=(root / p).stat().st_size) for p in paths])
+    for label, limit in (("one", str(1 << 40)), ("batched", "0")):
+        monkeypatch.setenv("RC_BATCH_SPLIT_BYTES", limit)
+        monkeypatch.setenv("RC_SPLIT_BATCH_BYTES", "1")  # one file per batch
+        for k in range(16):
+            R.reduce_part("test", "2026-10", k, "b", str(tmp_path / label), workdir=str(tmp_path / f"w-{label}-{k}"),
+                          shards=(0, 3), keys=True)
+    assert _fact_sets(tmp_path / "one") == _fact_sets(tmp_path / "batched")

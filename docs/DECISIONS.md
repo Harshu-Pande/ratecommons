@@ -3,6 +3,14 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-29: big fact parts are downloaded and sliced in batches
+- UHC wave 3's reduce lost 14 of 16 fact runners to a full disk ("No space left on device" even for the runner's
+  own log): ~44 GB of map facts per part (wave 1: ~32 GB), downloaded whole and then copied into hash slices, so
+  ~88 GB sat on the runner's 104 GB at once.
+- A fact part over 20 GB (`RC_BATCH_SPLIT_BYTES`) is now fetched in ~12 GB batches; each batch is sliced into
+  `fact_split-XX` (DuckDB `FILENAME_PATTERN 'b<n>_{uuid}'`, so batches append) and deleted before the next.
+  The slice count comes from the first batch's rows per byte plus 10%. Same wave output (test).
+
 ## 2026-10-28 (night): the app's rate query narrows hop by hop, with integer keys, in price slices for heavy codes
 - With Aetna's every-code pack, office visits in Texas (5.5M price rows, 34M set -> list links in the state) and head
   CT in Tennessee ran the 1.7 GB function out of memory: the query expanded sets to groups before narrowing.
