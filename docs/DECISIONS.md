@@ -3,6 +3,18 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-29: BCBS IL/TX and Anthem get every code for main networks; wide lists split per state
+- BCBS main networks: every TN home family + the 3 largest IL (PPO, Blue Options, TraditionalBlue) and TX (Blue
+  Choice PPO, Blue Essentials, ParPlan) home families (RC_BCBS_MAIN_PLANS). Pack: 309M rate rows, 644M set -> list
+  links, 17 GB; 22,821 codes in the app. Two OOM fixes: group states from distinct (group, state) pairs (serving.py);
+  the per-group display summary as its own step with 2 threads per state (cloudpack.py).
+- Anthem: every code for its 5 largest families (29,340 codes). Its lists are wide (Indiana: 2,731 lists of >5,000
+  groups hold 2/3 of the rows), so states over 2M list -> group rows are split: narrow lists per code bucket
+  (plipg/<t>/<b>.parquet) + one file per wide list (biglist/<pli>.parquet, index biglists.parquet). The app fetches
+  only the lists a question uses (Indiana 99213: 3.5 s; it failed before on a 706 MB file).
+- market_distribution falls back to every place of service when no office-setting rate is published (Anthem prices
+  27447 only for facility places of service).
+
 ## 2026-10-29: the reduce chain blocks per payer; a merge is redone when its waves hold more files
 - A wave waiting for its shards used to stop the whole chain: BCBS wave 4 (other Blue companies, added after the BCBS
   merge) would have stalled every UHC wave, or waited behind 86 of them at the end of waves.txt. Now a payer waiting
