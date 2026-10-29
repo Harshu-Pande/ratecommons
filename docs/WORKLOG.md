@@ -41,6 +41,8 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-10-29 06:20 CT [pipeline] UHC wave 3 reduce 40847293649: dims ok, 14 fact parts lost their runners (disk full,
+  ~44 GB per part). Fix e6fd5e5 (batched download + slice); facts-only re-run queued behind it. Wave 4 mapped (40833009843).
 - 2026-10-29 04:10 CT [pipeline] UHC wave 3 mapped clean (run 40810183212, with the download resume fix; shards 24, 25,
   32 had broken downloads before it). `wave-ready` passed; wave 3 reduce dispatched (40847293649). Orchestrator is
   mapping wave 4 (40833009843).
