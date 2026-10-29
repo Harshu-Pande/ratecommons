@@ -296,7 +296,12 @@ def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NE
         ranked = sorted(fam.values(), key=lambda g: -len(g["score"]))[:n]
         return [i for g in ranked for i in g["ids"]]
     label = _label_fn()
-    want = os.environ.get("RC_BCBS_MAIN_PLANS", "TN").split(",")
+    # "TN:all,IL:3,TX:3": every home family of TN, the 3 largest of IL and of TX (IL/TX lists are wide)
+    cap = {}
+    for x in os.environ.get("RC_BCBS_MAIN_PLANS", "TN:all,IL:3,TX:3").split(","):
+        k, _, v = x.partition(":")
+        cap[k.strip()] = None if v in ("", "all") else int(v)
+    want = list(cap)
     for nid, names, b in rows:
         if payer == "bcbs":  # home networks only (BlueCard files are other plans' networks)
             if all(re.match(r"\d{4}-\d{2}_\d{3}_[0-9A-Z]{4}_", x) for x in names):
@@ -311,7 +316,15 @@ def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NE
         g["ids"].append(nid)
         g["score"] += b or 0
     ranked = sorted(fam.items(), key=lambda kv: -kv[1]["score"])
-    if payer != "bcbs":
+    if payer == "bcbs":  # per Blue plan caps
+        kept, cnt = [], {}
+        for k, g in ranked:
+            pl = "TN" if "Tennessee" in k else "IL" if ("BCBSIL" in k or "Illinois" in k) else "TX" if ("BCBSTX" in k or "Texas" in k) else "other"
+            if pl in cap and (cap[pl] is None or cnt.get(pl, 0) < cap[pl]):
+                kept.append((k, g))
+                cnt[pl] = cnt.get(pl, 0) + 1
+        ranked = kept
+    else:
         ranked = ranked[:n]
     _log("main network families: " + "; ".join(f"{k} ({len(v['ids'])})" for k, v in ranked[:40]))
     return [i for _, g in ranked for i in g["ids"]]
