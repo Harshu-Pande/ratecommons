@@ -310,6 +310,7 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
         k = presplit[0] if presplit else max(1, res["rows_in"] // int(os.environ.get("RC_SLICE_ROWS", "15000000")) + 1)
         res["slices"] = k
         os.makedirs(f"{local}/facts_tmp", exist_ok=True)
+        os.makedirs(f"{local}/multi_dir", exist_ok=True)
         multi_n = 0
         split = f"{local}/fact_split-{part:02d}"
         if k > 1 and not presplit:  # one streaming pass splits the input by slice, so each slice reads only its rows
@@ -333,16 +334,23 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
                             FROM (SELECT fact_id, block_id FROM {src_i}) r
                             JOIN bnet b USING (block_id)
                             WHERE r.fact_id IN (SELECT fact_id FROM {fx} WHERE b_min <> b_max)""")
+            # blk: a single-block fact's block (its networks are that block's); multi-block facts keep their
+            # (fact, net) pairs in multi_dir, so the sliced input is not read again and each slice can go
             con.execute(f"""
                 COPY (
-                  SELECT f.{FACT_COLS.replace(', ', ', f.')}, bn.x1, bn.x2, bn.n_net
+                  SELECT f.{FACT_COLS.replace(', ', ', f.')}, bn.x1, bn.x2, bn.n_net, f.b_min AS blk
                   FROM {fx} f JOIN bn ON bn.block_id = f.b_min WHERE f.b_min = f.b_max
                   UNION ALL
-                  SELECT f.{FACT_COLS.replace(', ', ', f.')}, u.x1, u.x2, u.n_net
+                  SELECT f.{FACT_COLS.replace(', ', ', f.')}, u.x1, u.x2, u.n_net, NULL AS blk
                   FROM {fx} f JOIN (SELECT m.fact_id, bit_xor(n.h1) x1, bit_xor(n.h2) x2, count(*)::INTEGER n_net
                                     FROM multi m JOIN nets n USING (net) GROUP BY m.fact_id) u USING (fact_id)
                 ) TO '{local}/facts_tmp/slice-{i:04d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+            con.execute(f"COPY (SELECT fact_id, net FROM multi) TO '{local}/multi_dir/slice-{i:04d}.parquet' (FORMAT parquet)")
             multi_n += con.execute("SELECT count(DISTINCT fact_id) FROM multi").fetchone()[0]
+            if delete_inputs and k > 1:  # UHC wave 3: the sliced input kept to the end filled 104 GB of disk
+                import shutil
+
+                shutil.rmtree(f"{split}/_slice={i}", ignore_errors=True)
         tmp = f"{local}/facts_tmp/*.parquet"
         res["multi_block_facts"] = multi_n
         res["block_sets"] = _ns_map(con, "SELECT x1, x2, n_net, any_value(block_id) rep FROM bn GROUP BY ALL",
@@ -354,9 +362,11 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
                   JOIN bn USING (block_id) JOIN bns s USING (x1, x2, n_net))
             TO '{out}/block/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
         res["blocks"] = con.execute("SELECT count(*) FROM bn").fetchone()[0]
-        all_src = f"read_parquet('{split}/*/*.parquet')" if k > 1 else f"read_parquet({files!r})"
-        members = f"""SELECT DISTINCT r.fact_id rep, b.net FROM {all_src} r
-                      JOIN bnet b USING (block_id) WHERE r.fact_id IN (SELECT fact_id FROM reps)"""
+        members = f"""SELECT r.fact_id rep, b.net FROM read_parquet('{tmp}') r JOIN bnet b ON b.block_id = r.blk
+                      WHERE r.blk IS NOT NULL AND r.fact_id IN (SELECT fact_id FROM reps)
+                      UNION
+                      SELECT m.fact_id rep, m.net FROM read_parquet('{local}/multi_dir/*.parquet') m
+                      WHERE m.fact_id IN (SELECT fact_id FROM reps)"""
     else:
         # older map output without blocks: membership is the file each fact came from. Read one file
         # per network (identical files are one network) so each (fact, network) pair counts once.
@@ -401,6 +411,7 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
 
         shutil.rmtree(os.path.dirname(tmp), ignore_errors=True)
         shutil.rmtree(f"{local}/fact_split-{part:02d}", ignore_errors=True)
+        shutil.rmtree(f"{local}/multi_dir", ignore_errors=True)
     else:
         os.remove(tmp)
     res["seconds"] = round(time.time() - t0, 1)

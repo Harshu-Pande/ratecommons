@@ -10,6 +10,10 @@ Newest first. One entry per lesson: what we saw, what we changed.
 - A fact part over 20 GB (`RC_BATCH_SPLIT_BYTES`) is now fetched in ~12 GB batches; each batch is sliced into
   `fact_split-XX` (DuckDB `FILENAME_PATTERN 'b<n>_{uuid}'`, so batches append) and deleted before the next.
   The slice count comes from the first batch's rows per byte plus 10%. Same wave output (test).
+- The batched split was not enough: the re-run still filled the disk inside the per-slice loop, because the
+  sliced input (~44 GB) stayed until the end for one query (the networks of each set's representative fact) while
+  the merged facts grew beside it. Merged facts now keep `blk` (their block, when they have one) and multi-block
+  facts' (fact, net) pairs go to `multi_dir`; members come from those, and each slice is deleted once processed.
 
 ## 2026-10-28 (night): the app's rate query narrows hop by hop, with integer keys, in price slices for heavy codes
 - With Aetna's every-code pack, office visits in Texas (5.5M price rows, 34M set -> list links in the state) and head
