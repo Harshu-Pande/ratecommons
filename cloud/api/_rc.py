@@ -21,6 +21,7 @@ import httpx
 BASE = os.environ.get("RC_DATA_URL", "https://huggingface.co/buckets/ratecommons/work/resolve/serve/v2").rstrip("/")
 CACHE = os.environ.get("RC_CACHE", "/tmp/rc-cache")
 CACHE_MAX = int(float(os.environ.get("RC_CACHE_GB", "0.33")) * 1e9)  # Vercel's /tmp holds 500 MB in all
+WIDE_ROWS_MAX = int(os.environ.get("RC_WIDE_ROWS_MAX", "40000000"))  # wide-list rows one question may load
 SLICE_ROWS = int(os.environ.get("RC_SLICE_ROWS", "600000"))  # price rows per slice of one query
 FILE_MAX = int(float(os.environ.get("RC_FILE_MB", "150")) * 1e6)  # one file larger than this is refused
 PAYERS = ["cigna", "aetna", "uhc", "bcbs", "anthem"]
@@ -302,7 +303,9 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
             psf.append(f"{p}/state/{state}/pspli/_cstm_all.parquet")
     else:
         psf = [f"{p}/state/{state}/pspli.parquet"]
-    need = cf + psf + [f"{p}/state/{state}/{x}.parquet" for x in ("plipg", "pg")]
+    split = state in (meta(p).get("plipg_split") or [])  # wide lists: per-bucket narrow lists + one file per wide list
+    lpf = [x.replace("/pspli/", "/plipg/") for x in psf] if split else [f"{p}/state/{state}/plipg.parquet"]
+    need = cf + psf + lpf + [f"{p}/state/{state}/pg.parquet"] + ([f"{p}/state/{state}/biglists.parquet"] if split else [])
     if provider:
         need.append(f"{p}/cstm_all.parquet")
     loc = bool(city or zip_prefix or specialty or (provider and not re.fullmatch(r"\d{9,10}|\d{2}-\d{7}", provider.strip())))
@@ -317,8 +320,21 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
     psl = [got[f] for f in psf if got.get(f)]
     if not files or not psl or not got.get(f"{p}/state/{state}/pg.parquet"):
         return None if copy_to else []
-    S = {k: f"read_parquet('{got[f'{p}/state/{state}/{k}.parquet']}')" for k in ("plipg", "pg")}
-    S["pspli"] = f"read_parquet({psl!r})"
+    S = {"pg": f"read_parquet('{got[f'{p}/state/{state}/pg.parquet']}')", "pspli": f"read_parquet({psl!r})"}
+    lpl = [got[f] for f in lpf if got.get(f)]
+    if split:  # the wide lists this question's provider sets use, each its own small file
+        bl = got.get(f"{p}/state/{state}/biglists.parquet")
+        wide = _q(f"""SELECT b.pli, b.n FROM read_parquet('{bl}') b WHERE b.pli IN (
+                        SELECT DISTINCT s.pli FROM read_parquet({psl!r}) s
+                        WHERE s.ps IN (SELECT DISTINCT ps FROM read_parquet({files!r}, union_by_name = true)))""") if bl else []
+        if sum(w["n"] for w in wide) > WIDE_ROWS_MAX:
+            raise TooLarge(f"this question needs {len(wide):,} statewide provider lists ({sum(w['n'] for w in wide):,} "
+                           f"rows) in {state}; narrow it to a provider (TIN or NPI) or ask about fewer codes")
+        wl = fetch_many([f"{p}/state/{state}/biglist/{w['pli']}.parquet" for w in wide])
+        lpl += [v for v in wl.values() if v]
+    if not lpl:
+        return None if copy_to else []
+    S["plipg"] = f"read_parquet({lpl!r})"
     pv = ""
     if provider:
         v = provider.strip()

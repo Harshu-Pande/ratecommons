@@ -13,7 +13,9 @@ Layout under <prefix>/<payer>/ (prefix default serve/v1, in the public work buck
                                     fetches its codes' buckets, not the whole state: Aetna TX was 127 MB whole,
                                     the largest bucket ~1.4M rows); state/<ST>/pspli/_cstm_all.parquet for the
                                     sets of flat all-services codes (meta.json "pspli": "bucket3")
-  state/<ST>/plipg.parquet          provider list -> provider group, only groups practicing in ST
+  state/<ST>/plipg.parquet          provider list -> provider group, only groups practicing in ST; in states listed in
+                                    meta "plipg_split" (wide lists, e.g. Anthem) instead: plipg/<TYPE>/<key[:3]>.parquet
+                                    (narrow lists a code bucket uses), biglists.parquet (pli, n) and biglist/<pli>.parquet
   state/<ST>/pg.parquet             group display: tin, tin_wide, name, n_npi, cities, specialty, business_names
   state/<ST>/pgnpi.parquet          group -> NPI located in ST
   state/<ST>/pgnet.parquet          group -> network int (has any published rate in it)
@@ -37,6 +39,8 @@ import time
 from .serving import _duck, _log
 
 W = "(FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100000)"
+SPLIT_ROWS = int(os.environ.get("RC_PLIPG_SPLIT_ROWS", "2000000"))  # a state's list -> group rows above this: split
+BIG_LIST = int(os.environ.get("RC_BIG_LIST", "500"))  # groups in the state above which a list gets its own file
 
 
 def code_key(code: str) -> str:
@@ -152,14 +156,36 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
                 "JOIN pgi g USING (pg_id) JOIN net n USING (network_id)")
     con.execute(f"CREATE VIEW nppes AS SELECT * FROM read_parquet('{nppes}')")
     states = sorted(os.path.basename(d).split("=")[1] for d in glob.glob(f"{pack}/pg_npi/state=*"))
+    split_states: list[str] = []
     for st in states:
         d = f"{out}/state/{st}"
         os.makedirs(d, exist_ok=True)
         con.execute(f"""CREATE OR REPLACE TABLE gn AS SELECT g.pg, x.npi FROM read_parquet('{pack}/pg_npi/state={st}/*.parquet') x
                         JOIN pgi g USING (pg_id)""")
         con.execute(f"COPY (SELECT DISTINCT pg, npi FROM gn ORDER BY pg) TO '{d}/pgnpi.parquet' {W}")
-        con.execute(f"""COPY (SELECT l.pli, l.pg FROM plpg l SEMI JOIN (SELECT DISTINCT pg FROM gn) USING (pg)
-                              ORDER BY 1, 2) TO '{d}/plipg.parquet' {W}""")
+        con.execute("CREATE OR REPLACE TABLE lp AS SELECT l.pli, l.pg FROM plpg l SEMI JOIN (SELECT DISTINCT pg FROM gn) USING (pg)")
+        split = con.execute("SELECT count(*) FROM lp").fetchone()[0] > SPLIT_ROWS
+        if not split:
+            con.execute(f"COPY (SELECT * FROM lp ORDER BY 1, 2) TO '{d}/plipg.parquet' {W}")
+        else:  # wide lists (Anthem IN: 2,731 lists of >5,000 groups hold 2/3 of the rows): one small file per wide
+            # list, the narrow lists per code bucket beside pspli, so a query fetches only the lists it uses
+            split_states.append(st)
+            con.execute(f"""CREATE OR REPLACE TABLE big AS SELECT pli, count(*) AS n FROM lp GROUP BY pli
+                            HAVING count(*) > {BIG_LIST}""")
+            con.execute(f"COPY (SELECT * FROM big ORDER BY pli) TO '{d}/biglists.parquet' {W}")
+            btmp = f"{work}/big-tmp"
+            shutil.rmtree(btmp, ignore_errors=True)
+            con.execute(f"""COPY (SELECT l.pli AS part, l.pli, l.pg FROM lp l SEMI JOIN big USING (pli) ORDER BY 1, 3)
+                            TO '{btmp}' (FORMAT parquet, COMPRESSION zstd, PARTITION_BY (part), ROW_GROUP_SIZE 100000)""")
+            os.makedirs(f"{d}/biglist", exist_ok=True)
+            for bd in glob.glob(f"{btmp}/part=*"):
+                fs = sorted(glob.glob(f"{bd}/*.parquet"))
+                dest = f"{d}/biglist/{bd.split('=')[1]}.parquet"
+                if len(fs) == 1:
+                    shutil.move(fs[0], dest)
+                else:
+                    con.execute(f"COPY (SELECT pli, pg FROM read_parquet({fs!r})) TO '{dest}' {W}")
+            shutil.rmtree(btmp, ignore_errors=True)
         ps_files = glob.glob(f"{pack}/ps_pli/state={st}/*.parquet")
         if ps_files:
             con.execute(f"""CREATE OR REPLACE TABLE sp AS SELECT DISTINCT p.ps, i.pli FROM read_parquet({ps_files!r}) x
@@ -179,6 +205,24 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
                 else:
                     con.execute(f"COPY (SELECT * FROM read_parquet({fs!r})) TO '{dest}' {W}")
             shutil.rmtree(tmp, ignore_errors=True)
+            if split:  # narrow lists per code bucket: state/<ST>/plipg/<t>/<b>.parquet (and _cstm_all)
+                ltmp = f"{work}/plipg-tmp"
+                shutil.rmtree(ltmp, ignore_errors=True)
+                con.execute(f"""COPY (SELECT x.t, x.b, l.pli, l.pg
+                                      FROM (SELECT DISTINCT c.t, c.b, s.pli FROM cps c JOIN sp s USING (ps)) x
+                                      JOIN lp l USING (pli) ANTI JOIN big USING (pli) ORDER BY x.t, x.b, l.pli, l.pg)
+                                TO '{ltmp}' (FORMAT parquet, COMPRESSION zstd, PARTITION_BY (t, b), ROW_GROUP_SIZE 100000)""")
+                for bd in glob.glob(f"{ltmp}/t=*/b=*"):
+                    t = bd.split("/t=")[1].split("/")[0]
+                    b = bd.split("/b=")[1]
+                    dest = f"{d}/plipg/_cstm_all.parquet" if b == "_cstm_all" else f"{d}/plipg/{t}/{b}.parquet"
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    fs = sorted(glob.glob(f"{bd}/*.parquet"))
+                    if len(fs) == 1:
+                        shutil.move(fs[0], dest)
+                    else:
+                        con.execute(f"COPY (SELECT * FROM read_parquet({fs!r})) TO '{dest}' {W}")
+                shutil.rmtree(ltmp, ignore_errors=True)
         con.execute(f"""COPY (SELECT DISTINCT n.pg, n.net FROM pgnet n SEMI JOIN (SELECT DISTINCT pg FROM gn) USING (pg)
                               ORDER BY 1, 2) TO '{d}/pgnet.parquet' {W}""")
         con.execute(f"""COPY (
@@ -194,6 +238,7 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
                        WHERE gn.npi IS NOT NULL GROUP BY gn.pg) a USING (pg)
             ORDER BY p.pg) TO '{d}/pg.parquet' {W}""")
     res["states"] = len(states)
+    res["plipg_split"] = split_states
     con.execute(f"""COPY (SELECT x.tin_value AS tin, list(DISTINCT s ORDER BY s) AS states
                           FROM pgx x, unnest(coalesce(x.states, ['XX'])) AS u(s) GROUP BY 1 ORDER BY 1)
                     TO '{out}/tin.parquet' {W}""")
