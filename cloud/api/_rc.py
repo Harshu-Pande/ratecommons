@@ -20,6 +20,7 @@ import httpx
 BASE = os.environ.get("RC_DATA_URL", "https://huggingface.co/buckets/ratecommons/work/resolve/serve/v2").rstrip("/")
 CACHE = os.environ.get("RC_CACHE", "/tmp/rc-cache")
 CACHE_MAX = int(float(os.environ.get("RC_CACHE_GB", "0.33")) * 1e9)  # Vercel's /tmp holds 500 MB in all
+SLICE_ROWS = int(os.environ.get("RC_SLICE_ROWS", "600000"))  # price rows per slice of one query
 FILE_MAX = int(float(os.environ.get("RC_FILE_MB", "150")) * 1e6)  # one file larger than this is refused
 PAYERS = ["cigna", "aetna", "uhc", "bcbs", "anthem"]
 # BCBS of Tennessee network names by file prefix, from the descriptions in its index (Oct 2026)
@@ -350,7 +351,7 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
     exact = _exact_networks(p, network) if network else None
     if exact:  # an employer or plan name matched real networks: only the network sets holding them
         nets_sql = exact
-    sql = f"""
+    common = f"""
     WITH f AS (SELECT * FROM read_parquet({files!r}, union_by_name = true) f WHERE true {bc}),
     nets AS ({nets_sql}),
     {"pv AS (" + pv + ")," if pv else ""}
@@ -369,11 +370,31 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
     pr AS (SELECT DISTINCT ON (pid) pid, code, negotiated_type, rate, rate_raw, billing_class, setting, modifiers, pos,
                   expiration FROM fh),
     np AS (SELECT ns, product, dense_rank() OVER (ORDER BY product)::INTEGER AS prid FROM nets),
-    fx AS ({"SELECT DISTINCT np.prid, fh.ps, fh.pid FROM fh JOIN np USING (ns)" if by_product else
-            "SELECT DISTINCT 0 AS prid, ps, pid FROM fh WHERE ns IN (SELECT ns FROM nets)"}),
+
+"""
+    def chunk(k: int, n: int) -> str:  # prices with pid % n = k: slices are disjoint, so their groups never overlap
+        pf = f"WHERE pid % {n} = {k}" if n > 1 else ""
+        return f"""
+    fx AS ({"SELECT DISTINCT np.prid, fh.ps, fh.pid FROM (SELECT * FROM fh " + pf + ") fh JOIN np USING (ns)" if by_product else
+            "SELECT DISTINCT 0 AS prid, ps, pid FROM fh WHERE ns IN (SELECT ns FROM nets)" + (f" AND pid % {n} = {k}" if n > 1 else "")}),
     fl AS (SELECT DISTINCT fx.prid, fx.pid, s.pli FROM fx JOIN {S['pspli']} s USING (ps)),
     lg AS (SELECT l.pli, l.pg FROM {S['plipg']} l WHERE l.pli IN (SELECT pli FROM fl) AND l.pg IN (SELECT pg FROM pgok)),
-    bx AS (SELECT DISTINCT fl.prid, fl.pid, lg.pg FROM fl JOIN lg USING (pli)),
+    bx AS (SELECT DISTINCT fl.prid, fl.pid, lg.pg FROM fl JOIN lg USING (pli))"""
+
+    # big codes in big states (Aetna 99213 in Texas: 5.5M price rows, 34M set -> list links) in price slices
+    nrows = con().execute(f"SELECT count(*) FROM read_parquet({files!r}, union_by_name = true)").fetchone()[0]
+    n = max(1, min(64, nrows // SLICE_ROWS))
+    bxsql = chunk(0, 1)
+    tmp = None
+    if n > 1:
+        tmp = f"bx_{uuid.uuid4().hex[:12]}"
+        cur = con()
+        cur.execute(f"CREATE TEMP TABLE {tmp} (prid INTEGER, pid UBIGINT, pg INTEGER)")
+        for k in range(n):
+            cur.execute(f"INSERT INTO {tmp} {common} {chunk(k, n)} SELECT prid, pid, pg FROM bx")
+        bxsql = f"""
+    bx AS (SELECT * FROM {tmp})"""
+    sql = f"""{common} {bxsql},
     base AS (SELECT '{p}' AS payer, {"pn.product," if by_product else ""} bx.pg, pr.code, pr.negotiated_type, pr.rate,
                     pr.rate_raw, pr.billing_class, pr.setting, pr.modifiers, pr.pos, pr.expiration
              FROM bx JOIN pr USING (pid) {"JOIN (SELECT DISTINCT prid, product FROM np) pn USING (prid)" if by_product else ""}),
@@ -381,9 +402,13 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
              FROM base b JOIN {S['pg']} pg USING (pg) WHERE {where})
     SELECT {select or '*'} FROM rows {('GROUP BY ' + group) if group else ''} {('LIMIT ' + str(int(limit))) if limit else ''}
     """
-    if copy_to:  # into a Parquet file (run_sql): returns the row count
-        return con().execute(f"COPY ({sql}) TO '{copy_to}' (FORMAT parquet, COMPRESSION zstd)").fetchone()[0]
-    return _q(sql)
+    try:
+        if copy_to:  # into a Parquet file (run_sql): returns the row count
+            return con().execute(f"COPY ({sql}) TO '{copy_to}' (FORMAT parquet, COMPRESSION zstd)").fetchone()[0]
+        return _q(sql)
+    finally:
+        if tmp:
+            con().execute(f"DROP TABLE IF EXISTS {tmp}")
 
 
 EXACT_MAX = 25  # real networks fetched for one exact-network question
