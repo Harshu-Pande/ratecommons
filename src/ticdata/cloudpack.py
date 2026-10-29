@@ -157,6 +157,7 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
     con.execute(f"CREATE VIEW nppes AS SELECT * FROM read_parquet('{nppes}')")
     states = sorted(os.path.basename(d).split("=")[1] for d in glob.glob(f"{pack}/pg_npi/state=*"))
     split_states: list[str] = []
+    con.execute("SET threads = 2")  # per-state joins: fewer, bigger hash tables per thread ran out of memory less
     for st in states:
         d = f"{out}/state/{st}"
         os.makedirs(d, exist_ok=True)
@@ -225,17 +226,18 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
                 shutil.rmtree(ltmp, ignore_errors=True)
         con.execute(f"""COPY (SELECT DISTINCT n.pg, n.net FROM pgnet n SEMI JOIN (SELECT DISTINCT pg FROM gn) USING (pg)
                               ORDER BY 1, 2) TO '{d}/pgnet.parquet' {W}""")
+        # the per-group summary first, then the join: done in one query it ran BCBS TN+IL+TX (4.1M groups) out of 10 GB
+        con.execute(f"""CREATE OR REPLACE TABLE ga AS
+            SELECT gn.pg, count(DISTINCT gn.npi) n_npi, max(CASE WHEN x.entity_type = '2' THEN x.name END) org_name,
+                   min(x.name) any_name, list(DISTINCT x.city)[1:3] cities, mode(x.classification) specialty
+            FROM gn LEFT JOIN (SELECT npi, entity_type, name, city, classification FROM nppes WHERE state = '{st}') x USING (npi)
+            WHERE gn.npi IS NOT NULL GROUP BY gn.pg""")
         con.execute(f"""COPY (
             SELECT p.pg, p.tin_value AS tin, p.tin_type, p.tin_wide, p.business_names, coalesce(a.n_npi, 0) AS n_npi,
                    coalesce(a.org_name, CASE WHEN a.n_npi > 1 THEN a.any_name || ' +' || (a.n_npi - 1) || ' clinicians'
                                              ELSE a.any_name END, p.business_names[1]) AS name,
                    a.cities, a.specialty
-            FROM pgx p JOIN (SELECT DISTINCT pg FROM gn) USING (pg)
-            LEFT JOIN (SELECT gn.pg, count(DISTINCT gn.npi) n_npi,
-                              max(CASE WHEN x.entity_type = '2' THEN x.name END) org_name, min(x.name) any_name,
-                              list(DISTINCT x.city)[1:3] cities, mode(x.classification) specialty
-                       FROM gn LEFT JOIN (SELECT * FROM nppes WHERE state = '{st}') x USING (npi)
-                       WHERE gn.npi IS NOT NULL GROUP BY gn.pg) a USING (pg)
+            FROM pgx p SEMI JOIN (SELECT DISTINCT pg FROM gn) USING (pg) LEFT JOIN ga a USING (pg)
             ORDER BY p.pg) TO '{d}/pg.parquet' {W}""")
     res["states"] = len(states)
     res["plipg_split"] = split_states
