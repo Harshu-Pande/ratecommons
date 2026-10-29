@@ -82,8 +82,9 @@ def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = 
         if k not in seen:
             seen.add(k)
             uniq.append(e)
-    if match:  # a hand-picked subset of files (names containing any of these substrings)
-        uniq = [e for e in uniq if any(m in e["name"] for m in match)]
+    if match:  # a hand-picked subset of files: names containing any of these substrings, or "by:<company>" for every
+        # file a company's index lists (bcbs: listed_by)
+        uniq = [e for e in uniq if any(e.get("listed_by") == m[3:] if m.startswith("by:") else m in e["name"] for m in match)]
     # Whole-file duplicates (same gzip trailer CRC32 + ISIZE, i.e. same decompressed content, from `uhc-tails`): parse one, record
     # the rest as duplicates of it so their plan/network membership can be attached at merge (nothing is dropped).
     duplicates = {}

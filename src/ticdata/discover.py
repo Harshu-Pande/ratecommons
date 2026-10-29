@@ -8,6 +8,7 @@ See the design doc's "Payer playbooks" tab for why each step exists.
 from __future__ import annotations
 
 import json
+import re
 import urllib.parse
 
 import requests
@@ -126,11 +127,28 @@ BCBS_LANDINGS = {
 
 
 def _hcsc_index_urls(s: requests.Session, landing: str) -> list[str]:
+    """Index URLs linked from an HCSC landing page. A page can name a dated index that is not there (Illinois, 2026-10-29:
+    2026-10-23 answered 404), so a missing one is replaced by the newest index of the same name from the last 14 days."""
+    import datetime
     import re
 
     html = _get(s, landing).text
-    return sorted({u for u in re.findall(r'https://[A-Za-z0-9.-]+\.blob\.core\.windows\.net/toc/[^"\\ <>]+_index\.json', html)
+    urls = sorted({u for u in re.findall(r'https://[A-Za-z0-9.-]+\.blob\.core\.windows\.net/toc/[^"\\ <>]+_index\.json', html)
                    if "Prescription" not in u})
+    out = []
+    for u in urls:
+        if s.head(u, timeout=60).status_code == 200:
+            out.append(u)
+            continue
+        m = re.match(r"(.*/)(\d{4}-\d{2}-\d{2})(_.*)$", u)
+        for k in range(14) if m else []:
+            v = f"{m.group(1)}{(datetime.date.today() - datetime.timedelta(days=k)).isoformat()}{m.group(3)}"
+            if s.head(v, timeout=60).status_code == 200:
+                out.append(v)
+                break
+        else:
+            out.append(u)  # nothing better: the fetch reports it
+    return out
 
 
 BCBST_DIRECTORY = "https://d7k0rj9u1dp84.cloudfront.net/non_aso_directory.json"  # BCBS of Tennessee, linked from bcbst.com/tcr
@@ -167,7 +185,7 @@ def bcbs(s: requests.Session | None = None):
     import re
 
     s = s or new_session()
-    raw_files, entries, seen = {}, [], set()
+    raw_files, entries, seen, bc_months = {}, [], set(), []
     try:
         for toc_url in _bcbst_index_urls(s):
             raw = _get(s, toc_url, timeout=600).content
@@ -200,15 +218,162 @@ def bcbs(s: requests.Session | None = None):
                         continue
                     seen.add(key)
                     m = re.match(r"\d{4}-\d{2}_(\d{3})_([0-9A-Z]{4})_", name)
+                    if bluecard:
+                        bc_months.append(name[:7])
                     entries.append({
                         "payer": "bcbs", "kind": "in_network", "name": name, "size": None, "url": x["location"],
                         "key": key, "host": urllib.parse.urlparse(base).netloc, "listed_by": plan,
                         "bluecard_plan": m and m.group(1), "bluecard_prefix": m and m.group(2),
                     })
+    month = max(set(bc_months), key=bc_months.count) if bc_months else None
+    names = {e["name"] for e in entries}
+    for company, toc_urls_or_files in _blue_own_sources(s):
+        for kind, url, raw in toc_urls_or_files:
+            if raw is not None:
+                raw_files[f"bcbs/{company}/{url.split('?')[0].rsplit('/', 1)[-1]}"] = raw
+            for x in ([{"location": url}] if kind == "file" else _toc_in_network(raw)):
+                base = x["location"].split("?")[0]
+                name = urllib.parse.unquote(base.rsplit("/", 1)[-1])
+                bluecard = bool(BLUECARD_NAME.match(name))
+                if bluecard and month and not name.startswith(month):
+                    continue  # another month's BlueCard file (the release takes the HCSC listing's month)
+                key = name if bluecard else base
+                if key in seen or not name.endswith((".json.gz", ".json", ".json.zip")):  # Excellus posts .json.zip
+                    continue
+                seen.add(key)
+                # a file's map key comes from its name: two companies' different files with one name (Highmark PA and
+                # Highmark Blue Shield PA list 59 such pairs) get the company in front; the listed name is kept
+                listed = name
+                if name in names:
+                    name = f"{company}_{name}"
+                names.add(name)
+                entries.append({"payer": "bcbs", "kind": "in_network", "name": name, "size": None,
+                                "url": x["location"], "key": key, "host": urllib.parse.urlparse(base).netloc,
+                                "listed_by": company, "description": x.get("description"),
+                                **({"listed_name": listed} if listed != name else {})})
     return raw_files, entries
 
 
 PAYERS["bcbs"] = bcbs
+
+# Other Blue companies' own networks (October 2026; method and sizes in DECISIONS). Fully insured indexes only: a
+# self-funded employer's index repeats the company's networks. A company's BlueCard files (`<YYYY-MM>_<plan>_<prefix>_
+# in-network-rates...`) are its own networks as other Blues see them; those already listed by HCSC are skipped by name,
+# the rest are new networks. Each source returns the index URLs of the current month (or the files themselves).
+BLUECARD_NAME = re.compile(r"^\d{4}-\d{2}_\d{3}_[0-9A-Z]{4}_in-network-rates")
+HIGHMARK_HUB = "https://mrfdata.hmhs.com/files/{path}/inbound/local/{month}-01_{name}_index.json"
+BLUE_OWN = {
+    # HCSC's other states: same Azure blob indexes as IL and TX, linked from each landing page
+    "bcbsok": ("hcsc", "https://www.bcbsok.com/member/machine-readable-files"),
+    "bcbsnm": ("hcsc", "https://www.bcbsnm.com/member/machine-readable-files"),
+    "bcbsmt": ("hcsc", "https://www.bcbsmt.com/member/machine-readable-files"),
+    # Sapphire MRF hubs: tocs/<YYYYMM>/<YYYY-MM-01>_<slug>_index.json (fully insured slugs)
+    "bcbsm": ("sapphire", "bcbsm", ["blue_cross_blue_shield_of_michigan"]),
+    "bcbsla": ("sapphire", "bcbsla", ["hmola", "lahsic"]),
+    "bluekc": ("sapphire", "bcbskc", ["blue-cross-and-blue-shield-of-kansas-city"]),
+    "horizon": ("sapphire", "horizonblue", ["horizon-healthcare-services-i", "horizon-healthcare-services"]),
+    # Highmark's hub (mrfdata.hmhs.com, a static page whose script builds these names); its "363/pa" entries for
+    # other Blues are Highmark-administered alliance products, not those companies' networks
+    "highmark_pa": ("highmark", "363/pa", "Highmark_Blue_Cross_Blue_Shield_of_Pennsylvania"),
+    "highmark_bspa": ("highmark", "378/pa", "Highmark_Blue_Shield_of_Pennsylvania"),
+    "highmark_de": ("highmark", "070/del", "Highmark_Blue_Cross_Blue_Shield_of_Delaware"),
+    "highmark_wv": ("highmark", "443/wv", "Highmark_Blue_Cross_Blue_Shield_of_West_Virginia"),
+    "highmark_wny": ("highmark", "301/wny", "Highmark_Blue_Shield_of_Western_New_York"),
+    "highmark_neny": ("highmark", "800/nny", "Highmark_Blue_Shield_of_Northeastern_New_York"),
+    "bcbsnd": ("highmark", "320/nd", "BlueCrossBlueShieldND"),
+    "bcbswy": ("highmark", "460/wy", "Blue_Cross_Blue_Shield_of_Wyoming"),
+    # HealthSparq (the same public egress Aetna uses): <INSURER>/<BRAND>/latest_metadata.json lists every file
+    "bsca": ("healthsparq", "BSCA_I", "BSCA"),
+    "premera": ("healthsparq", "PREMERA_I", "PREMERA"),
+    "excellus": ("healthsparq", "EXC_I", "EXC"),
+    "wellmark": ("healthsparq", "WMRK_I", "WELLMARK"),
+    "capbc": ("healthsparq", "CAPBC_I", "CAPBC"),
+    "bcbsaz": ("healthsparq", "BCBSAZ_I", "BCBSAZ"),
+    "bcbsne": ("healthsparq", "BCBSNE_I", "BCBSNE"),
+    # one company each
+    "bcbsnc": ("dated", "https://mrfmftprod.bcbsnc.com/prod/etl/outbound/table-of-contents/non-aso/"
+                        "{date}_blue-cross-and-blue-shield-of-north-carolina_index.json"),
+    "ibx": ("monthly", [f"https://storage.googleapis.com/ihg-dart-edw-mrf-prod-public/{b}/{{month}}-01_{b}_index.json"
+                        for b in ("qcc", "khpe", "iac")]),
+    "floridablue": ("static", ["https://d1hgtx7rrdl2cn.cloudfront.net/mrf/toc/FloridaBlue_Health-Insurance-Issuer_index.json",
+                               "https://d1hgtx7rrdl2cn.cloudfront.net/mrf/toc/FloridaBlue_Third-Party-Administrator_index.json"]),
+    "carefirst": ("scrape", "https://individual.carefirst.com/individuals-families/mandates-policies/machine-readable-file.page",
+                  r"https://stmrffilesprod001\.blob\.core\.windows\.net/mrf-files/[^\"<>]+?_index\.json"),
+    "bcbsmn": ("monthly", ["https://mktg.bluecrossmn.com/mrf/{year}/{month}-01_Blue_Cross_and_Blue_Shield_of_Minnesota_index.json"]),
+    "bcbsal": ("static", ["https://d3oz7y1cwsecds.cloudfront.net/member-prod/bcbsal"]),
+    "arkansas": ("static", ["https://mrf.arkansasbluecross.com/mrf/us_abcbs_hii_arkbluecross_index"]),
+    "bcbsms": ("static", ["https://tcr.bcbsms.com/Table_of_Contents/Local_TOC.json"]),
+}
+
+
+def _toc_in_network(raw: bytes) -> list[dict]:
+    """in_network_files entries of a table of contents (gzip or not; one object or a list of objects)."""
+    import gzip
+
+    if raw[:2] == b"\x1f\x8b":
+        raw = gzip.decompress(raw)
+    d = json.loads(raw)
+    docs = d if isinstance(d, list) else [d]
+    return [x for doc in docs if isinstance(doc, dict) for rs in doc.get("reporting_structure", [])
+            for x in rs.get("in_network_files", []) if x.get("location")]
+
+
+def _blue_own_sources(s: requests.Session, only: set | None = None):
+    """(company, [(kind, url, raw)]) per Blue company; kind "toc" (raw = the index) or "file" (an in-network file).
+    A company whose site fails is reported on stderr and skipped, so one broken site does not stop the payer."""
+    import datetime
+    import sys
+
+    today = datetime.date.today()
+    months = [today.strftime("%Y-%m"), (today.replace(day=1) - datetime.timedelta(days=1)).strftime("%Y-%m")]
+
+    def posted(urls_of):  # this month's index, or last month's while this month's is not posted yet
+        for m in months:
+            urls = urls_of(m)
+            if urls and all(s.get(u, headers={"Range": "bytes=0-0"}, timeout=60).status_code in (200, 206) for u in urls):
+                return urls
+        return []
+
+    for company, spec in BLUE_OWN.items():
+        if only and company not in only:
+            continue
+        try:
+            how, out = spec[0], []
+            if how == "hcsc":
+                urls = _hcsc_index_urls(s, spec[1])
+            elif how == "sapphire":
+                urls = posted(lambda m: [f"https://{spec[1]}.sapphiremrfhub.com/tocs/{m.replace('-', '')}/{m}-01_{slug}_index.json"
+                                         for slug in spec[2]])
+            elif how == "highmark":
+                urls = posted(lambda m: [HIGHMARK_HUB.format(path=spec[1], month=m, name=spec[2])])
+            elif how == "monthly":
+                urls = posted(lambda m: [u.format(month=m, year=m[:4]) for u in spec[1]])
+            elif how == "dated":  # the newest index of the last 14 days (missing dates answer 403/404)
+                urls = []
+                for k in range(14):
+                    u = spec[1].format(date=(datetime.date.today() - datetime.timedelta(days=k)).isoformat())
+                    if s.get(u, headers={"Range": "bytes=0-0"}, timeout=60).status_code in (200, 206):
+                        urls = [u]
+                        break
+            elif how == "scrape":
+                urls = sorted({u.replace(" ", "%20") for u in re.findall(spec[2], _get(s, spec[1]).text)})
+            elif how == "static":
+                urls = spec[1]
+            elif how == "healthsparq":
+                insurer, brand = spec[1], spec[2]
+                base = f"https://mrf.healthsparq.com/{insurer[:-2].lower()}-egress.nophi.kyruushsq.com/prd/mrf/{insurer}/{brand}/"
+                meta = _get(s, base + "latest_metadata.json").content
+                out.append(("meta", base + "latest_metadata.json", meta))
+                files = json.loads(meta).get("files", [])
+                out += [("file", base + f["filePath"], None) for f in files if f.get("fileSchema") == "IN_NETWORK_RATES"]
+                urls = [base + f["filePath"] for f in files if f.get("fileSchema") == "TABLE_OF_CONTENTS"] \
+                    if not any(f.get("fileSchema") == "IN_NETWORK_RATES" for f in files) else []  # Excellus: TOCs only
+            if not urls and how != "healthsparq":
+                raise RuntimeError("no index found")
+            out += [("toc", u, _get(s, u, timeout=900).content) for u in urls]
+            yield company, out
+        except Exception as e:
+            print(f"bcbs {company}: index unavailable: {e!r}"[:400], file=sys.stderr)
 
 ANTHEM_INDEX = "https://antm-pt-prod-dataz-nogbd-nophi-us-east1.s3.amazonaws.com/anthem/{date}_anthem_index.json.gz"
 

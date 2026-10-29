@@ -3,6 +3,45 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-29: the other Blue companies' own networks: where they are, and how little is new
+- Research (index host, reachability, distinct own files and gzip size of the fully insured indexes, measured from a Claude
+  session on 2026-10-29; self-funded employer indexes repeat the same networks):
+
+  | Company (BLUE_OWN key) | Index host / kind | New files | GB |
+  | --- | --- | --- | --- |
+  | Blue Shield of California (bsca) | HealthSparq `latest_metadata.json` | 939 | 1,520 |
+  | BCBS Arizona (bcbsaz) | HealthSparq | 508 | 1,219 |
+  | Blue Cross NC (bcbsnc) | `mrfmftprod.bcbsnc.com/.../non-aso/<date>_..._index.json` (dated) | 10 | 38.5 |
+  | BCBS Michigan (bcbsm) | Sapphire hub `tocs/<YYYYMM>/<YYYY-MM-01>_<slug>_index.json` | 10 | 18.4 |
+  | Horizon NJ (horizon) | Sapphire hub | 52 | 12.3 |
+  | Florida Blue (floridablue) | CloudFront TOCs (static) | 16 | 6.7 |
+  | BCBS MN (bcbsmn) | `mktg.bluecrossmn.com/mrf/<year>/<month>-01_..._index.json` | 342 | 4.0 |
+  | BCBS Louisiana (bcbsla) | Sapphire hub | 16 | 3.7 |
+  | Premera (premera) | HealthSparq | 41 | 3.6 |
+  | Excellus (excellus) | HealthSparq (TOCs only; files are `.json.zip`) | 2,562 | 2.3 |
+  | BCBS OK/NM/MT (bcbsok, bcbsnm, bcbsmt) | HCSC landing pages, Azure blob TOCs | 18 | 1.3 |
+  | Blue KC, IBX (QCC/KHPE/IAC), BCBS ND, WY, CareFirst, Highmark PA/BSPA/DE/WV/WNY/NENY, AL, AR, Wellmark, Capital, NE | Sapphire / GCS monthly / Highmark hub / scrape / HealthSparq | ~800 | ~4 |
+  | BCBS Mississippi (bcbsms) | static TOC | 0 | 0 |
+
+- Highmark's hub (`mrfdata.hmhs.com`, a static page whose script builds `files/<code>/<st>/inbound/local/<YYYY-MM>-01_
+  <name>_index.json`) also lists NE, AZ, ID, FL, MN, LA and IBC NA under `363/pa`: Highmark-administered alliance products,
+  not those companies' networks; left out. HealthSparq looked session-only in its web app (API "User object was not found
+  in the session"), but its public egress `<insurer>-egress.nophi.kyruushsq.com/prd/mrf/<INSURER>/<BRAND>/
+  latest_metadata.json` (the path Aetna's discovery uses) answers for all seven Blues there; no sign-in needed.
+- A Blue company's BlueCard files (`<YYYY-MM>_<plan>_<prefix>_in-network-rates`) are its own networks as the other Blues see
+  them, and HCSC's listing already has 941 of them: Highmark PA's index lists 796 files, 782 of them already ours. So most
+  of each company's "own networks" were in the release already; the new data is its local products (~100 GB, BSCA and
+  AZ aside) plus the few BlueCard names HCSC does not list (CareFirst 35, AL 29, Highmark PA 14). Rule in `bcbs()`: skip a
+  name already listed, skip BlueCard names of another month (several indexes already list November's), keep the rest.
+- Not reached from a Claude session, retried from a runner: BCBS Massachusetts (TLS fails through the session proxy),
+  BCBS Kansas (`mrf.secure.bcbsks.com` answers 403), Regence (landing page 404 to this client). Not located yet: BCBS SC
+  (myhealthtoolkit app), Vermont (`bluecrossvt.org/documents/toc-json`), Rhode Island, HMSA, Blue Cross of Idaho.
+- Two companies list different files under one name (Highmark PA / Blue Shield PA, 59 names); since a map key comes from
+  the name, the second gets the company in front (`listed_name` keeps the original). HCSC's Illinois page linked a dated
+  index that 404s (2026-10-23); `_hcsc_index_urls` now falls back to the newest index of that name from the last 14 days.
+- `match=by:<company>` plans every file one company lists. Planned as bcbs shards 28-33 with `release=2026-10` (some
+  companies date their files 2026-11-01; the release is the month we collect).
+
 ## 2026-10-29: big fact parts are downloaded and sliced in batches
 - UHC wave 3's reduce lost 14 of 16 fact runners to a full disk ("No space left on device" even for the runner's
   own log): ~44 GB of map facts per part (wave 1: ~32 GB), downloaded whole and then copied into hash slices, so
