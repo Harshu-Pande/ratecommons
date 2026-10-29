@@ -221,12 +221,14 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
         con.execute(f"DELETE FROM pg_npi WHERE state NOT IN ({st})")
     con.execute(f"COPY (SELECT state, pg_id, npi FROM pg_npi ORDER BY state, pg_id) TO '{out}/pg_npi' "
                 f"(FORMAT parquet, COMPRESSION zstd, PARTITION_BY (state), ROW_GROUP_SIZE 50000)")
+    # (group, state) pairs first: listing states over every NPI row of BCBS TN+IL+TX ran out of 10 GB
+    con.execute("CREATE TABLE pg_state AS SELECT DISTINCT pg_id, state FROM pg_npi")
+    con.execute("CREATE TABLE pgs AS SELECT pg_id, list(state ORDER BY state) states FROM pg_state GROUP BY pg_id")
     con.execute(f"""COPY (SELECT g.pg_id, g.tin_type, g.tin_value, g.npi_count, g.tin_wide, g.business_names,
-                                 s.states FROM pg g
-                          LEFT JOIN (SELECT pg_id, list(DISTINCT state ORDER BY state) states FROM pg_npi GROUP BY pg_id) s
-                          USING (pg_id)) TO '{out}/provider_group.parquet' {W}""")
+                                 s.states FROM pg g LEFT JOIN pgs s USING (pg_id)) TO '{out}/provider_group.parquet' {W}""")
+    con.execute("DROP TABLE pgs")
     con.execute("""CREATE TABLE pli_state AS SELECT DISTINCT l.pli_id, p.state
-                   FROM pli_pg l JOIN (SELECT DISTINCT pg_id, state FROM pg_npi) p USING (pg_id)""")
+                   FROM pli_pg l JOIN pg_state p USING (pg_id)""")
     # one state at a time and unsorted: a sorted partitioned write of Aetna's 0.7 billion rows filled the disk
     for (st_,) in con.execute("SELECT DISTINCT state FROM pli_state ORDER BY 1").fetchall():
         os.makedirs(f"{out}/ps_pli/state={st_}", exist_ok=True)
