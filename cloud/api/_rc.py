@@ -390,7 +390,7 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
     if n > 1:
         tmp = f"bx_{uuid.uuid4().hex[:12]}"
         cur = con()
-        cur.execute(f"CREATE TEMP TABLE {tmp} (prid INTEGER, pid UBIGINT, pg INTEGER)")
+        cur.execute(f"CREATE TABLE {tmp} (prid INTEGER, pid UBIGINT, pg INTEGER)")  # not TEMP: each cursor is its own connection
         for k in range(n):
             cur.execute(f"INSERT INTO {tmp} {common} {chunk(k, n)} SELECT prid, pid, pg FROM bx")
         bxsql = f"""
