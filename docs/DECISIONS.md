@@ -3,6 +3,18 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28 (evening): main-network packs per payer; Anthem's provider lists are too wide for the app layout
+- Main networks are whole network families (every part file with the same app label): BCBS TN posts Network S as
+  32 files, each its own network id; picking the "20 largest networks" had picked 20 parts of S and P.
+- BCBS: every code for Tennessee's 7 home networks (IL/TX home networks: 1 billion set -> list links, a runner's disk
+  is too small; they need a split build). Aetna: every code for its 20 main file groups (45 GB serving pack, 391M
+  rate rows, 797M set -> list links). Anthem: lists average 1,139 groups (9.7 billion list -> group links in the
+  release); with 20 main families the pack's list -> group table was ~2.2B rows and filled the disk; with 5 it built
+  (769M rows) but the cloud pack's per-state plipg files reached 706 MB (IN), more than a Vercel function's /tmp.
+  Anthem is back on the common-services pack until plipg gets a layout a query can read in pieces.
+- The app refuses any file over 150 MB (RC_FILE_MB) and always removes partial downloads: one oversized file had
+  filled /tmp and broke every query on that instance.
+
 ## 2026-10-28: a broken single-GET download resumes with Range; the orchestrator re-maps only missing shards
 - UHC wave 3, shard 32: a 15 GB UMR file broke after 9.3 GB and 45 minutes (`ChunkedEncodingError`,
   IncompleteRead) on the single-GET path, which had no retry. It now resumes from the bytes on disk with a Range
