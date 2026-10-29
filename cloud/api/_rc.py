@@ -20,6 +20,7 @@ import httpx
 BASE = os.environ.get("RC_DATA_URL", "https://huggingface.co/buckets/ratecommons/work/resolve/serve/v2").rstrip("/")
 CACHE = os.environ.get("RC_CACHE", "/tmp/rc-cache")
 CACHE_MAX = int(float(os.environ.get("RC_CACHE_GB", "0.33")) * 1e9)  # Vercel's /tmp holds 500 MB in all
+FILE_MAX = int(float(os.environ.get("RC_FILE_MB", "150")) * 1e6)  # one file larger than this is refused
 PAYERS = ["cigna", "aetna", "uhc", "bcbs", "anthem"]
 # BCBS of Tennessee network names by file prefix, from the descriptions in its index (Oct 2026)
 BCBST_NETWORKS = {"58A0": "Network S", "58B0": "Network P", "58M0": "Network E", "58Q0": "Network L",
@@ -60,6 +61,10 @@ def fetch(path: str) -> str | None:
                 if r.status_code == 404:
                     return None
                 r.raise_for_status()
+                size = int(r.headers.get("content-length") or 0)
+                if size > FILE_MAX:  # never let one file fill /tmp (it breaks every query on this instance)
+                    raise TooLarge(f"{path} is {size / 1e6:.0f} MB, more than this server can hold; "
+                                   "ask about a smaller state or a specific provider instead")
                 with open(tmp, "wb") as f:
                     for chunk in r.iter_bytes(1 << 20):
                         f.write(chunk)
@@ -70,7 +75,14 @@ def fetch(path: str) -> str | None:
             if attempt == 2:
                 raise
             time.sleep(0.5 * (attempt + 1))
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
     return None
+
+
+class TooLarge(Exception):
+    pass
 
 
 def fetch_many(paths: list[str]) -> dict[str, str | None]:
