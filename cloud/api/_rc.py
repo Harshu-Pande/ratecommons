@@ -359,16 +359,24 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
              {"AND pg IN (SELECT pg FROM pv)" if pv else ""}
              {"AND pg IN (SELECT pg FROM lq)" if locq else ""}
              {f"AND pg IN (SELECT pg FROM {S['pg']} WHERE {pg_where})" if pg_where else ""}),
-    -- narrow at every hop (prices -> lists -> groups) instead of expanding sets to groups first: Aetna's office
-    -- visits in Texas joined sets x groups ran a 1.7 GB function out of memory
-    fx AS (SELECT DISTINCT {"nets.product" if by_product else "NULL::VARCHAR AS product"}, f.ps, f.code, f.negotiated_type,
-                  round(f.rate, 2) AS rate, f.rate_raw, f.billing_class, f.setting, f.modifiers, f.pos, f.expiration
-           FROM f {"JOIN nets USING (ns)" if by_product else "WHERE f.ns IN (SELECT ns FROM nets)"}),
-    fl AS (SELECT DISTINCT fx.* EXCLUDE (ps), s.pli FROM fx JOIN {S['pspli']} s USING (ps)),
+    -- narrow at every hop (prices -> lists -> groups) with small integer keys: a price is a 64-bit hash of its
+    -- fields (pid) and a product a small int (prid); the fields come back at the end. Expanding sets to groups
+    -- first ran a 1.7 GB function out of memory on Aetna's office visits in Texas (5.5M price rows, 34M set ->
+    -- list links in the state)
+    fh AS (SELECT ps, ns, hash(code, negotiated_type, round(rate, 2), rate_raw, billing_class, setting, modifiers,
+                              pos, expiration) AS pid, code, negotiated_type, round(rate, 2) AS rate, rate_raw,
+                  billing_class, setting, modifiers, pos, expiration FROM f),
+    pr AS (SELECT DISTINCT ON (pid) pid, code, negotiated_type, rate, rate_raw, billing_class, setting, modifiers, pos,
+                  expiration FROM fh),
+    np AS (SELECT ns, product, dense_rank() OVER (ORDER BY product)::INTEGER AS prid FROM nets),
+    fx AS ({"SELECT DISTINCT np.prid, fh.ps, fh.pid FROM fh JOIN np USING (ns)" if by_product else
+            "SELECT DISTINCT 0 AS prid, ps, pid FROM fh WHERE ns IN (SELECT ns FROM nets)"}),
+    fl AS (SELECT DISTINCT fx.prid, fx.pid, s.pli FROM fx JOIN {S['pspli']} s USING (ps)),
     lg AS (SELECT l.pli, l.pg FROM {S['plipg']} l WHERE l.pli IN (SELECT pli FROM fl) AND l.pg IN (SELECT pg FROM pgok)),
-    base AS (SELECT DISTINCT '{p}' AS payer, {"fl.product," if by_product else ""} lg.pg, fl.code, fl.negotiated_type, fl.rate,
-                    fl.rate_raw, fl.billing_class, fl.setting, fl.modifiers, fl.pos, fl.expiration
-             FROM fl JOIN lg USING (pli)),
+    bx AS (SELECT DISTINCT fl.prid, fl.pid, lg.pg FROM fl JOIN lg USING (pli)),
+    base AS (SELECT '{p}' AS payer, {"pn.product," if by_product else ""} bx.pg, pr.code, pr.negotiated_type, pr.rate,
+                    pr.rate_raw, pr.billing_class, pr.setting, pr.modifiers, pr.pos, pr.expiration
+             FROM bx JOIN pr USING (pid) {"JOIN (SELECT DISTINCT prid, product FROM np) pn USING (prid)" if by_product else ""}),
     rows AS (SELECT b.*, pg.tin, pg.name AS provider, pg.n_npi AS npis_in_area, pg.cities, pg.specialty, pg.tin_wide
              FROM base b JOIN {S['pg']} pg USING (pg) WHERE {where})
     SELECT {select or '*'} FROM rows {('GROUP BY ' + group) if group else ''} {('LIMIT ' + str(int(limit))) if limit else ''}
