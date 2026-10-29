@@ -3,6 +3,14 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-28 (night): the app's rate query narrows hop by hop, with integer keys, in price slices for heavy codes
+- With Aetna's every-code pack, office visits in Texas (5.5M price rows, 34M set -> list links in the state) and head
+  CT in Tennessee ran the 1.7 GB function out of memory: the query expanded sets to groups before narrowing.
+- `_rows` now goes prices -> lists -> groups with DISTINCT at each hop, a price as a 64-bit hash of its fields and a
+  product as a small int (fields joined back at the end), and codes with more than RC_SLICE_ROWS (600k) price rows
+  run in price slices (pid % n) into a shared table. Live: Aetna 99213 TX by product 86 s cold, 70450 TN 18 s,
+  BCBS TN 99213 ~1 s. A plain DuckDB TEMP table is per connection; the app's cursors each are one, so it is a table.
+
 ## 2026-10-28 (evening): main-network packs per payer; Anthem's provider lists are too wide for the app layout
 - Main networks are whole network families (every part file with the same app label): BCBS TN posts Network S as
   32 files, each its own network id; picking the "20 largest networks" had picked 20 parts of S and P.

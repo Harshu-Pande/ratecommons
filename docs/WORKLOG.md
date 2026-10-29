@@ -10,6 +10,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   serve anthem:dataset dispatched by the app session (Anthem merged 10:04 CT; the orchestrator was waiting on a reduce).
   20:30 CT: BCBS = every code for TN's 7 home networks (live). Aetna = every code for 20 main groups, cloud pack
   running. Anthem back to common services (main networks' plipg too big for the app). See DECISIONS 2026-10-28 evening.
+  22:20 CT: Aetna every-code pack live (100,666 codes, 20 main groups); app query rewritten (released c0f374b).
 - 2026-10-28 01:15 CT [pipeline] Pipeline lane: UHC down ops/waves.txt; watch the Anthem pack chain
   (src/ticdata/{reduce,pipeline,cli}.py, core/, ops/, map/reduce runs). BCBS, Aetna, Anthem merged.
 
