@@ -51,6 +51,8 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-10-29 17:50 CT [pipeline] Safety check: UHC wave 4 reduced (40928439451); wave 5 reducing, wave 6 mapping. Blue batch 1
+  (40943309473): 5 of 6 shards mapped; shard 29 lost its runner (GitHub shutdown signal), to be retried once shard 33 ends.
 - 2026-10-29 13:45 CT [pipeline] UHC wave 3 reduced (40912655610, all 16 parts; ~79 GB disk free per part after
   d2bc403). Orchestrator carries UHC again: wave 4 reduce (40928439451, wave-ready passed), wave 5 map (40928394758).
 - 2026-10-29 11:40 CT [pipeline] UHC wave 3 facts re-run 40864095201: 15 of 16 parts out of disk again (sliced input
