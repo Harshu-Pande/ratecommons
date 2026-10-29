@@ -5,7 +5,8 @@ name: serve
 # <payer>/serving from the published release ("dataset") or a reduce wave ("wave-N"); an optional
 # third part limits it to providers in some states, e.g. "aetna:wave-1:MO,IL,KS"; a fifth part picks the codes:
 # "all", "common" (CareCompass procedures + CSTM-ALL, streamed from the release) or empty = auto (all for cigna,
-# common for the big payers; see serve_jobs.FULL_PACK), e.g. "bcbs:dataset:::common".
+# main for the big payers; see serve_jobs.FULL_PACK), e.g. "bcbs:dataset:::common" or "anthem:dataset:::main:5"
+# (every code for the 5 largest network families, the 62 common services for every network).
 on:
   workflow_dispatch:
     inputs:

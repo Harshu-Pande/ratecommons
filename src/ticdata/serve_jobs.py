@@ -331,12 +331,15 @@ def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload:
     codes = codes or os.environ.get("RC_PACK_CODES") or "auto"  # serve.yml passes a target's 5th field here
     if codes == "auto":
         codes = "all" if payer in FULL_PACK else "main"
+    n_main = MAIN_NETWORKS
+    if codes.startswith("main:"):  # "main:5": every code for the 5 largest network families
+        codes, n_main = "main", int(codes.split(":", 1)[1])
     subset = None
     main = None
     if codes in ("common", "main") and source == "dataset":
         subset = common_codes()
         if codes == "main":
-            main = main_networks(payer, release, aetna_plans() if payer == "aetna" else None)
+            main = main_networks(payer, release, aetna_plans() if payer == "aetna" else None, n=n_main)
             _log(f"main networks: {len(main)}")
         pre = prefilter(payer, release, subset, f"{work}/src/release={release}", f"{work}/pre", main=main)
         _log(f"prefilter: {json.dumps(pre)}")
