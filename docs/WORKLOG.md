@@ -11,8 +11,8 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   20:30 CT: BCBS = every code for TN's 7 home networks (live). Aetna = every code for 20 main groups, cloud pack
   running. Anthem back to common services (main networks' plipg too big for the app). See DECISIONS 2026-10-28 evening.
   22:20 CT: Aetna every-code pack live (100,666 codes, 20 main groups); app query rewritten (released c0f374b).
-- 2026-10-28 01:15 CT [pipeline] Pipeline lane: UHC down ops/waves.txt; watch the Anthem pack chain
-  (src/ticdata/{reduce,pipeline,cli}.py, core/, ops/, map/reduce runs). BCBS, Aetna, Anthem merged.
+- 2026-10-28 01:15 CT [pipeline] Pipeline lane: UHC down ops/waves.txt (orchestrator-driven; safety check-ins every ~4 h).
+  BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
 ## Requests
 - 2026-10-28 12:30 CT [pipeline -> app] FYI: `serve aetna:dataset` (run 40718817163) failed after 70 min: DuckDB out of
@@ -41,6 +41,8 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-10-29 13:45 CT [pipeline] UHC wave 3 reduced (40912655610, all 16 parts; ~79 GB disk free per part after
+  d2bc403). Orchestrator carries UHC again: wave 4 reduce (40928439451, wave-ready passed), wave 5 map (40928394758).
 - 2026-10-29 11:40 CT [pipeline] UHC wave 3 facts re-run 40864095201: 15 of 16 parts out of disk again (sliced input
   kept until the end). Fix d2bc403 (slices deleted as processed); facts re-run dispatched.
 - 2026-10-29 06:20 CT [pipeline] UHC wave 3 reduce 40847293649: dims ok, 14 fact parts lost their runners (disk full,
