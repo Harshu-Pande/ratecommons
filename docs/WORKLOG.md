@@ -41,6 +41,8 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-10-29 11:40 CT [pipeline] UHC wave 3 facts re-run 40864095201: 15 of 16 parts out of disk again (sliced input
+  kept until the end). Fix d2bc403 (slices deleted as processed); facts re-run dispatched.
 - 2026-10-29 06:20 CT [pipeline] UHC wave 3 reduce 40847293649: dims ok, 14 fact parts lost their runners (disk full,
   ~44 GB per part). Fix e6fd5e5 (batched download + slice); facts-only re-run queued behind it. Wave 4 mapped (40833009843).
 - 2026-10-29 04:10 CT [pipeline] UHC wave 3 mapped clean (run 40810183212, with the download resume fix; shards 24, 25,
