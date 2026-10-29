@@ -41,6 +41,9 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-10-29 04:10 CT [pipeline] UHC wave 3 mapped clean (run 40810183212, with the download resume fix; shards 24, 25,
+  32 had broken downloads before it). `wave-ready` passed; wave 3 reduce dispatched (40847293649). Orchestrator is
+  mapping wave 4 (40833009843).
 - 2026-10-28 16:55 CT [pipeline] Cancelled run 40770018611 (UHC wave 3 reduce dispatched by the orchestrator while wave 3
   was still mapping; user approved). Its `next` (clean) never ran; nothing deleted. Fix c97e8ca; wave 3 reduce will be
   re-dispatched once map 40756027556 finishes and `ticdata wave-ready` passes.
