@@ -113,3 +113,31 @@ def test_shares_of_a_split_cover_every_slice_once(tmp_path):
             assert int(d.name.split("=")[1]) % 3 == j
             got += pq.read_table(d).column("ps_id").to_pylist()
     assert sorted(got) == ids
+
+
+def test_streamed_code_table_is_one_redacted_file_like_duckdb(tmp_path):
+    """code is split and deduplicated with pyarrow (BCBS Michigan's 9.7 GB of bundle text), published as one file
+    and redacted exactly as the DuckDB path does."""
+    import shutil
+
+    ids = [bytes([i]) * 16 for i in range(10)]
+    for m, rng in (("f1", range(0, 7)), ("f2", range(3, 10))):
+        d = tmp_path / "map" / m
+        d.mkdir(parents=True)
+        pq.write_table(pa.table({"code_id": pa.array([ids[i] for i in rng], pa.binary(16)),
+                                 "billing_code_type": ["CPT" if i % 2 else "HCPCS" for i in rng],
+                                 "billing_code": [f"9921{i}" if i % 2 else "J1885" for i in rng],
+                                 "name": [f"n{i}" for i in rng], "description": [f"d{i}" for i in rng],
+                                 "bundle": [None for _ in rng]}), d / "code.parquet")
+    shutil.copytree(tmp_path / "map", tmp_path / "map2")
+    duck = reduce.reduce_dims_local(str(tmp_path / "map"), "p", str(tmp_path / "duck"), "code")
+    files = sorted(str(p) for p in (tmp_path / "map2").glob("*/code.parquet"))
+    reduce.split_stream(files, str(tmp_path / "map2/split-code"), "code_id", 3)
+    streamed = reduce.reduce_dims_local(str(tmp_path / "map2"), "p", str(tmp_path / "stream"), "code", presplit=3)
+    assert duck["tables"]["code"]["rows_out"] == streamed["tables"]["code"]["rows_out"] == 10
+    assert streamed["tables"]["code"]["text"] == duck["tables"]["code"]["text"]
+    assert not (tmp_path / "stream/code").exists() and not (tmp_path / "map2/parts-code").exists()
+    rows = lambda p: sorted(pq.read_table(p).to_pylist(), key=lambda r: r["code_id"])  # noqa: E731
+    assert rows(tmp_path / "duck/code.parquet") == rows(tmp_path / "stream/code.parquet")
+    assert rows(tmp_path / "duck.restricted/code_text.parquet") == rows(tmp_path / "stream.restricted/code_text.parquet")
+    assert all(r["name"] is None for r in rows(tmp_path / "stream/code.parquet") if r["billing_code_type"] == "CPT")

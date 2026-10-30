@@ -509,7 +509,9 @@ DIM_SLICES = {"price_list": 8, "price_term": 4, "provider_set": 4, "provider_lis
 # tables whose rows hold thousands of ids (BCBS BlueCard): split and deduplicated with pyarrow a few hundred rows
 # at a time; the price tables are split in big batches and deduplicated per slice with DuckDB (500-row batches
 # took 83 minutes for one Aetna wave's price_term)
-STREAMED = {"provider_set", "provider_list"}
+# code: a BCBS Michigan HMO file's 977k codes carry 9.7 GB of bundle text, past DuckDB's 6.5 GB (published as one file)
+STREAMED = {"provider_set", "provider_list", "code"}
+FETCH_SPLIT = set(DIM_SLICES) | {"code"}  # downloaded and hash-sliced in batches by _fetch_split
 
 
 def restricted_dir(out: str) -> str:
@@ -518,8 +520,9 @@ def restricted_dir(out: str) -> str:
 
 
 def reduce_dims(payer: str, release: str, bucket: str, out: str, token=None, workdir: str = "/tmp/reduce",
-                table: str = "all", shards: tuple[int, int] | None = None) -> dict:
-    """Distinct dimension rows across all files (one table, or 'meta' for source_file/network)."""
+                table: str = "all", shards: tuple[int, int] | None = None, share: tuple[int, int] | None = None) -> dict:
+    """Distinct dimension rows across all files (one table, or 'meta' for source_file/network). share=(j, n): this
+    job keeps slices i % n == j of a split table (Blue batch 1's wave 4 holds 100 GB of provider sets)."""
     t0 = time.time()
     prefix = f"map/{release}/{payer}/"
     allp = [p for p in _list(bucket, prefix, token) if in_shards(p, shards)]
@@ -532,8 +535,8 @@ def reduce_dims(payer: str, release: str, bucket: str, out: str, token=None, wor
         want = [p for p in allp if p.endswith(f"/{table}.parquet") or is_meta(p)]
     local = os.path.join(workdir, f"dims-{table}")
     presplit = None
-    if table in DIM_SLICES:  # big list tables: download and split in batches so disk holds ~one copy
-        presplit = _fetch_split(bucket, [p for p in want if not is_meta(p)], local, prefix, token, table)
+    if table in FETCH_SPLIT:  # big tables: download and split in batches so disk holds ~one copy
+        presplit = _fetch_split(bucket, [p for p in want if not is_meta(p)], local, prefix, token, table, share=share)
         want = [p for p in want if is_meta(p)]
     _fetch(bucket, want, local, prefix, token)
     res = reduce_dims_local(local, payer, out, table, delete_inputs=True, presplit=presplit)
@@ -709,23 +712,32 @@ def reduce_dims_local(local: str, payer: str, out: str, table: str = "all", dele
             files = sorted(str(p) for p in Path(f"{local}/split-{name}").glob("*/*.parquet"))
         if not files:
             continue
+        single = name not in DIM_SLICES  # published as one file
         if presplit and name in STREAMED:  # sliced by split_stream: dedup each slice with pyarrow, never DuckDB
             import shutil
 
             import pyarrow.parquet as pq
 
             split = f"{local}/split-{name}"
-            os.makedirs(f"{out}/{name}", exist_ok=True)
+            parts_dir = f"{local}/parts-{name}" if single else f"{out}/{name}"
+            os.makedirs(parts_dir, exist_ok=True)
             width = 2 if presplit < 100 else 3
             n_in = sum(pq.ParquetFile(f).metadata.num_rows for f in files)
             n_out = 0
             for i in range(presplit):
                 fs = sorted(str(p) for p in Path(f"{split}/_slice={i}").glob("*.parquet"))
                 if fs:
-                    n_out += dedup_stream(fs, f"{out}/{name}/part-{i:0{width}d}.parquet", key)
+                    n_out += dedup_stream(fs, f"{parts_dir}/part-{i:0{width}d}.parquet", key)
                     shutil.rmtree(f"{split}/_slice={i}", ignore_errors=True)
             shutil.rmtree(split, ignore_errors=True)
+            if single:
+                from .consolidate import concat_parquet
+
+                concat_parquet(sorted(str(p) for p in Path(parts_dir).glob("*.parquet")), f"{out}/{name}.parquet",
+                               batch_rows=2000)
+                shutil.rmtree(parts_dir, ignore_errors=True)
             res["tables"][name] = {"rows_in": n_in, "rows_out": n_out}
+            _redact(name, out, res)
             continue
         src = f"read_parquet({files!r}, union_by_name = true)"
         if presplit:
@@ -746,7 +758,6 @@ def reduce_dims_local(local: str, payer: str, out: str, table: str = "all", dele
         # list columns and list aggregates do not spill well: about 300 MB of compressed input per slice
         k = presplit or max(DIM_SLICES.get(name, 1),
                             sum(os.path.getsize(f) for f in files) // int(os.environ.get("RC_DIM_SLICE_BYTES", 300 << 20)) + 1)
-        single = name not in DIM_SLICES  # published as one file
         if k == 1:
             dest = f"{out}/{name}.parquet" if single else f"{out}/{name}/part-00.parquet"
             os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -782,11 +793,16 @@ def reduce_dims_local(local: str, payer: str, out: str, table: str = "all", dele
                                batch_rows=20000)
                 shutil.rmtree(parts_dir, ignore_errors=True)
         res["tables"][name] = {"rows_in": n_in, "rows_out": n_out}
-        if name == "code":  # never publish licensed descriptor text (licensing.py); keep it privately
-            from .licensing import redact_code_file
-
-            os.makedirs(restricted_dir(out), exist_ok=True)
-            res["tables"][name]["text"] = redact_code_file(f"{out}/code.parquet",
-                                                           f"{restricted_dir(out)}/code_text.parquet")
+        _redact(name, out, res)
     res["seconds"] = round(time.time() - t0, 1)
     return res
+
+
+def _redact(name: str, out: str, res: dict) -> None:
+    """Never publish licensed descriptor text (licensing.py); keep it privately beside the output."""
+    if name != "code" or not os.path.exists(f"{out}/code.parquet"):
+        return
+    from .licensing import redact_code_file
+
+    os.makedirs(restricted_dir(out), exist_ok=True)
+    res["tables"][name]["text"] = redact_code_file(f"{out}/code.parquet", f"{restricted_dir(out)}/code_text.parquet")

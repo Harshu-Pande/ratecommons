@@ -3,6 +3,16 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-30: wave reduces split provider_set across 8 jobs; the code table is reduced with pyarrow
+- Blue batch 1's wave 4 reduce (shards 28-33) failed in two dims jobs. `dims-code`: DuckDB ran out of 6.5 GB on
+  BCBS Michigan's code rows (their bundle text is 9.7 GB decoded). `dims-provider_set`: the runner was lost after an
+  hour; the wave's provider sets are 100 GB compressed (single map files up to 24.7 GB: BCN HMO, North Carolina),
+  and one job's sliced copy could not fit in 104 GB of disk.
+- `code` joins the streamed tables: downloaded and hash-sliced in batches (`FETCH_SPLIT`), first row per code_id with
+  pyarrow, concatenated to one `code.parquet` (layout unchanged) and redacted as before. Wave reduces now split
+  provider_set into 8 share jobs as merges do (`dims-provider_set.Nof8`, `reduce_dims(share=)`); a small wave pays
+  seven extra short jobs. Only the failed wave's dims were re-run (`bcbs 2026-10 dims wave=4 28-33`).
+
 ## 2026-10-30: code text is redacted and gathered in streamed batches (BCBS Michigan bundles)
 - Blue batch 1's shard 29 (BCBS Michigan Blue Care Network HMO, three 6.3 GB files) lost its runner twice, each time
   just after the Rust parser finished the first file (21.5 GB of JSON, parser peak 6.6 GB). Reproduced locally:

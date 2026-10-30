@@ -252,7 +252,7 @@ def main(argv=None) -> int:
         shards = tuple(int(x) for x in a.shards.split("-")) if a.shards else None
         is_dims = a.part.startswith("dims")
         table = (a.part.split("-", 1)[1] if "-" in a.part else "all") if is_dims else None
-        share = None  # "dims-provider_set.3of8": job 3 of 8 of a table split across jobs (merge of big payers)
+        share = None  # "dims-provider_set.3of8": job 3 of 8 of a table split across jobs (big waves and merges)
         if table and "." in table:
             table, sh = table.split(".", 1)
             share = tuple(int(x) for x in sh.split("of"))
@@ -268,7 +268,7 @@ def main(argv=None) -> int:
                         or p.endswith(f"/network_set/part-{k:02d}.parquet")]
             local = f"/tmp/reduce/merge-{a.part}"
             presplit = None
-            if is_dims and table in reduce.DIM_SLICES:  # list tables: streamed split, as in the waves (BCBS OOM)
+            if is_dims and table in reduce.FETCH_SPLIT:  # big tables: streamed split, as in the waves (BCBS OOM)
                 presplit = reduce._fetch_split(cfg.work_bucket, [p for p in want if not p.endswith("/metas.json")],
                                                local, prefix, tok, table, share=share)
                 want = [p for p in want if p.endswith("/metas.json")]
@@ -276,7 +276,8 @@ def main(argv=None) -> int:
             res = (reduce.reduce_dims_local(local, a.payer, outdir, table, presplit=presplit) if is_dims
                    else reduce.merge_part_local(local, a.release, int(a.part), outdir))
         elif is_dims:
-            res = reduce.reduce_dims(a.payer, a.release, cfg.work_bucket, outdir, token=tok, table=table, shards=shards)
+            res = reduce.reduce_dims(a.payer, a.release, cfg.work_bucket, outdir, token=tok, table=table, shards=shards,
+                                     share=share)
             if a.wave and table == "meta":  # keep the wave's file metadata for the merge
                 metas = [m for _, m in reduce._metas(f"/tmp/reduce/dims-{table}")]
                 Path(outdir).mkdir(parents=True, exist_ok=True)
