@@ -164,12 +164,12 @@ def test_packs_follow_the_newest_successful_merge(monkeypatch):
     assert len(calls) == 1
 
 
-def test_sliced_merge_equals_unsliced(tmp_path, monkeypatch):
-    """merge_part_local cut into fact_id hash slices gives the same facts and network sets."""
+def _four_waves(tmp_path):
+    """Four one-file waves in wave format (set keys) at tmp_path/waves/wave-0..3; facts shared across files."""
     import shutil
 
     from ticdata.pipeline import run_shard
-    from ticdata.reduce import merge_part_local, reduce_part_local
+    from ticdata.reduce import reduce_part_local
 
     web = tmp_path / "web"
     web.mkdir()
@@ -194,6 +194,15 @@ def test_sliced_merge_equals_unsliced(tmp_path, monkeypatch):
         for k in range(16):
             reduce_part_local(str(tmp_path / f"w{w}"), "test", "2026-10", k, str(tmp_path / "waves" / f"wave-{w}"),
                               keys=True)
+
+
+def test_sliced_merge_equals_unsliced(tmp_path, monkeypatch):
+    """merge_part_local cut into fact_id hash slices gives the same facts and network sets."""
+    import shutil
+
+    from ticdata.reduce import merge_part_local
+
+    _four_waves(tmp_path)
     shutil.copytree(tmp_path / "waves", tmp_path / "waves2")
     for k in range(16):
         merge_part_local(str(tmp_path / "waves"), "2026-10", k, str(tmp_path / "one"))
@@ -394,3 +403,59 @@ def test_listed_unavailable_files_do_not_block_a_wave(tmp_path, monkeypatch):
     assert orchestrate.mapped_shards("bcbs", "2026-10") == {33}
     assert pipeline.wave_ready("ratecommons/work", "2026-10", "bcbs", (33, 33)) == []
     assert pipeline.wave_ready("ratecommons/work", "2026-10", "bcbs", (33, 34)) == ["shard 34: 1 failed file(s), e.g. bad.json"]
+
+
+def test_merging_in_parts_equals_one_merge(tmp_path):
+    """Waves merged into a part (wave format), then the part merged with the other waves, give the one-shot
+    merge's facts and network sets exactly; a part may also hold an earlier part (UHC is merged in parts)."""
+    import shutil
+
+    from ticdata.reduce import merge_part_local
+
+    _four_waves(tmp_path)
+    for k in range(16):
+        merge_part_local(str(tmp_path / "waves"), "2026-10", k, str(tmp_path / "one"))
+    stage = tmp_path / "stage"
+    for name, waves in (("p1", ["wave-0", "wave-1"]), ("p2", ["wave-2"])):
+        for wv in waves:
+            shutil.copytree(tmp_path / "waves" / wv, stage / name / wv)
+        for k in range(16):
+            merge_part_local(str(stage / name), "2026-10", k, str(tmp_path / "parts" / name), keys=True)
+    shutil.copytree(tmp_path / "parts" / "p1", stage / "p3" / "part-1")  # a part holding a part
+    shutil.copytree(tmp_path / "parts" / "p2", stage / "p3" / "part-2")
+    for k in range(16):
+        merge_part_local(str(stage / "p3"), "2026-10", k, str(tmp_path / "parts" / "p3"), keys=True)
+    final = stage / "final"
+    shutil.copytree(tmp_path / "parts" / "p3", final / "part-3")
+    shutil.copytree(tmp_path / "waves" / "wave-3", final / "wave-3")
+    for k in range(16):
+        merge_part_local(str(final), "2026-10", k, str(tmp_path / "inparts"))
+    assert _fact_sets(tmp_path / "one") == _fact_sets(tmp_path / "inparts")
+    rows = lambda d, t: sorted(map(lambda r: tuple(sorted(r.items())), pq.read_table(d / t).to_pylist()))  # noqa: E731
+    assert rows(tmp_path / "one", "rate_fact") == rows(tmp_path / "inparts", "rate_fact")
+    ns = lambda d: sorted((r["ns_id"], tuple(r["network_ids"])) for r in pq.read_table(d / "network_set").to_pylist())  # noqa: E731
+    assert ns(tmp_path / "one") == ns(tmp_path / "inparts")
+    assert set(pq.read_table(tmp_path / "parts" / "p1" / "rate_fact").column_names) >= {"x1", "x2", "n_net"}
+
+
+def test_merge_inputs_use_complete_parts_instead_of_their_waves():
+    from ticdata.reduce import UNIT_DIMS, merge_inputs
+
+    pre = "reduced/2026-10/uhc/"
+
+    def unit(name, extra=()):
+        u = f"{pre}{name}/"
+        return [f"{u}rate_fact/part-{k:02d}.parquet" for k in range(16)] + [f"{u}{t}/part-00.parquet" for t in UNIT_DIMS] + \
+            [f"{u}code.parquet", f"{u}metas.json", *[f"{u}{x}" for x in extra]]
+
+    paths = unit("wave-1") + unit("wave-2") + unit("wave-3") + unit("part-1", ["waves.json"]) + unit("part-2")[:5]
+    read = {f"{pre}part-1/waves.json": "[1, 2]"}.__getitem__
+    got = {p.split("/")[3] for p in merge_inputs(paths, pre, read)}
+    assert got == {"part-1", "wave-3"}  # waves 1-2 are in part-1; part-2 is incomplete (its job failed)
+    assert {p.split("/")[3] for p in merge_inputs(unit("wave-3") + unit("wave-4"), pre, read, (3, 4))} == {"wave-3", "wave-4"}
+    with pytest.raises(RuntimeError, match="already in part-1"):
+        merge_inputs(paths, pre, read, (2, 3))
+    with pytest.raises(RuntimeError, match=r"waves \[5\] are not complete"):
+        merge_inputs(unit("wave-4") + unit("wave-5")[:3], pre, read, (4, 5))
+    with pytest.raises(RuntimeError, match="dropped.json"):
+        merge_inputs(paths + [f"{pre}dropped.json"], pre, read)

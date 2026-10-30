@@ -418,8 +418,64 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
     return res
 
 
-def merge_part_local(local: str, release: str, part: int, out: str) -> dict:
+UNIT_DIMS = ("provider_group", "provider_set", "provider_list", "price_term", "price_list")
+
+
+def unit_complete(paths, unit: str) -> bool:
+    """A reduced wave or part folder (unit = its path with a trailing slash) holds every fact part, the dims and
+    metas.json (a dims job can fail while the facts succeed); a part also holds waves.json, written by its meta job."""
+    parts = all(f"{unit}rate_fact/part-{k:02d}.parquet" in paths for k in range(16))
+    dims = all(any(x.startswith(f"{unit}{t}") for x in paths) for t in UNIT_DIMS)
+    part_ok = "/part-" not in unit or f"{unit}waves.json" in paths
+    return parts and dims and part_ok and f"{unit}code.parquet" in paths and f"{unit}metas.json" in paths
+
+
+def merge_inputs(paths: list[str], prefix: str, read, waves: tuple[int, int] | None = None) -> list[str]:
+    """The reduced outputs a merge reads, from every path under prefix (reduced/<release>/<payer>/).
+
+    Complete parts (part-P/ with waves.json) stand in for the waves they cover, whose folders the orchestrator
+    deletes later; a wave read beside the part that holds it would cancel its own set keys (XOR). Incomplete parts
+    are ignored. waves=(a, b) builds a part: exactly waves a..b, each complete and in no part yet. A payer whose
+    waves were deleted after its merge (dropped.json) cannot be merged again until they are reduced again."""
+    if f"{prefix}dropped.json" in paths:
+        raise RuntimeError(f"{prefix}: reduced waves were deleted after the merge (dropped.json); reduce them again")
+    units: dict = {}
+    for p in paths:
+        rest = p[len(prefix):]
+        if "/" in rest:
+            units.setdefault(rest.split("/", 1)[0], set()).add(p)
+    covered = {}
+    for u, ps in units.items():
+        if u.startswith("part-") and unit_complete(ps, f"{prefix}{u}/"):
+            for n in json.loads(read(f"{prefix}{u}/waves.json")):
+                if n in covered:
+                    raise RuntimeError(f"wave {n} is in both {covered[n]} and {u}")
+                covered[n] = u
+    keep = []
+    for u, ps in sorted(units.items()):
+        if u.startswith("wave-"):
+            n = int(u[5:])
+            if waves and not waves[0] <= n <= waves[1]:
+                continue
+            if n in covered:
+                if waves:
+                    raise RuntimeError(f"wave {n} is already in {covered[n]}")
+                continue
+        elif not u.startswith("part-") or waves or u not in covered.values():
+            continue
+        keep += sorted(ps)
+    if waves:
+        missing = [n for n in range(waves[0], waves[1] + 1)
+                   if not unit_complete(units.get(f"wave-{n}", set()), f"{prefix}wave-{n}/")]
+        if missing:
+            raise RuntimeError(f"waves {missing} are not complete; a part needs every wave of its range")
+    return keep
+
+
+def merge_part_local(local: str, release: str, part: int, out: str, keys: bool = False) -> dict:
     """Merge the wave outputs of one fact part (local/<wave>/rate_fact|network_set/part-XX).
+    keys=True writes a part in wave format (set keys kept, merged sets flagged `merged`), so a run of waves can be
+    merged into reduced/<release>/<payer>/part-P and its waves deleted; parts and waves then merge like waves.
 
     Waves hold disjoint sets of files, hence disjoint networks, so a fact's full set key is the
     XOR of its per-wave keys and the member count is their sum; members of each final set are
@@ -470,7 +526,9 @@ def merge_part_local(local: str, release: str, part: int, out: str) -> dict:
         shutil.rmtree(f"{local}/fact_split", ignore_errors=True)
     # 2. members of each merged set: the union of its wave sets (waves hold disjoint networks), resolved in hash
     #    slices of the set key: one list aggregate over every set at once ran Aetna's merge out of memory
-    con.execute(f"CREATE TABLE wsets AS SELECT DISTINCT x1, x2, n_net, network_ids FROM read_parquet({sets!r})")
+    sets_src = f"read_parquet({sets!r}, union_by_name = true)"
+    flagged = "merged" in {d[0] for d in con.execute(f"SELECT * FROM {sets_src} LIMIT 0").description}
+    con.execute(f"CREATE TABLE wsets AS SELECT DISTINCT x1, x2, n_net, network_ids FROM {sets_src}")
     rw = f"read_parquet('{w}/rw/*.parquet')"
     n_rw = con.execute(f"SELECT count(*) FROM {rw}").fetchone()[0]
     q = max(1, n_rw // int(os.environ.get("RC_SET_SLICE_ROWS", 2_000_000)) + 1)
@@ -490,13 +548,17 @@ def merge_part_local(local: str, release: str, part: int, out: str) -> dict:
         raise RuntimeError(f"{bad} merged network sets disagree with their keys")
     # 3. facts get their set's ns_id (a narrow key -> ns_id table), sorted into one part
     con.execute(f"CREATE TABLE nsmap AS SELECT x1, x2, n_net, ns_id FROM {fns}")
+    kc = ", x1, x2, n_net" if keys else ""
     con.execute(f"""
-        COPY (SELECT f.{FACT_COLS.replace(', ', ', f.')}, s.ns_id, '{release}' AS valid_from
+        COPY (SELECT f.{FACT_COLS.replace(', ', ', f.')}, s.ns_id, '{release}' AS valid_from{kc.replace(', ', ', f.')}
               FROM read_parquet('{w}/facts/*.parquet') f JOIN nsmap s USING (x1, x2, n_net)
-              ORDER BY f.billing_code_type, f.billing_code, f.ps_id)
+              {"" if keys else "ORDER BY f.billing_code_type, f.billing_code, f.ps_id"})
         TO '{out}/rate_fact/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 1000000)""")
-    con.execute(f"""COPY (SELECT ns_id, network_ids FROM {fns} UNION
-                          SELECT DISTINCT ns_id, network_ids FROM read_parquet({sets!r}))
+    # the input sets are kept as published (block tables point at wave-level sets), except sets an earlier part
+    # merged: those only carried keys, and the one-shot merge of the same waves would not have them
+    kept = "WHERE NOT coalesce(merged, false)" if flagged else ""
+    con.execute(f"""COPY (SELECT ns_id, network_ids{kc}{", true AS merged" if keys else ""} FROM {fns} UNION
+                          SELECT DISTINCT ns_id, network_ids{kc}{", false AS merged" if keys else ""} FROM {sets_src} {kept})
                     TO '{out}/network_set/part-{part:02d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
     res["network_sets"] = n_keys
     shutil.rmtree(w, ignore_errors=True)

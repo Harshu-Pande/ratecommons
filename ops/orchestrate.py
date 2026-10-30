@@ -19,6 +19,10 @@ PIPELINE = {"uhc": 1024}
 MAX_WAVES_IN_FLIGHT = 2
 # payers whose serving pack (serve.yml) and cloud pack (cloud.yml) are built automatically once merged
 AUTO_PACK = ["bcbs", "anthem"]
+# payers whose reduced/ wave outputs are deleted once their merge is published (storage decision 2026-10-30;
+# not bcbs: more Blue companies are merged into it). A later merge of these needs the waves reduced again.
+DROP_REDUCED = {"aetna", "anthem"}
+_REDUCED = {}  # (payer, release) -> reduced_state(), listed once per run
 
 
 def gh(path, tries=4):
@@ -33,13 +37,45 @@ def gh(path, tries=4):
             time.sleep(10 * (i + 1))
 
 
+def is_wave(w):
+    """A waves.txt line that reduces shards (`<payer> <release> <wave> a-b`), not a part or the merge."""
+    return w[2].isdigit()
+
+
+def reduced_state(payer, release):
+    """(paths under reduced/<release>/<payer>/, {wave: part} for waves held by a complete part,
+    {wave: files} for waves deleted after the merge (dropped.json)), listed once per orchestrator run."""
+    key = (payer, release)
+    if key not in _REDUCED:
+        from huggingface_hub import HfFileSystem
+
+        from ticdata.reduce import unit_complete
+
+        pre = f"reduced/{release}/{payer}/"
+        paths = {i.path for i in list_bucket_tree(BUCKET, prefix=pre, recursive=True)}
+        fs, covered, dropped = HfFileSystem(), {}, {}
+        for u in sorted({p[len(pre):].split("/", 1)[0] for p in paths if "/" in p[len(pre):]}):
+            if u.startswith("part-") and unit_complete(paths, f"{pre}{u}/"):
+                covered.update({int(n): u for n in json.loads(fs.read_text(f"buckets/{BUCKET}/{pre}{u}/waves.json"))})
+        if f"{pre}dropped.json" in paths:
+            dropped = {int(k): v for k, v in json.loads(fs.read_text(f"buckets/{BUCKET}/{pre}dropped.json"))["waves"].items()}
+        _REDUCED[key] = (paths, covered, dropped)
+    return _REDUCED[key]
+
+
 def wave_done(payer, release, wave):
-    prefix = f"reduced/{release}/{payer}/wave-{wave}/"
-    paths = {i.path for i in list_bucket_tree("ratecommons/work", prefix=prefix, recursive=True)}
-    parts = all(f"{prefix}rate_fact/part-{k:02d}.parquet" in paths for k in range(16))
-    dims = all(any(x.startswith(f"{prefix}{t}") for x in paths)  # a dims job can fail while the facts succeed
-               for t in ("provider_group", "provider_set", "provider_list", "price_term", "price_list"))
-    return parts and dims and f"{prefix}code.parquet" in paths and f"{prefix}metas.json" in paths
+    """The wave's reduced output is complete, or it is held by a complete part, or it was dropped after the merge."""
+    from ticdata.reduce import unit_complete
+
+    paths, covered, dropped = reduced_state(payer, release)
+    return int(wave) in covered or int(wave) in dropped or \
+        unit_complete(paths, f"reduced/{release}/{payer}/wave-{wave}/")
+
+
+def part_done(payer, release, part):
+    from ticdata.reduce import unit_complete
+
+    return unit_complete(reduced_state(payer, release)[0], f"reduced/{release}/{payer}/part-{part}/")
 
 
 def merge_done(payer, release, waves=None):
@@ -53,8 +89,26 @@ def merge_done(payer, release, waves=None):
         all(any(f.startswith(f"{r}{t}/") for f in files) for t in ("provider_set", "provider_list", "price_list", "price_term"))
     if not tables or waves is None:
         return tables
-    return merged_files(payer, release) >= sum(wave_files(payer, release, w[2]) for w in waves
-                                               if w[0] == payer and w[1] == release and w[2] != "merge")
+    return merged_files(payer, release) >= expected_files(payer, release, waves)
+
+
+def expected_files(payer, release, waves):
+    """Files the payer's waves hold: from each wave's metas.json, or its part's (counted once), or dropped.json."""
+    _, covered, dropped = reduced_state(payer, release)
+    n, parts = 0, set()
+    for w in waves:
+        if w[0] != payer or w[1] != release or not is_wave(w):
+            continue
+        k = int(w[2])
+        if k in dropped:
+            n += dropped[k]
+        elif k in covered:
+            if covered[k] not in parts:
+                parts.add(covered[k])
+                n += wave_files(payer, release, covered[k])
+        else:
+            n += wave_files(payer, release, w[2])
+    return n
 
 
 def merged_files(payer, release):
@@ -67,10 +121,11 @@ def merged_files(payer, release):
 
 
 def wave_files(payer, release, wave):
-    """Files reduced into a wave (its metas.json lists one meta per file)."""
+    """Files reduced into a wave or a part ("part-P") (its metas.json lists one meta per file)."""
     from huggingface_hub import HfFileSystem
 
-    return len(json.loads(HfFileSystem().read_text(f"buckets/{BUCKET}/reduced/{release}/{payer}/wave-{wave}/metas.json")))
+    unit = wave if str(wave).startswith("part-") else f"wave-{wave}"
+    return len(json.loads(HfFileSystem().read_text(f"buckets/{BUCKET}/reduced/{release}/{payer}/{unit}/metas.json")))
 
 
 def mapped_shards(payer, release):
@@ -116,26 +171,60 @@ def map_folders(payer, release):
 
 
 def clean(waves):
-    """Delete the map output of every finished wave (its facts and dims are in reduced/<release>/<payer>/wave-N)."""
-    from huggingface_hub import batch_bucket_files
+    """Delete what a later step no longer needs: the map output of every finished wave (its facts and dims are in
+    reduced/<release>/<payer>/wave-N), the reduced waves a complete part holds, and, for DROP_REDUCED payers
+    whose merge is published, their reduced waves (dropped.json keeps each wave's file count)."""
+    import os
+    import tempfile
+
+    from huggingface_hub import HfFileSystem, batch_bucket_files
 
     from ticdata import hfio
 
+    def delete(paths, what):
+        print(f"deleting {what}: {len(paths)} files")
+        token = hfio.token_for(hfio.bucket(BUCKET))
+        for i in range(0, len(paths), 500):
+            batch_bucket_files(BUCKET, delete=paths[i:i + 500], token=token)
+
     folders = {}
     for w in waves:
-        if w[2] == "merge" or not wave_done(w[0], w[1], w[2]):
+        if not is_wave(w) or not wave_done(w[0], w[1], w[2]):
             continue
         key = (w[0], w[1])
         folders[key] = folders.get(key) or map_folders(*key)
         a, b = map(int, w[3].split("-"))
         paths = [p for s in range(a, b + 1) for p in folders[key].get(s, [])]
         if paths:
-            print(f"deleting map output of {w[0]} wave {w[2]} (shards {w[3]}): {len(paths)} files")
-            token = hfio.token_for(hfio.bucket(BUCKET))
-            for i in range(0, len(paths), 500):
-                batch_bucket_files(BUCKET, delete=paths[i:i + 500], token=token)
+            delete(paths, f"map output of {w[0]} wave {w[2]} (shards {w[3]})")
             for s in range(a, b + 1):
                 folders[key].pop(s, None)
+
+    for payer, release in sorted({(w[0], w[1]) for w in waves}):
+        pre = f"reduced/{release}/{payer}/"
+        paths, covered, dropped = reduced_state(payer, release)
+        held = sorted(p for p in paths if any(p.startswith(f"{pre}wave-{n}/") for n in covered))
+        if held:  # the part is complete (reduced_state checks), so its waves are only a second copy
+            delete(held, f"{payer} reduced waves {sorted(covered)} (held by {sorted(set(covered.values()))})")
+            _REDUCED.pop((payer, release), None)
+        if payer in DROP_REDUCED and not dropped and merge_done(payer, release, waves):
+            files = {int(w[2]): wave_files(payer, release, w[2]) for w in waves
+                     if w[0] == payer and w[1] == release and is_wave(w) and int(w[2]) not in covered}
+            files.update({n: 0 for n in covered})  # (a part's files are counted through the part, gone too)
+            parts = sorted(set(covered.values()))
+            doc = {"waves": files, "parts": {p: wave_files(payer, release, p) for p in parts},
+                   "reason": "storage decision 2026-10-30: reduced waves of a published merge"}
+            with tempfile.TemporaryDirectory() as d:
+                f = os.path.join(d, "dropped.json")
+                with open(f, "w") as fh:
+                    json.dump(doc, fh)
+                batch_bucket_files(BUCKET, add=[(f, f"{pre}dropped.json")], token=hfio.token_for(hfio.bucket(BUCKET)))
+            if json.loads(HfFileSystem().read_text(f"buckets/{BUCKET}/{pre}dropped.json")) != json.loads(json.dumps(doc)):
+                raise RuntimeError(f"{pre}dropped.json did not read back; nothing deleted")
+            gone = sorted(p for p in paths if p != f"{pre}dropped.json")
+            if gone:
+                delete(gone, f"{payer} reduced waves after its published merge")
+            _REDUCED.pop((payer, release), None)
 
 
 def start_maps(waves):
@@ -152,7 +241,7 @@ def start_maps(waves):
         if busy:
             print(f"{payer}: a map run is in progress ({busy[0]['id']})")
             continue
-        mine = [w for w in waves if w[0] == payer and w[2] != "merge"]
+        mine = [w for w in waves if w[0] == payer and is_wave(w)]
         if not mine:
             continue
         mapped = mapped_shards(payer, mine[0][1])
@@ -226,6 +315,7 @@ def main():
 
     me = os.environ.get("SELF_RUN_ID")  # when called at the end of a reduce run, ignore that run
     waves = [l.split() for l in open("ops/waves.txt") if l.strip() and not l.startswith("#")]
+    _REDUCED.clear()
     for step in (clean, start_maps, packs):  # independent of the reduce chain below; a failure here must not stop it
         try:
             step(waves)
@@ -252,12 +342,22 @@ def main():
         if w[2] == "merge":
             if merge_done(payer, release, waves):
                 continue
-            if all(wave_done(payer, release, x[2]) for x in waves if x[0] == payer and x[2] != "merge"):
+            if all(wave_done(payer, release, x[2]) for x in waves if x[0] == payer and is_wave(x)):
                 req = f"{payer} {release} all merge"
             else:
                 print(f"{payer} merge waits for its waves")
                 blocked.add(payer)
                 continue
+        elif w[2].startswith("part="):  # merge waves a-b into reduced/<release>/<payer>/part-P, then clean() drops them
+            part = w[2][5:]
+            if part_done(payer, release, part):
+                continue
+            a, b = map(int, w[3].split("-"))
+            if not all(wave_done(payer, release, str(x)) for x in range(a, b + 1)):
+                print(f"{payer} part {part} waits for waves {w[3]}")
+                blocked.add(payer)
+                continue
+            req = f"{payer} {release} all part={part} {w[3]}"
         else:
             if wave_done(payer, release, w[2]):
                 continue

@@ -93,6 +93,8 @@ def main(argv=None) -> int:
     p.add_argument("--wave", help="reduce only one wave of shards into reduced/<release>/<payer>/wave-<W>/ (work bucket)")
     p.add_argument("--shards", help="the wave's shard range a-b")
     p.add_argument("--merge", action="store_true", help="merge every wave in reduced/ and publish")
+    p.add_argument("--into", help="with --merge: write a part (e.g. part-1) in wave format to reduced/ instead of publishing")
+    p.add_argument("--waves", help="with --into: the wave range a-b the part holds")
     p.add_argument("--out")
 
     p = sub.add_parser("fetch", help="download one payer file (first name containing --match) to a path")
@@ -258,7 +260,13 @@ def main(argv=None) -> int:
             share = tuple(int(x) for x in sh.split("of"))
         if a.merge:  # inputs are the wave outputs, not the map outputs
             prefix = f"reduced/{a.release}/{a.payer}/"
-            allp = reduce._list(cfg.work_bucket, prefix, tok)
+            from huggingface_hub import HfFileSystem
+
+            fs = HfFileSystem(token=tok)
+            rng = tuple(int(x) for x in a.waves.split("-")) if a.waves else None
+            # complete parts stand in for their waves; a part reads exactly its range of waves
+            allp = reduce.merge_inputs(reduce._list(cfg.work_bucket, prefix, tok), prefix,
+                                       lambda p: fs.read_text(f"buckets/{cfg.work_bucket}/{p}"), rng)
             if is_dims:
                 want = [p for p in allp if p.endswith("/metas.json") or (table != "meta" and (
                     f"/{table}/" in p or p.endswith(f"/{table}.parquet")))]
@@ -274,7 +282,11 @@ def main(argv=None) -> int:
                 want = [p for p in want if p.endswith("/metas.json")]
             reduce._fetch(cfg.work_bucket, want, local, prefix, tok)
             res = (reduce.reduce_dims_local(local, a.payer, outdir, table, presplit=presplit) if is_dims
-                   else reduce.merge_part_local(local, a.release, int(a.part), outdir))
+                   else reduce.merge_part_local(local, a.release, int(a.part), outdir, keys=bool(a.into)))
+            if a.into and table == "meta":  # the part's file metadata and the waves it holds, for later merges
+                Path(outdir).mkdir(parents=True, exist_ok=True)
+                (Path(outdir) / "metas.json").write_text(json.dumps([m for _, m in reduce._metas(local)]))
+                (Path(outdir) / "waves.json").write_text(json.dumps(list(range(rng[0], rng[1] + 1))))
         elif is_dims:
             res = reduce.reduce_dims(a.payer, a.release, cfg.work_bucket, outdir, token=tok, table=table, shards=shards,
                                      share=share)
@@ -285,15 +297,16 @@ def main(argv=None) -> int:
         else:
             res = reduce.reduce_part(a.payer, a.release, int(a.part), cfg.work_bucket, outdir, token=tok,
                                      shards=shards, keys=bool(a.wave))
-        if a.wave:
+        unit = f"wave-{a.wave}" if a.wave else a.into
+        if unit:
             from huggingface_hub import batch_bucket_files
 
             private = Path(reduce.restricted_dir(outdir)) / "code_text.parquet"
             if private.exists():
                 batch_bucket_files(cfg.restricted_bucket,
-                                   add=[(str(private), f"release/{a.payer}/{a.release}/wave-{a.wave}/code_text.parquet")],
+                                   add=[(str(private), f"release/{a.payer}/{a.release}/{unit}/code_text.parquet")],
                                    token=hfio.token_for(hfio.bucket(cfg.restricted_bucket)))
-            prefix = f"reduced/{a.release}/{a.payer}/wave-{a.wave}"
+            prefix = f"reduced/{a.release}/{a.payer}/{unit}"
             adds = [(str(f), f"{prefix}/{f.relative_to(outdir)}") for f in Path(outdir).rglob("*") if f.is_file()]
             # a fresh token: the one from the start expires after an hour, and big dims jobs run longer
             batch_bucket_files(cfg.work_bucket, add=adds, token=hfio.token_for(hfio.bucket(cfg.work_bucket)))
