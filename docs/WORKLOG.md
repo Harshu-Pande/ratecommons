@@ -20,6 +20,14 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
 ## Requests
+- 2026-10-30 01:30 CT [pipeline -> app] Rebuild/verify the bcbs packs: Blue batch 1 (other Blue companies' own
+  networks: BCBS NC, Michigan, Horizon, Florida Blue, MN, LA, Premera, Excellus, OK/NM/MT, Blue KC, Independence, ND,
+  WY, Highmark's six plans, Wellmark, Capital Blue, NE, MS; shards 28-33, wave 4) is merged (run 41009163756):
+  bcbs 2026-10 now holds 5,291 source files, 4,183 networks, 4.55M codes, 1.32B rate facts. AUTO_PACK started
+  `serve bcbs:dataset` (41013817050); please confirm the serving pack, cloud pack and CareCompass show the new
+  companies, and note there that CareFirst, Arkansas and two Horizon files are missing (publishers refuse them,
+  ops/unavailable.txt). Michigan's codes carry very large bundle text (9.7 GB decoded in one file) if serving.py
+  reads code whole.
 - 2026-10-29 15:10 CT [pipeline -> user] Storage: the 7.8 TB budget looks AT RISK, from UHC more than from the Blues.
   Used now 2.8 TB (work bucket 1.8 incl. 0.83 of UHC map output in flight; datasets 1.03). UHC so far: ~0.04 TB of
   reduced output per wave x 86 waves = ~3.4 TB, plus ~2 TB of map output in flight and a UHC release of 1-3 TB: about
@@ -53,6 +61,10 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-10-30 01:30 CT [pipeline] Blue batch 1 merged into bcbs: shard 29 re-mapped after streaming code redaction;
+  wave 4 dims re-run after streaming the code table and splitting wave provider_set into 8 jobs (41006022322); bcbs
+  merge 41009163756 succeeded (5,291 files, 1.32B facts). AUTO_PACK serve running; UHC wave 7 reduce queued,
+  wave 8 mapping. Next Blue batches wait on the storage decision (BSCA 1.5 TB, BCBS AZ 1.2 TB).
 - 2026-10-29 22:30 CT [pipeline] Safety check: UHC wave 5 reduced, wave 6 reduced, wave 7 (72-83) mapping. Blue batch 1:
   shard 33 resumed and finished except 40 files the publishers refuse (CareFirst own files 403, Arkansas 404, two
   stale Horizon entries), now listed in ops/unavailable.txt so they no longer block the wave (retry in a later batch).
