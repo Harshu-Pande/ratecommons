@@ -58,6 +58,7 @@ def main(argv=None) -> int:
     p.add_argument("--limit", type=int)
     p.add_argument("--match", default="", help="comma-separated name substrings: plan only those files")
     p.add_argument("--first-shard", type=int, default=0, help="number shards from N (files added after a map)")
+    p.add_argument("--file-mb", type=int, default=0, help="per-file cost in MB when balancing shards (many small files)")
     p.add_argument("--release", default="", help="file every planned file under this release (YYYY-MM) instead of "
                    "the date in its name: HCSC lists files named 2026-09-14_... as current in October")
     p.add_argument("--out", required=True)
@@ -210,7 +211,7 @@ def main(argv=None) -> int:
         from . import pipeline
 
         doc = pipeline.plan(a.payer, a.shards, limit=a.limit, match=[m for m in a.match.split(',') if m] or None,
-                            first_shard=a.first_shard)
+                            first_shard=a.first_shard, file_bytes=a.file_mb << 20)
         if a.release:
             for sh in doc["shards"]:
                 for f in sh["files"]:

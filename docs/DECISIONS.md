@@ -3,6 +3,18 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-30: shards resume, stop before the job limit, and can be balanced by file count
+- Blue batch 1's last shard got 3,251 files of 5.8 GB (Excellus' 2,556 small `.json.zip` files among them): the plan
+  balances bytes, but each file costs ~7 s (download, Python parser for zip). It parsed 2,675 in 5 hours and was
+  heading for the 350-minute job limit, after which a plain re-run would have started from zero.
+- `run_shard` now resumes: files already in this shard's uploaded chunks (their metas.json) are skipped and new chunks
+  are numbered after the existing ones. A time budget (`TIC_SHARD_BUDGET_MIN`, 320) stops starting files before the
+  job limit; unstarted files go in the status file as failed, so the shard stays unmapped until a re-run finishes it.
+- `plan --file-mb N` (map-request word `perfile=N`) adds a per-file cost when balancing. Opt-in: a re-plan of a payer
+  must keep the shard contents of plans already mapped (UHC's 1,024 shards).
+- map-request words after the 4th are now `key=value` in any order, and `plan=<path in the ops dataset>` reuses a stored
+  plan as is, so retrying shards of a `match=` plan keeps exactly the files they had.
+
 ## 2026-10-29: BCBS IL/TX and Anthem get every code for main networks; wide lists split per state
 - BCBS main networks: every TN home family + the 3 largest IL (PPO, Blue Options, TraditionalBlue) and TX (Blue
   Choice PPO, Blue Essentials, ParPlan) home families (RC_BCBS_MAIN_PLANS). Pack: 309M rate rows, 644M set -> list

@@ -64,13 +64,54 @@ def wave_ready(bucket: str, release: str, payer: str, shards: tuple[int, int]) -
     return why
 
 
+def _uploaded(bucket: str, payer: str, shard: int, token) -> tuple[set, int]:
+    """(file names in this shard's uploaded chunks, next chunk number), over every release folder of the payer."""
+    import re as _re
+
+    from huggingface_hub import HfFileSystem, list_bucket_tree
+
+    tok = token() if callable(token) else token
+    names, top = set(), -1
+    fs = HfFileSystem(token=tok)
+    for rel in list_bucket_tree(bucket, prefix="map/", recursive=False, token=tok):
+        for i in list_bucket_tree(bucket, prefix=f"{rel.path}/{payer}/", recursive=False, token=tok):
+            m = _re.search(rf"/shard-{shard:03d}-(\d+)$", i.path)
+            if not m:
+                continue
+            top = max(top, int(m.group(1)))
+            try:
+                metas = json.loads(fs.read_text(f"buckets/{bucket}/{i.path}/metas.json"))
+            except FileNotFoundError:  # a chunk cut off before its metas.json: parsed again
+                continue
+            metas = metas if isinstance(metas, list) else list(metas.values())
+            names |= {(x.get("source") or {}).get("name") for x in metas}
+    return names - {None}, top + 1
+
+
+def _local_chunks(folder: str, shard: int) -> tuple[set, int]:
+    """_uploaded for chunks kept on disk (chunk_out)."""
+    import glob as _glob
+    import re as _re
+
+    names, top = set(), -1
+    for d in _glob.glob(os.path.join(folder, f"shard-{shard:03d}-*")):
+        m = _re.search(r"-(\d+)$", d)
+        if not m or not os.path.isdir(d):
+            continue
+        top = max(top, int(m.group(1)))
+        if os.path.exists(f"{d}/metas.json"):
+            metas = json.loads(Path(f"{d}/metas.json").read_text())
+            names |= {(x.get("source") or {}).get("name") for x in (metas if isinstance(metas, list) else metas.values())}
+    return names - {None}, top + 1
+
+
 def release_of(name: str) -> str:
     m = re.match(r"(\d{4})-(\d{2})-\d{2}", name.rsplit("/", 1)[-1])
     return f"{m.group(1)}-{m.group(2)}" if m else time.strftime("%Y-%m")
 
 
 def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = None,
-         match: list[str] | None = None, first_shard: int = 0) -> dict:
+         match: list[str] | None = None, first_shard: int = 0, file_bytes: int = 0) -> dict:
     """first_shard: number the shards from N (empty shards 0..N-1 keep plan["shards"][n] indexable), so files added
     to a payer after its map (a `match=` plan) land in new shard folders next to the existing ones."""
     s = new_session(pool=32)
@@ -122,16 +163,20 @@ def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = 
         uniq = list(ex.map(size_of, uniq))
     # Contiguous runs in size order: near-duplicate files (same network family, sizes within a
     # few KB) land in the same shard, where the shared seen-blocks set writes their facts once.
-    total = sum(e["size"] or 0 for e in uniq)
+    # file_bytes: a per-file cost added to each size, so thousands of small files spread over shards (Blue batch 1:
+    # one shard got 3,251 files of 5.8 GB and outran the 350-minute job). Opt-in, so re-plans of a payer keep the
+    # shard contents of plans already mapped.
+    total = sum((e["size"] or 0) + file_bytes for e in uniq)
     target = total / max(shards, 1)
-    load = [0] * shards
+    load, weight = [0] * shards, [0] * shards
     assign: list[list[dict]] = [[] for _ in range(shards)]
     i = 0
     for e in sorted(uniq, key=lambda e: (-(e["size"] or 0), e["name"])):
-        if load[i] >= target and i < shards - 1:
+        if weight[i] >= target and i < shards - 1:
             i += 1
         assign[i].append({k: e.get(k) for k in ("name", "url", "size", "kind")})
         load[i] += e["size"] or 0
+        weight[i] += (e["size"] or 0) + file_bytes
     return {"payer": payer, "kind": kind, "files": len(uniq), "bytes": sum(load), "duplicates": duplicates,
             "shards": [{"shard": i, "bytes": 0, "files": []} for i in range(first_shard)] +
                       [{"shard": first_shard + i, "bytes": load[i], "files": a} for i, a in enumerate(assign)]}
@@ -200,6 +245,13 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
     results: list[dict] = []
     staged: list[tuple[str, str, str]] = []  # (file key, output folder, release)
     chunks: list[dict] = []
+    # a re-run resumes: files in chunks this shard already uploaded are skipped and new chunks are numbered after them
+    # (Blue batch 1's 3,251-file shard ran out of time with 2,675 parsed); a time budget ends the run before the job
+    # limit, so what was parsed is uploaded and the rest is listed as failed for the next run
+    done_names, chunk_base = (_uploaded(upload_bucket, payer, shard, token) if upload_bucket
+                              else _local_chunks(chunk_out, shard) if chunk_out else (set(), 0))
+    budget_s = float(os.environ.get("TIC_SHARD_BUDGET_MIN", "320")) * 60
+    t_start = time.time()
 
     def flush():
         if not staged:
@@ -211,7 +263,7 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
         t0 = time.time()
         info["tables"] = consolidate([(k, d) for k, d, _ in staged], cdir)["tables"]
         texts = [(k, f"{d}.code_text.parquet") for k, d, _ in staged if os.path.exists(f"{d}.code_text.parquet")]
-        prefix = f"map/{rel}/{payer}/shard-{shard:03d}-{len(chunks):02d}"
+        prefix = f"map/{rel}/{payer}/shard-{shard:03d}-{chunk_base + len(chunks):02d}"
         if upload_bucket:
             from huggingface_hub import batch_bucket_files
 
@@ -244,6 +296,13 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
 
     for e in files:
         key, rel = file_key(e["name"]), e.get("release") or release_of(e["name"])
+        if e["name"] in done_names:
+            results.append({"name": e["name"], "key": key, "release": rel, "ok": True, "resumed": True})
+            continue
+        if time.time() - t_start > budget_s:
+            results.append({"name": e["name"], "key": key, "release": rel, "ok": False,
+                            "error": "not started: shard time budget (TIC_SHARD_BUDGET_MIN) used up; a re-run resumes"})
+            continue
         staged_bytes = sum(f.stat().st_size for _, d, _ in staged for f in __import__("pathlib").Path(d).rglob("*")
                            if f.is_file())
         if staged and (staged[0][2] != rel or len(staged) >= chunk_files or staged_bytes >= CHUNK_BYTES):

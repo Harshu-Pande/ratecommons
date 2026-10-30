@@ -43,14 +43,23 @@ jobs:
       - run: pip install -q -e .
       - id: plan
         run: |
-          read payer shards limit range match base release <<< "$(grep -v '^#' ops/map-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
+          read payer shards limit range words <<< "$(grep -v '^#' ops/map-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
+          # optional key=value words: match=, base=, release=, perfile=<MB per file when balancing>, plan=<a stored
+          # plan.json in the ops dataset to reuse as is (retrying shards of an earlier match= plan)>
+          match=""; base=""; release=""; perfile=""; stored=""
+          for w in $words; do case "$w" in match=*) match="$w";; base=*) base="$w";; release=*) release="$w";;
+            perfile=*) perfile="${w#perfile=}";; plan=*) stored="${w#plan=}";; esac; done
           [ "$limit" = "0" ] && limit=""
           [ -n "${{ github.event.inputs.payer }}" ] && payer="${{ github.event.inputs.payer }}" && shards="${{ github.event.inputs.shards }}" && limit="${{ github.event.inputs.limit }}"
-          [ -n "${{ github.event.inputs.payer }}" ] && range="${{ github.event.inputs.range }}" && match="" && base="" && release=""
+          [ -n "${{ github.event.inputs.payer }}" ] && range="${{ github.event.inputs.range }}" && match="" && base="" && release="" && stored="" && perfile=""
           echo "payer=$payer shards=$shards limit=$limit"
           # UHC: parse one file per identical-content group (gzip trailer fingerprints from uhc-tails)
           [ "$payer" = uhc ] && export TIC_DUP_TAILS="runs/2026-10-27-gha-run-40546293263/uhc-tails.json"
-          ticdata plan --payer "$payer" --shards "$shards" ${limit:+--limit $limit} --match "${match#match=}" --first-shard "$(b=${base#base=}; echo ${b:-0})" --release "${release#release=}" --out plan.json > /dev/null
+          if [ -n "$stored" ]; then
+            STORED="$stored" python -c "import os, shutil; from huggingface_hub import hf_hub_download; shutil.copy(hf_hub_download('ratecommons/ops', os.environ['STORED'], repo_type='dataset'), 'plan.json')"
+          else
+            ticdata plan --payer "$payer" --shards "$shards" ${limit:+--limit $limit} --match "${match#match=}" --first-shard "$(b=${base#base=}; echo ${b:-0})" --release "${release#release=}" --file-mb "${perfile:-0}" --out plan.json > /dev/null
+          fi
           # optional 4th word "a-b": run only shards a..b of the plan (waves that fit storage)
           # range: "a-b", or a comma list of shards and ranges ("0,1,8,12-15") to retry failed shards
           RANGE="$range" python -c "import json, os; d=json.load(open('plan.json')); r=os.environ['RANGE'] or '0-1000000'; want=set(); [want.update(range(int(x.split('-')[0]), int(x.split('-')[-1]) + 1)) for x in r.split(',') if x]; print(json.dumps([s['shard'] for s in d['shards'] if s['files'] and s['shard'] in want]))" > shards.json

@@ -317,3 +317,54 @@ def test_a_payer_waiting_for_shards_does_not_stall_the_next(monkeypatch):
         "\n".join(" ".join(w) for w in waves)))
     orchestrate.main()
     assert calls and calls[0][-1] == "inputs[request]=uhc 2026-10 all wave=4 36-47"
+
+
+def _three_file_plan(tmp_path):
+    web = tmp_path / "web"
+    web.mkdir()
+    names = []
+    for i in range(3):
+        d = copy.deepcopy(DOC)
+        d["last_updated_on"] = f"2026-10-0{i + 1}"
+        n = f"2026-10-01_r{i}.json.gz"
+        (web / n).write_bytes(gzip.compress(json.dumps(d).encode()))
+        names.append(n)
+    srv = _serve(web)
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    return srv, {"payer": "test", "shards": [{"shard": 0, "files": [{"name": n, "url": f"{base}/{n}"} for n in names]}]}
+
+
+def test_shard_time_budget_then_resume(tmp_path, monkeypatch):
+    """Out of time: unstarted files are listed as failed. A re-run skips files its chunks already hold and numbers new
+    chunks after them."""
+    import copy as _copy
+
+    from ticdata.pipeline import run_shard
+
+    monkeypatch.setenv("TIC_CORE", "")
+    srv, plan = _three_file_plan(tmp_path)
+    monkeypatch.setenv("TIC_SHARD_BUDGET_MIN", "0")
+    res = run_shard(plan, 0, workdir=str(tmp_path / "work"), chunk_files=1, chunk_out=str(tmp_path / "map"))
+    assert res["ok"] == 0 and len(json.loads((tmp_path / "map/shard-000-status.json").read_text())["failed"]) == 3
+    monkeypatch.setenv("TIC_SHARD_BUDGET_MIN", "320")
+    first = _copy.deepcopy(plan)
+    first["shards"][0]["files"] = first["shards"][0]["files"][:1]  # an earlier run got through one file
+    run_shard(first, 0, workdir=str(tmp_path / "work"), chunk_files=1, chunk_out=str(tmp_path / "map"))
+    res = run_shard(plan, 0, workdir=str(tmp_path / "work"), chunk_files=1, chunk_out=str(tmp_path / "map"))
+    srv.shutdown()
+    assert res["ok"] == 3 and [r["name"] for r in res["results"] if r.get("resumed")] == ["2026-10-01_r0.json.gz"]
+    assert sorted(p.name for p in (tmp_path / "map").glob("shard-000-*") if p.is_dir()) == \
+        ["shard-000-00", "shard-000-01", "shard-000-02"]
+    assert json.loads((tmp_path / "map/shard-000-status.json").read_text())["failed"] == []
+
+
+def test_plan_spreads_many_small_files_with_a_per_file_cost(monkeypatch):
+    from ticdata import pipeline
+
+    es = [{"kind": "in_network", "name": "big.json.gz", "url": "https://h/big", "size": 100 << 20}] + \
+         [{"kind": "in_network", "name": f"s{i:03d}.json.gz", "url": f"https://h/s{i}", "size": 1 << 20} for i in range(100)]
+    monkeypatch.setitem(pipeline.PAYERS, "zz", lambda s: ({}, es))
+    plain = pipeline.plan("zz", 2)
+    weighted = pipeline.plan("zz", 2, file_bytes=10 << 20)
+    assert [len(sh["files"]) for sh in plain["shards"]] == [1, 100]
+    assert max(len(sh["files"]) for sh in weighted["shards"]) < 100
