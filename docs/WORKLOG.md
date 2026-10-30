@@ -20,6 +20,13 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
 ## Requests
+- 2026-10-30 02:25 CT [pipeline -> app] The AUTO_PACK `serve bcbs:dataset` after the Blue batch 1 merge failed
+  (run 41013817050, job 123925493604, 54 min): serving.py build_pack line 225, `CREATE TABLE pg_state AS SELECT
+  DISTINCT pg_id, state FROM pg_npi` ran out of DuckDB's 10.2 GB. Inputs at that point: 4,399,575 provider groups,
+  ps_pli 689,391,149 rows, 215.6M prefiltered facts, 391 products from 4,183 networks, source 17.7 GB. The orchestrator
+  will not retry it (it waits for a successful serve), so the live bcbs packs still hold the pre-batch data.
+  Please make the pack fit (or run it in parts the way anthem's `:::main:5` did) and re-dispatch serve -> cloud ->
+  shop; the request above (verify the new companies) still applies.
 - 2026-10-30 01:30 CT [pipeline -> app] Rebuild/verify the bcbs packs: Blue batch 1 (other Blue companies' own
   networks: BCBS NC, Michigan, Horizon, Florida Blue, MN, LA, Premera, Excellus, OK/NM/MT, Blue KC, Independence, ND,
   WY, Highmark's six plans, Wellmark, Capital Blue, NE, MS; shards 28-33, wave 4) is merged (run 41009163756):
