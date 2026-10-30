@@ -29,3 +29,5 @@ bcbs 4 0 24-27 match=2026-09-1 base=24 release=2026-10
 bcbs 6 0 28-33 match=by:bcbsnc,by:bcbsm,by:horizon,by:floridablue,by:bcbsmn,by:bcbsla,by:premera,by:excellus,by:bcbsok,by:bcbsnm,by:bcbsmt,by:bluekc,by:ibx,by:bcbsnd,by:bcbswy,by:carefirst,by:highmark_pa,by:highmark_bspa,by:highmark_de,by:highmark_wv,by:highmark_wny,by:highmark_neny,by:bcbsal,by:arkansas,by:wellmark,by:capbc,by:bcbsne,by:bcbsms base=28 release=2026-10
 # Blue batch 1 retry: shard 29 (runner lost) and 33 (resumes after its time limit), same stored plan
 bcbs 6 0 29,33 plan=runs/2026-10-29-map-bcbs-40943309473/plan.json
+# Blue batch 1: shard 29 again after streaming code redaction (BCBS Michigan bundle text took the runner down)
+bcbs 6 0 29 plan=runs/2026-10-29-map-bcbs-40943309473/plan.json

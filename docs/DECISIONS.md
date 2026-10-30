@@ -3,6 +3,16 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-30: code text is redacted and gathered in streamed batches (BCBS Michigan bundles)
+- Blue batch 1's shard 29 (BCBS Michigan Blue Care Network HMO, three 6.3 GB files) lost its runner twice, each time
+  just after the Rust parser finished the first file (21.5 GB of JSON, parser peak 6.6 GB). Reproduced locally:
+  that file's `code` table is 977k rows whose `bundle` text is 9.7 GB in memory (234 MB compressed, one row group).
+  `redact_code_file` read it whole and turned it into Python rows (11.5 GB before the copy); the chunk upload then
+  read every file's private `code_text` whole again.
+- `redact_code_file` now streams 2,000-row batches to a new file and replaces the old one (peak 371 MB on that table,
+  176 s), and the chunk's `code_text` is gathered with `concat_parquet` (streamed, `file_key` added as a constant).
+  Lesson: a table that is small on disk can be huge decoded; anything reading a whole map output table must stream.
+
 ## 2026-10-30: files a publisher withdrew are listed by hand in ops/unavailable.txt, not skipped automatically
 - Blue batch 1's resumed shard 33 parsed everything but 40 files, all refused by the publisher: CareFirst's own
   `690_048` files answer 403 to runners and to us (its index still lists them), Arkansas BCBS removed its September

@@ -83,13 +83,36 @@ def redact_codes(table):
     return pa.Table.from_pylist(public, schema=schema), pa.Table.from_pylist(private, schema=priv_schema)
 
 
-def redact_code_file(path: str, private_path: str) -> dict:
-    """Rewrite a code.parquet in place as its public form; write the withheld text beside it."""
+def redact_code_file(path: str, private_path: str, batch_rows: int = 2000) -> dict:
+    """Rewrite a code.parquet in place as its public form; write the withheld text beside it. Streamed in batches:
+    a BCBS Michigan HMO file's 977k codes carry 9.7 GB of bundle text (234 MB compressed), and reading it whole
+    (then to Python rows) took a 16 GB runner down twice."""
+    import os
+
+    import pyarrow as pa
     import pyarrow.parquet as pq
 
-    pub, priv = redact_codes(pq.read_table(path))
-    pq.write_table(pub, path, compression="zstd")
-    if priv.num_rows:
-        pq.write_table(priv, private_path, compression="zstd")
-    return {"rows": pub.num_rows, "withheld": int(sum(pub.column("text_withheld").to_pylist())),
-            "private_rows": priv.num_rows}
+    pf = pq.ParquetFile(path, buffer_size=1 << 20, pre_buffer=False)
+    tmp = path + ".public"
+    pub_w = priv_w = None
+    rows = withheld = private_rows = 0
+    try:
+        for b in pf.iter_batches(batch_size=batch_rows, use_threads=False):
+            pub, priv = redact_codes(pa.Table.from_batches([b]))
+            pub_w = pub_w or pq.ParquetWriter(tmp, pub.schema, compression="zstd")
+            pub_w.write_table(pub)
+            rows += pub.num_rows
+            withheld += int(sum(pub.column("text_withheld").to_pylist()))
+            if priv.num_rows:
+                priv_w = priv_w or pq.ParquetWriter(private_path, priv.schema, compression="zstd")
+                priv_w.write_table(priv)
+                private_rows += priv.num_rows
+        if pub_w is None:  # no rows: keep the empty table's schema
+            pub, _ = redact_codes(pf.schema_arrow.empty_table())
+            pq.write_table(pub, tmp, compression="zstd")
+    finally:
+        for w in (pub_w, priv_w):
+            if w is not None:
+                w.close()
+    os.replace(tmp, path)
+    return {"rows": rows, "withheld": withheld, "private_rows": private_rows}

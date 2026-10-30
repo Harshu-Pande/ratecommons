@@ -288,12 +288,11 @@ def run_shard(plan_doc: dict, shard: int, workdir: str = "/tmp/tic", upload_buck
             from huggingface_hub import batch_bucket_files
 
             if texts:  # private first: never publish without keeping the raw text
-                import pyarrow as pa
-                import pyarrow.parquet as pq
+                from .consolidate import concat_parquet
 
-                tables = [pq.read_table(t).append_column("file_key", pa.array([k] * pq.ParquetFile(t).metadata.num_rows))
-                          for k, t in texts]
-                pq.write_table(pa.concat_tables(tables), f"{cdir}.code_text.parquet", compression="zstd")
+                # streamed: one BCBS Michigan file's withheld bundle text is 9.7 GB in memory
+                concat_parquet([t for _, t in texts], f"{cdir}.code_text.parquet",
+                               consts=[{"file_key": k} for k, _ in texts])
                 batch_bucket_files(restricted_bucket, add=[(f"{cdir}.code_text.parquet", f"{prefix}/code_text.parquet")],
                                    token=restricted_token() if callable(restricted_token) else restricted_token)
             adds = [(os.path.join(root, f), f"{prefix}/{os.path.relpath(os.path.join(root, f), cdir)}")
