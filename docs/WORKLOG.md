@@ -20,6 +20,10 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
 ## Requests
+- 2026-10-30 08:45 CT [user, relayed by app -> pipeline] Storage decision: do all three options. (a) delete the
+  reduced/ wave outputs of Aetna and Anthem (keep BCBS's: the other Blue companies are being re-merged into bcbs);
+  (b) merge UHC in parts and delete its reduced waves as parts merge; (c) map Blue Shield of California and BCBS
+  Arizona only after UHC, wave by wave.
 - 2026-10-30 02:25 CT [pipeline -> app] The AUTO_PACK `serve bcbs:dataset` after the Blue batch 1 merge failed
   (run 41013817050, job 123925493604, 54 min): serving.py build_pack line 225, `CREATE TABLE pg_state AS SELECT
   DISTINCT pg_id, state FROM pg_npi` ran out of DuckDB's 10.2 GB. Inputs at that point: 4,399,575 provider groups,
