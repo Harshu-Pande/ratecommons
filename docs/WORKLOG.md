@@ -68,6 +68,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-10-30 02:25 CT [pipeline] Safety check: UHC wave 7 reducing (41013857656, first wave with 8 provider_set jobs, no failures), wave 8 (84-95) mapping. Storage 3.18 TB of 7.8 (work 2.02, datasets 1.16).
 - 2026-10-30 01:30 CT [pipeline] Blue batch 1 merged into bcbs: shard 29 re-mapped after streaming code redaction;
   wave 4 dims re-run after streaming the code table and splitting wave provider_set into 8 jobs (41006022322); bcbs
   merge 41009163756 succeeded (5,291 files, 1.32B facts). AUTO_PACK serve running; UHC wave 7 reduce queued,
