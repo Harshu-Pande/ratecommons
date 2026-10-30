@@ -90,14 +90,14 @@ def mapped_shards(payer, release):
         m = re.search(r"/shard-(\d+)-status\.json$", i.path)
         if m:
             status[int(m.group(1))] = i.path
-    fs = HfFileSystem()
+    from ticdata.pipeline import STATUS_REQUIRED, unavailable
+
+    fs, gone = HfFileSystem(), unavailable(payer)
     for shard, path in status.items():
-        failed = json.loads(fs.read_text(f"buckets/{BUCKET}/{path}"))["failed"]
+        failed = [n for n in json.loads(fs.read_text(f"buckets/{BUCKET}/{path}"))["failed"] if n not in gone]
         if failed and shard in done:
             print(f"{payer} shard {shard}: {len(failed)} failed file(s), e.g. {failed[0]}; not mapped until retried")
             done.discard(shard)
-    from ticdata.pipeline import STATUS_REQUIRED
-
     if payer in STATUS_REQUIRED:  # a running shard has metas.json for each chunk uploaded so far
         done &= set(status)
     return done

@@ -1,0 +1,44 @@
+# Files a publisher withdrew or blocks: `<payer> <file name>  # reason`. A shard whose only failures are
+# listed here counts as mapped (pipeline.unavailable). Add a line only after checking the URL by hand; retry
+# them in a later batch when the site recovers, then remove the line.
+
+bcbs 2022-06-01_Horizon-BCBSNJ_NJ DIRECT Horizon Healthcare Services Inc_MGCN_in-network-rates.json.gz  # Horizon: listed in its October index but 404 on the hub
+bcbs 2022-06-03_Horizon-BCBSNJ_ADVANTAGE EPO WITH BLUE HPN Horizon Healthcare Services Inc_OEX1_in-network-rates.json.gz  # Horizon: listed in its October index but 404 on the hub
+bcbs 2026-09-07_690_048_in-network-rates_10_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_11_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_12_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_13_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_14_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_15_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_16_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_17_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_18_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_19_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_1_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_20_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_21_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_22_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_23_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_24_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_25_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_2_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_3_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_4_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_5_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_6_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_7_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_8_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-07_690_048_in-network-rates_9_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-08_690_048_in-network-rates_26_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-08_690_048_in-network-rates_27_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-08_690_048_in-network-rates_28_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-08_690_048_in-network-rates_29_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-08_690_048_in-network-rates_30_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-08_690_048_in-network-rates_31_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-08_690_048_in-network-rates_32_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-08_690_048_in-network-rates_33_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-08_690_048_in-network-rates_34_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-08_690_048_in-network-rates_35_of_35.json  # CareFirst own files: 403 from runners and elsewhere since 2026-10-30 (the index still lists them)
+bcbs 2026-09-17_usable_mutual_insurance_company_dba_arkansas_blue_cross_and_blue_shield_preferred_payment_plan_in-network-rates_1_of_2.json.gz  # Arkansas BCBS: 404, blob removed; its index answered empty on 2026-10-30
+bcbs 2026-09-17_usable_mutual_insurance_company_dba_arkansas_blue_cross_and_blue_shield_true_blue_ppo_in-network-rates_1_of_2.json.gz  # Arkansas BCBS: 404, blob removed; its index answered empty on 2026-10-30
+bcbs 2026-09-17_usable_mutual_insurance_company_dba_arkansas_blue_cross_and_blue_shield_true_blue_ppo_individual_metallic_in-network-rates_1_of_2.json.gz  # Arkansas BCBS: 404, blob removed; its index answered empty on 2026-10-30

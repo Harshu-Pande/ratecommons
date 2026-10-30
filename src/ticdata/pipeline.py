@@ -34,6 +34,24 @@ def file_key(name: str) -> str:
 # UHC wave 3 while its shards were still parsing (2026-10-28)
 STATUS_REQUIRED = {"uhc", "bcbs"}  # bcbs: shards 24+ have status files; waves added later have several chunks per shard
 
+UNAVAILABLE = Path(__file__).resolve().parents[2] / "ops" / "unavailable.txt"
+
+
+def unavailable(payer: str, path: Path | str | None = None) -> set[str]:
+    """File names a publisher withdrew or blocks (lines `<payer> <file name>  # reason` in ops/unavailable.txt).
+    A shard whose only failures are listed there counts as mapped. Listing is a reviewed, manual step: a failed
+    download is never skipped on its own, because a 403 can also be an expired link that a re-plan fixes."""
+    try:
+        lines = Path(path or UNAVAILABLE).read_text().splitlines()
+    except FileNotFoundError:
+        return set()
+    out = set()
+    for ln in lines:
+        ln = ln.split("#", 1)[0].strip()
+        if ln and ln.split(None, 1)[0] == payer and len(ln.split(None, 1)) == 2:
+            out.add(ln.split(None, 1)[1].strip())
+    return out
+
 
 def shard_status(bucket: str, release: str, payer: str) -> dict[int, list[str]]:
     """{shard: failed file names} from the shard status files in the work bucket."""
@@ -55,12 +73,14 @@ def wave_ready(bucket: str, release: str, payer: str, shards: tuple[int, int]) -
     if payer not in STATUS_REQUIRED:
         return []
     st = shard_status(bucket, release, payer)
+    gone = unavailable(payer)
     why = []
     for sh in range(shards[0], shards[1] + 1):
+        bad = [n for n in st.get(sh, []) if n not in gone]
         if sh not in st:
             why.append(f"shard {sh}: no status file (still mapping, or mapped before status files)")
-        elif st[sh]:
-            why.append(f"shard {sh}: {len(st[sh])} failed file(s), e.g. {st[sh][0]}")
+        elif bad:
+            why.append(f"shard {sh}: {len(bad)} failed file(s), e.g. {bad[0]}")
     return why
 
 

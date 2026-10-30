@@ -3,6 +3,16 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-10-30: files a publisher withdrew are listed by hand in ops/unavailable.txt, not skipped automatically
+- Blue batch 1's resumed shard 33 parsed everything but 40 files, all refused by the publisher: CareFirst's own
+  `690_048` files answer 403 to runners and to us (its index still lists them), Arkansas BCBS removed its September
+  blobs (404; its index answered empty on 2026-10-30), and Horizon's index lists two 2022 files its hub does not have.
+- A shard with failed files stays unmapped (status file), so the wave would wait forever. Skipping 4xx downloads
+  automatically was rejected: a UHC 403 can be an expired signed link that a re-plan fixes, and a silent skip there
+  would lose data. Instead `ops/unavailable.txt` lists `<payer> <file name>  # reason`, added only after checking the
+  URL by hand; `wave-ready` and the orchestrator ignore those names when they are a shard's only failures. Retry the
+  listed files in a later batch when the site recovers, then remove their lines.
+
 ## 2026-10-30: shards resume, stop before the job limit, and can be balanced by file count
 - Blue batch 1's last shard got 3,251 files of 5.8 GB (Excellus' 2,556 small `.json.zip` files among them): the plan
   balances bytes, but each file costs ~7 s (download, Python parser for zip). It parsed 2,675 in 5 hours and was

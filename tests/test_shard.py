@@ -368,3 +368,29 @@ def test_plan_spreads_many_small_files_with_a_per_file_cost(monkeypatch):
     weighted = pipeline.plan("zz", 2, file_bytes=10 << 20)
     assert [len(sh["files"]) for sh in plain["shards"]] == [1, 100]
     assert max(len(sh["files"]) for sh in weighted["shards"]) < 100
+
+
+def test_listed_unavailable_files_do_not_block_a_wave(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ops"))
+    import orchestrate
+    import huggingface_hub
+    from ticdata import pipeline
+
+    listing = tmp_path / "unavailable.txt"
+    listing.write_text("# payer name  # why\nbcbs gone.json.gz  # 404 at the publisher\nuhc other.json\n")
+    assert pipeline.unavailable("bcbs", listing) == {"gone.json.gz"}
+    monkeypatch.setattr(pipeline, "UNAVAILABLE", listing)
+    pre = "map/2026-10/bcbs/"
+    paths = [f"{pre}shard-033-00/metas.json", f"{pre}shard-033-status.json", f"{pre}shard-034-00/metas.json",
+             f"{pre}shard-034-status.json"]
+    texts = {f"buckets/{orchestrate.BUCKET}/{pre}shard-033-status.json": '{"failed": ["gone.json.gz"]}',
+             f"buckets/{orchestrate.BUCKET}/{pre}shard-034-status.json": '{"failed": ["gone.json.gz", "bad.json"]}'}
+    for mod in (orchestrate, huggingface_hub):
+        monkeypatch.setattr(mod, "list_bucket_tree", lambda *a, **k: [SimpleNamespace(path=p) for p in paths])
+    monkeypatch.setattr(huggingface_hub, "HfFileSystem", lambda: SimpleNamespace(read_text=texts.__getitem__))
+    assert orchestrate.mapped_shards("bcbs", "2026-10") == {33}
+    assert pipeline.wave_ready("ratecommons/work", "2026-10", "bcbs", (33, 33)) == []
+    assert pipeline.wave_ready("ratecommons/work", "2026-10", "bcbs", (33, 34)) == ["shard 34: 1 failed file(s), e.g. bad.json"]
