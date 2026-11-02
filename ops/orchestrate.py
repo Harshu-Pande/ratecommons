@@ -15,7 +15,9 @@ BUCKET = "ratecommons/work"
 # payers whose map runs the orchestrator starts itself, one wave at a time (value: shards in the map plan).
 # Map output is ~1 GB per GB of gzip and the bucket has a few TB free, so UHC (93.8 TB) must flow
 # map -> reduce -> delete map output wave by wave.
-PIPELINE = {"uhc": 1024}
+# paused 2026-11-02: UHC posted its November files and the map plan is recomputed from the live index, so new map
+# runs map November files (map/2026-11) while waves 1-13 are October; see DECISIONS 2026-11-02
+PIPELINE = {}  # was {"uhc": 1024}
 MAX_WAVES_IN_FLIGHT = 2
 # GitHub Pro (2026-11-02): 40 concurrent jobs. A UHC wave maps in ~3.5 h and reduces in ~1.75 h, so each map run
 # takes the next two waves (24 shards, map.yml max-parallel 24) beside one reduce (max-parallel 14)
