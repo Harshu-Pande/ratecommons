@@ -16,6 +16,8 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   22:20 CT: Aetna every-code pack live (100,666 codes, 20 main groups); app query rewritten (released c0f374b).
   10-29 18:00 CT: BCBS every code for TN + IL/TX main networks (22,821 codes) and Anthem for 5 main families (29,340
   codes) live; wide-list split layout. Storage decision (a/b/c above) is with the user.
+  11-02 14:10 CT: bcbs pack after Blue batch 1 (4,183 networks -> product mode, 391 products): pg_state in hash
+  slices, serve re-dispatched. FYI pipeline: UHC wave 12 failed 10-30 (out of disk), orchestrator stopped since.
 - 2026-10-28 01:15 CT [pipeline] Pipeline lane: UHC down ops/waves.txt (orchestrator-driven; safety check-ins every ~4 h).
   BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
