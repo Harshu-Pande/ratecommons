@@ -78,6 +78,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   deleted by the orchestrator's clean() after writing dropped.json (re-merging them now needs a re-reduce); (b) UHC
   merges in 7 parts (waves.txt `part=P a-b`; part 1 = waves 1-12 runs after wave 12), each part's waves deleted once
   it is complete; (c) BSCA and BCBS AZ wait for the UHC merge. Also: streamed list tables are now written ~2.4x smaller.
+- 2026-11-02 app: README.md rewritten for the current state (payers, apps, MCP, pipeline, workflows, storage, layout). Shared doc: pipeline session, correct anything in your lane.
 - 2026-11-02 14:20 CT [pipeline] UHC was stalled since 2026-10-30 22:50 CT: reduce wave 12 (41139945672) lost parts 4,
   5, 10 to small runners (32 GB free disk). Failed jobs re-run (attempt 2); the orchestrator now re-runs a failed
   reduce once by itself. GitHub Pro: map max-parallel 24 (two UHC waves per map run), reduce 14. Rule from today: when
