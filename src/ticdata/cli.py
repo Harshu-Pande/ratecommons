@@ -63,6 +63,11 @@ def main(argv=None) -> int:
                    "the date in its name: HCSC lists files named 2026-09-14_... as current in October")
     p.add_argument("--out", required=True)
 
+    p = sub.add_parser("probe-plan", help="first byte of a few files per shard of a stored plan (are its URLs served?)")
+    p.add_argument("plan", help="path in the ops dataset, e.g. runs/<date>-map-uhc-<run>/plan.json")
+    p.add_argument("--shards", required=True, help="a,b,c")
+    p.add_argument("--per-shard", type=int, default=2)
+
     p = sub.add_parser("wave-ready", help="exit 1 unless every shard of a wave finished mapping without failures")
     p.add_argument("--payer", required=True)
     p.add_argument("--release", required=True)
@@ -219,6 +224,22 @@ def main(argv=None) -> int:
                 for f in sh["files"]:
                     f["release"] = a.release
         _write(doc, a.out)
+    elif a.cmd == "probe-plan":
+        from huggingface_hub import hf_hub_download
+
+        from .net import new_session
+
+        doc = json.loads(Path(hf_hub_download(cfg.ops_repo, a.plan, repo_type="dataset")).read_text())
+        s, out = new_session(), []
+        for sh in doc["shards"]:
+            if str(sh["shard"]) in a.shards.split(","):
+                for e in sh["files"][:a.per_shard]:
+                    try:
+                        code = s.get(e["url"], headers={"Range": "bytes=0-0"}, timeout=60).status_code
+                    except Exception as ex:  # noqa: BLE001
+                        code = repr(ex)[:80]
+                    out.append({"shard": sh["shard"], "name": e["name"][:80], "status": code})
+        print(json.dumps(out, indent=1))
     elif a.cmd == "wave-ready":
         from . import pipeline
 

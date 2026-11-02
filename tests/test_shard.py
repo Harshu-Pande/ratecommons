@@ -245,6 +245,7 @@ def test_start_maps_reruns_only_missing_shards(monkeypatch):
 
     calls = []
     monkeypatch.setattr(orchestrate, "gh", lambda path: {"workflow_runs": []})
+    monkeypatch.setattr(orchestrate, "PIPELINE", {"uhc": 1024})
     monkeypatch.setattr(orchestrate, "mapped_shards", lambda p, r: set(range(24, 36)) - {32})
     monkeypatch.setattr(orchestrate, "wave_done", lambda p, r, w: w in ("1", "2"))
     monkeypatch.setattr(orchestrate.subprocess, "check_call", lambda cmd: calls.append(cmd))
