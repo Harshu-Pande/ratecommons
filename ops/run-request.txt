@@ -22,3 +22,4 @@ uhc-diff --match _0L_in-network --n 5 --head-mb 512
 uhc-diff --match _PHC3_in-network --n 5 --head-mb 512
 probe-plan runs/2026-10-30-map-uhc-41139836536/plan.json --shards 156,300,600,900,1000 --per-shard 2
 probe-plan runs/2026-11-02-map-uhc-41521956794/plan.json --shards 156,300 --per-shard 2
+probe-plan runs/2026-10-30-map-uhc-41139836536/plan.json --shards 156,300,600,900,1000 --per-shard 2

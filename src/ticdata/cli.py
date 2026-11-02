@@ -234,12 +234,13 @@ def main(argv=None) -> int:
         for sh in doc["shards"]:
             if str(sh["shard"]) in a.shards.split(","):
                 for e in sh["files"][:a.per_shard]:
-                    try:
-                        code = s.get(e["url"], headers={"Range": "bytes=0-0"}, timeout=60).status_code
+                    try:  # streamed: UHC answers a range request with the whole file (GBs), which filled memory
+                        with s.get(e["url"], headers={"Range": "bytes=0-0"}, timeout=60, stream=True) as r:
+                            code = f"{r.status_code} {r.headers.get('Content-Range') or r.headers.get('Content-Length')}"
                     except Exception as ex:  # noqa: BLE001
                         code = repr(ex)[:80]
                     out.append({"shard": sh["shard"], "name": e["name"][:80], "status": code})
-        print(json.dumps(out, indent=1))
+                    print(json.dumps(out[-1]), flush=True)
     elif a.cmd == "wave-ready":
         from . import pipeline
 
