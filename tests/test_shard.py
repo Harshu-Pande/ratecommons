@@ -479,3 +479,122 @@ def test_merge_inputs_use_complete_parts_instead_of_their_waves():
         merge_inputs(unit("wave-4") + unit("wave-5")[:3], pre, read, (4, 5))
     with pytest.raises(RuntimeError, match="dropped.json"):
         merge_inputs(paths + [f"{pre}dropped.json"], pre, read)
+
+
+class _FakeBucket:
+    """The work bucket for orchestrator tests: list_bucket_tree, HfFileSystem.read_text, batch_bucket_files."""
+
+    def __init__(self, files):
+        self.files = dict(files)
+
+    def install(self, monkeypatch, orchestrate):
+        from types import SimpleNamespace
+
+        import huggingface_hub
+
+        from ticdata import hfio
+
+        def tree(bucket, prefix="", recursive=True, token=None):
+            return [SimpleNamespace(path=p, size=len(v)) for p, v in sorted(self.files.items()) if p.startswith(prefix)]
+
+        def batch(bucket, add=(), delete=(), token=None):
+            for local, path in add:
+                self.files[path] = open(local).read()
+            for path in delete:
+                self.files.pop(path)
+
+        monkeypatch.setattr(orchestrate, "list_bucket_tree", tree)
+        monkeypatch.setattr(huggingface_hub, "list_bucket_tree", tree)
+        monkeypatch.setattr(huggingface_hub, "batch_bucket_files", batch)
+        monkeypatch.setattr(huggingface_hub, "HfFileSystem", lambda **k: SimpleNamespace(
+            read_text=lambda p: self.files[p.split(f"buckets/{orchestrate.BUCKET}/", 1)[1]]))
+        monkeypatch.setattr(hfio, "token_for", lambda *a: "t")
+        monkeypatch.setattr(hfio, "bucket", lambda *a: "b")
+        orchestrate._REDUCED.clear()
+
+
+def _unit_files(pre, name, metas=1, extra=None):
+    from ticdata.reduce import UNIT_DIMS
+
+    u = f"{pre}{name}/"
+    out = {f"{u}rate_fact/part-{k:02d}.parquet": "x" for k in range(16)}
+    out.update({f"{u}{t}/part-00.parquet": "x" for t in UNIT_DIMS})
+    out.update({f"{u}code.parquet": "x", f"{u}metas.json": json.dumps([{}] * metas)})
+    out.update(extra or {})
+    return out
+
+
+def _orchestrate():
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ops"))
+    import orchestrate
+
+    return orchestrate
+
+
+def test_clean_deletes_waves_held_by_a_complete_part(monkeypatch):
+    o = _orchestrate()
+    pre = "reduced/2026-10/uhc/"
+    files = {**_unit_files(pre, "wave-1", 3), **_unit_files(pre, "wave-2", 4), **_unit_files(pre, "wave-3", 5),
+             **_unit_files(pre, "part-1", 7, {f"{pre}part-1/waves.json": "[1, 2]"})}
+    fb = _FakeBucket(files)
+    fb.install(monkeypatch, o)
+    waves = [["uhc", "2026-10", "1", "0-11"], ["uhc", "2026-10", "2", "12-23"], ["uhc", "2026-10", "part=1", "1-2"],
+             ["uhc", "2026-10", "3", "24-35"], ["uhc", "2026-10", "merge"]]
+    o.clean(waves)
+    assert not any(p.startswith((f"{pre}wave-1/", f"{pre}wave-2/")) for p in fb.files)
+    assert any(p.startswith(f"{pre}wave-3/") for p in fb.files) and f"{pre}part-1/waves.json" in fb.files
+    o._REDUCED.clear()
+    assert o.wave_done("uhc", "2026-10", "1") and o.wave_done("uhc", "2026-10", "2") and o.part_done("uhc", "2026-10", "1")
+    assert o.expected_files("uhc", "2026-10", waves) == 7 + 5  # the part counts once, then wave 3
+
+
+def test_clean_keeps_waves_of_an_incomplete_part(monkeypatch):
+    o = _orchestrate()
+    pre = "reduced/2026-10/uhc/"
+    part = {p: v for p, v in _unit_files(pre, "part-1", 7).items() if "rate_fact/part-15" not in p}
+    fb = _FakeBucket({**_unit_files(pre, "wave-1"), **part, f"{pre}part-1/waves.json": "[1]"})
+    fb.install(monkeypatch, o)
+    before = dict(fb.files)
+    o.clean([["uhc", "2026-10", "1", "0-11"], ["uhc", "2026-10", "part=1", "1-1"]])
+    assert fb.files == before and not o.part_done("uhc", "2026-10", "1")
+
+
+def test_dropping_a_merged_payers_waves_keeps_its_counts(monkeypatch):
+    o = _orchestrate()
+    pre = "reduced/2026-10/anthem/"
+    fb = _FakeBucket({**_unit_files(pre, "wave-1", 3), **_unit_files(pre, "wave-2", 4)})
+    fb.install(monkeypatch, o)
+    monkeypatch.setattr(o, "merged_files", lambda p, r: 7)
+    monkeypatch.setattr(o.HfApi, "list_repo_files", lambda self, *a, **k: [
+        *[f"release=2026-10/rate_fact/part-{k:02d}.parquet" for k in range(16)],
+        *[f"release=2026-10/{t}.parquet" for t in ("source_file", "network", "code", "provider_group")],
+        *[f"release=2026-10/{t}/part-00.parquet" for t in ("provider_set", "provider_list", "price_list", "price_term")]])
+    waves = [["anthem", "2026-10", "1", "0-15"], ["anthem", "2026-10", "2", "16-31"], ["anthem", "2026-10", "merge"]]
+    o.clean(waves)
+    assert sorted(fb.files) == [f"{pre}dropped.json"]
+    assert json.loads(fb.files[f"{pre}dropped.json"])["waves"] == {"1": 3, "2": 4}
+    o._REDUCED.clear()
+    assert o.wave_done("anthem", "2026-10", "2") and o.merge_done("anthem", "2026-10", waves)
+    o._REDUCED.clear()
+    bcbs = "reduced/2026-10/bcbs/"
+    fb.files.update(_unit_files(bcbs, "wave-1", 3))
+    o.clean([["bcbs", "2026-10", "1", "0-17"], ["bcbs", "2026-10", "merge"]])  # not in DROP_REDUCED: kept
+    assert f"{bcbs}wave-1/metas.json" in fb.files
+
+
+def test_chain_dispatches_a_part_once_its_waves_are_reduced(monkeypatch):
+    o = _orchestrate()
+    waves = [["uhc", "2026-10", "1", "0-11"], ["uhc", "2026-10", "2", "12-23"], ["uhc", "2026-10", "part=1", "1-2"],
+             ["uhc", "2026-10", "3", "24-35"], ["uhc", "2026-10", "merge"]]
+    calls = []
+    monkeypatch.setattr(o, "gh", lambda path: {"workflow_runs": []})
+    for step in ("clean", "start_maps", "packs"):
+        monkeypatch.setattr(o, step, lambda w: None)
+    monkeypatch.setattr(o, "wave_done", lambda p, r, w: w in ("1", "2"))
+    monkeypatch.setattr(o, "part_done", lambda p, r, part: False)
+    monkeypatch.setattr(o.subprocess, "check_call", lambda cmd: calls.append(cmd))
+    monkeypatch.setattr("builtins.open", lambda *a, **k: __import__("io").StringIO("\n".join(" ".join(w) for w in waves)))
+    o.main()
+    assert calls and calls[0][-1] == "inputs[request]=uhc 2026-10 all part=1 1-2"

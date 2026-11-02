@@ -213,10 +213,11 @@ def clean(waves):
         if payer in DROP_REDUCED and not dropped and merge_done(payer, release, waves):
             files = {int(w[2]): wave_files(payer, release, w[2]) for w in waves
                      if w[0] == payer and w[1] == release and is_wave(w) and int(w[2]) not in covered}
-            files.update({n: 0 for n in covered})  # (a part's files are counted through the part, gone too)
-            parts = sorted(set(covered.values()))
-            doc = {"waves": files, "parts": {p: wave_files(payer, release, p) for p in parts},
-                   "reason": "storage decision 2026-10-30: reduced waves of a published merge"}
+            for part in sorted(set(covered.values())):  # a part's files count on its first wave
+                held_by = sorted(n for n, u in covered.items() if u == part)
+                files.update({n: 0 for n in held_by})
+                files[held_by[0]] = wave_files(payer, release, part)
+            doc = {"waves": files, "reason": "storage decision 2026-10-30: reduced waves of a published merge"}
             with tempfile.TemporaryDirectory() as d:
                 f = os.path.join(d, "dropped.json")
                 with open(f, "w") as fh:

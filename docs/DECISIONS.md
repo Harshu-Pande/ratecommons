@@ -3,6 +3,25 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-02: storage decision applied: merged payers drop their waves, UHC merges in parts, list tables shrink
+- (a) `DROP_REDUCED = {"aetna", "anthem"}`: once a payer's merge is published (merge_done with its file count),
+  `clean()` writes `reduced/<release>/<payer>/dropped.json` (files per wave, read back before anything goes) and
+  deletes the payer's reduced waves (~0.54 TB). wave_done and merge_done read the counts from it; a merge of such a
+  payer refuses to run (its waves must be reduced again first). BCBS keeps its waves: more Blues merge into it.
+- (b) `uhc 2026-10 part=P a-b` (waves.txt, after wave b) merges reduced waves a-b into `reduced/.../part-P` in wave
+  format: facts keep their set keys; network sets keep keys and flag the ones the part merged (`merged`), which a
+  later merge uses as keys but does not publish. Any merge reads a complete part (every table + waves.json) in place
+  of its waves and ignores incomplete parts, so a wave is never read twice (XOR keys would cancel); clean() then
+  deletes the waves a complete part holds. Tested: parts (also a part of parts) + waves merge to exactly the one-shot
+  merge's facts and network sets. Seven UHC parts of ~12 waves. Open risk: UHC's final merge reads all seven parts per
+  fact job (~75 GB at Aetna's dedup ratio), close to a runner's 104 GB; it needs batched fact download like
+  `_fetch_split_facts` before then.
+- (c) Blue Shield of California and BCBS Arizona wait for the UHC merge (comment in waves.txt).
+- Found on the way: streamed writers (`dedup_stream`, `concat_parquet`) wrote one row group per 500-row batch without
+  dictionary pages; Aetna's merged provider_set is 481.5 GB for 137.6 GB of wave inputs. `RowGroupWriter` gathers 50k
+  rows (or 256 MB) per row group, dictionary + zstd 6: one 1.1 GB Aetna part rewrites to 0.445 GB (444 MB RSS).
+  Published Aetna (481 GB) and BCBS (175 GB) provider sets keep the old encoding until re-merged or re-encoded.
+
 ## 2026-11-02: a failed reduce is re-run once by the orchestrator; GitHub Pro maps two UHC waves at a time
 - UHC wave 12's reduce (run 41139945672, 2026-10-30) lost fact parts 4, 5 and 10 to "No space left on device" in
   `_fetch_split_facts`. Their runners were a smaller kind (`/dev/mapper/cow-root`, 72 GB, 32 GB free) where every

@@ -2,6 +2,8 @@
 # <payer> <release> <wave> <first shard>-<last shard>, or <payer> <release> merge
 # Map output of a finished wave is deleted (work bucket space); for payers in PIPELINE (orchestrate.py) the
 # orchestrator also starts each wave's map run itself, at most two waves of map output at a time.
+# <payer> <release> part=P a-b merges reduced waves a-b into reduced/<release>/<payer>/part-P (wave format);
+# the orchestrator then deletes those waves. UHC is merged in parts (storage decision 2026-10-30).
 aetna 2026-10 1 0-7
 aetna 2026-10 2 8-23
 aetna 2026-10 3 24-39
@@ -42,6 +44,7 @@ uhc 2026-10 9 96-107
 uhc 2026-10 10 108-119
 uhc 2026-10 11 120-131
 uhc 2026-10 12 132-143
+uhc 2026-10 part=1 1-12
 uhc 2026-10 13 144-155
 uhc 2026-10 14 156-167
 uhc 2026-10 15 168-179
@@ -54,6 +57,7 @@ uhc 2026-10 21 240-251
 uhc 2026-10 22 252-263
 uhc 2026-10 23 264-275
 uhc 2026-10 24 276-287
+uhc 2026-10 part=2 13-24
 uhc 2026-10 25 288-299
 uhc 2026-10 26 300-311
 uhc 2026-10 27 312-323
@@ -66,6 +70,7 @@ uhc 2026-10 33 384-395
 uhc 2026-10 34 396-407
 uhc 2026-10 35 408-419
 uhc 2026-10 36 420-431
+uhc 2026-10 part=3 25-36
 uhc 2026-10 37 432-443
 uhc 2026-10 38 444-455
 uhc 2026-10 39 456-467
@@ -78,6 +83,7 @@ uhc 2026-10 45 528-539
 uhc 2026-10 46 540-551
 uhc 2026-10 47 552-563
 uhc 2026-10 48 564-575
+uhc 2026-10 part=4 37-48
 uhc 2026-10 49 576-587
 uhc 2026-10 50 588-599
 uhc 2026-10 51 600-611
@@ -90,6 +96,7 @@ uhc 2026-10 57 672-683
 uhc 2026-10 58 684-695
 uhc 2026-10 59 696-707
 uhc 2026-10 60 708-719
+uhc 2026-10 part=5 49-60
 uhc 2026-10 61 720-731
 uhc 2026-10 62 732-743
 uhc 2026-10 63 744-755
@@ -102,6 +109,7 @@ uhc 2026-10 69 816-827
 uhc 2026-10 70 828-839
 uhc 2026-10 71 840-851
 uhc 2026-10 72 852-863
+uhc 2026-10 part=6 61-72
 uhc 2026-10 73 864-875
 uhc 2026-10 74 876-887
 uhc 2026-10 75 888-899
@@ -116,4 +124,7 @@ uhc 2026-10 83 984-995
 uhc 2026-10 84 996-1007
 uhc 2026-10 85 1008-1019
 uhc 2026-10 86 1020-1023
+uhc 2026-10 part=7 73-86
 uhc 2026-10 merge
+# next (storage decision c): Blue Shield of California (1.5 TB) and BCBS Arizona (1.2 TB) as bcbs waves, only after
+# the uhc merge, mapped and reduced wave by wave like UHC

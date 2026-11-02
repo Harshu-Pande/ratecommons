@@ -723,7 +723,9 @@ def dedup_stream(files: list[str], dest: str, key: str) -> int:
                                for x in files])
     seen: set = set()
     n = 0
-    with pq.ParquetWriter(dest, schema, compression="zstd", use_dictionary=False) as w:
+    from .consolidate import RowGroupWriter
+
+    with RowGroupWriter(dest, schema) as w:
         for f in files:
             pf = pq.ParquetFile(f, buffer_size=1 << 20, pre_buffer=False)
             for b in pf.iter_batches(batch_size=STREAM_ROWS, use_threads=False):
@@ -736,10 +738,9 @@ def dedup_stream(files: list[str], dest: str, key: str) -> int:
                     for name in schema.names:
                         if name not in t.column_names:
                             t = t.append_column(name, pa.nulls(t.num_rows, schema.field(name).type))
-                    w.write_table(t.select(schema.names).cast(schema), row_group_size=50000)
+                    w.write(t.select(schema.names).cast(schema))
                     n += t.num_rows
                 del t, b
-                pa.default_memory_pool().release_unused()
     return n
 
 

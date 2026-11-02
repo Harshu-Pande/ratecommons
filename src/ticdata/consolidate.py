@@ -75,6 +75,41 @@ def consolidate(items: list[tuple[str, str]], dest: str) -> dict:
     shutil.rmtree(f"{dest}/.duck_tmp", ignore_errors=True)
     return out
 
+class RowGroupWriter:
+    """A ParquetWriter that gathers small tables into row groups of up to `rows` rows or `max_bytes` (in memory).
+    Writing every 500-row batch as its own row group left Aetna's merged provider sets at 1,350 row groups per
+    1.1 GB file; gathered to 50k rows with dictionary pages and zstd 6, the same rows take 0.46 GB."""
+
+    def __init__(self, dest: str, schema, rows: int = 50_000, max_bytes: int = 256 << 20):
+        import pyarrow.parquet as pq
+
+        self.w = pq.ParquetWriter(dest, schema, compression="zstd", compression_level=6, use_dictionary=True,
+                                  write_statistics=False)
+        self.rows, self.max_bytes, self.buf, self.n, self.size = rows, max_bytes, [], 0, 0
+
+    def write(self, t) -> None:
+        self.buf.append(t)
+        self.n += t.num_rows
+        self.size += t.nbytes
+        if self.n >= self.rows or self.size >= self.max_bytes:
+            self.flush()
+
+    def flush(self) -> None:
+        import pyarrow as pa
+
+        if self.buf:
+            self.w.write_table(pa.concat_tables(self.buf), row_group_size=max(self.n, 1))
+            self.buf, self.n, self.size = [], 0, 0
+            pa.default_memory_pool().release_unused()  # else the allocator keeps every batch's pages
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.flush()
+        self.w.close()
+
+
 def concat_parquet(files: list[str], dest: str, batch_rows: int = 2000, consts: list[dict] | None = None) -> int:
     """Concatenate Parquet files batch by batch with pyarrow (bounded memory). Provider sets can be huge lists:
     one BCBS North Carolina BlueCard file has 100k sets averaging 4,232 provider lists (6.8 GB of ids), which a
@@ -93,7 +128,7 @@ def concat_parquet(files: list[str], dest: str, batch_rows: int = 2000, consts: 
         if name not in schema.names:
             schema = schema.append(pa.field(name, pa.string()))
     n = 0
-    with pq.ParquetWriter(dest, schema, compression="zstd", use_dictionary=False, write_statistics=False) as w:
+    with RowGroupWriter(dest, schema) as w:
         for i, f in enumerate(files):
             pf = pq.ParquetFile(f, buffer_size=1 << 20, pre_buffer=False)  # stream column chunks: 1.4 GB, not 5.8
             for b in pf.iter_batches(batch_size=batch_rows, use_threads=False):
@@ -103,8 +138,7 @@ def concat_parquet(files: list[str], dest: str, batch_rows: int = 2000, consts: 
                 for name in schema.names:  # union by name: add missing columns as nulls
                     if name not in t.column_names:
                         t = t.append_column(name, pa.nulls(t.num_rows, schema.field(name).type))
-                w.write_table(t.select(schema.names).cast(schema), row_group_size=batch_rows)
+                w.write(t.select(schema.names).cast(schema))
                 n += t.num_rows
                 del t, b
-                pa.default_memory_pool().release_unused()  # else the allocator keeps every batch's pages
     return n
