@@ -239,9 +239,10 @@ def test_start_maps_reruns_only_missing_shards(monkeypatch):
     monkeypatch.setattr(orchestrate, "mapped_shards", lambda p, r: set(range(24, 36)) - {32})
     monkeypatch.setattr(orchestrate, "wave_done", lambda p, r, w: w in ("1", "2"))
     monkeypatch.setattr(orchestrate.subprocess, "check_call", lambda cmd: calls.append(cmd))
-    waves = [["uhc", "2026-10", "1", "0-11"], ["uhc", "2026-10", "2", "12-23"], ["uhc", "2026-10", "3", "24-35"]]
-    orchestrate.start_maps(waves)
-    assert calls and calls[0][-1] == "inputs[range]=32"
+    waves = [["uhc", "2026-10", "1", "0-11"], ["uhc", "2026-10", "2", "12-23"], ["uhc", "2026-10", "3", "24-35"],
+             ["uhc", "2026-10", "4", "36-39"], ["uhc", "2026-10", "5", "40-43"]]
+    orchestrate.start_maps(waves)  # wave 3's missing shard and all of wave 4 (two waves per map run)
+    assert calls and calls[0][-1] == "inputs[range]=32,36,37,38,39"
 
 
 def test_batched_split_of_a_big_fact_part_gives_the_same_wave(tmp_path, monkeypatch):
@@ -317,6 +318,25 @@ def test_a_payer_waiting_for_shards_does_not_stall_the_next(monkeypatch):
         "\n".join(" ".join(w) for w in waves)))
     orchestrate.main()
     assert calls and calls[0][-1] == "inputs[request]=uhc 2026-10 all wave=4 36-47"
+
+
+def test_a_failed_reduce_is_rerun_once_then_stops(monkeypatch):
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ops"))
+    import orchestrate
+
+    for step in ("clean", "start_maps", "packs"):
+        monkeypatch.setattr(orchestrate, step, lambda w: None)
+    monkeypatch.setattr("builtins.open", lambda *a, **k: __import__("io").StringIO("uhc 2026-10 12 132-143"))
+    for attempt, rerun in ((1, True), (2, False)):
+        calls = []
+        run = {"id": 7, "status": "completed", "conclusion": "failure", "run_attempt": attempt}
+        monkeypatch.setattr(orchestrate, "gh", lambda path, run=run: {"workflow_runs": [run]})
+        monkeypatch.setattr(orchestrate.subprocess, "check_call", lambda cmd, calls=calls: calls.append(cmd))
+        orchestrate.main()
+        assert (calls == [["gh", "api", "-X", "POST", f"repos/{orchestrate.REPO}/actions/runs/7/rerun-failed-jobs"]]) is rerun
+        assert rerun or calls == []
 
 
 def _three_file_plan(tmp_path):

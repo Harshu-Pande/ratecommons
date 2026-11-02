@@ -74,6 +74,11 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-02 14:20 CT [pipeline] UHC was stalled since 2026-10-30 22:50 CT: reduce wave 12 (41139945672) lost parts 4,
+  5, 10 to small runners (32 GB free disk). Failed jobs re-run (attempt 2); the orchestrator now re-runs a failed
+  reduce once by itself. GitHub Pro: map max-parallel 24 (two UHC waves per map run), reduce 14. Rule from today: when
+  the pipeline session will be idle or out of usage, it says so here first, so the app session or the user can watch
+  the orchestrator (`gh run list`; a red reduce run twice in a row needs a person).
 - 2026-10-30 06:25 CT [pipeline] Safety check: UHC waves 7 and 8 reduced (41013857656, 41028620741; 8 provider_set jobs each, no failures), wave 9 (96-107) mapping. bcbs serving-pack OOM request still open for the app session.
 - 2026-10-30 02:25 CT [pipeline] Safety check: UHC wave 7 reducing (41013857656, first wave with 8 provider_set jobs, no failures), wave 8 (84-95) mapping. Storage 3.18 TB of 7.8 (work 2.02, datasets 1.16).
 - 2026-10-30 01:30 CT [pipeline] Blue batch 1 merged into bcbs: shard 29 re-mapped after streaming code redaction;
