@@ -74,6 +74,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-02 app: README.md rewritten for the current state (payers, apps, MCP, pipeline, workflows, storage, layout). Shared doc: pipeline session, correct anything in your lane.
 - 2026-11-02 14:20 CT [pipeline] UHC was stalled since 2026-10-30 22:50 CT: reduce wave 12 (41139945672) lost parts 4,
   5, 10 to small runners (32 GB free disk). Failed jobs re-run (attempt 2); the orchestrator now re-runs a failed
   reduce once by itself. GitHub Pro: map max-parallel 24 (two UHC waves per map run), reduce 14. Rule from today: when
