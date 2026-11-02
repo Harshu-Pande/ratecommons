@@ -3,6 +3,17 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-02: a failed reduce is re-run once by the orchestrator; GitHub Pro maps two UHC waves at a time
+- UHC wave 12's reduce (run 41139945672, 2026-10-30) lost fact parts 4, 5 and 10 to "No space left on device" in
+  `_fetch_split_facts`. Their runners were a smaller kind (`/dev/mapper/cow-root`, 72 GB, 32 GB free) where every
+  other job had the usual 145 GB root with 104 GB free. The orchestrator stops after a failed reduce, so UHC stood
+  still from Friday night to Monday.
+- The orchestrator now re-runs a failed reduce run's failed jobs once (`rerun-failed-jobs`, run_attempt 1 only); a
+  second failure still stops it for a person. Wave 12's three jobs were re-run by hand on 2026-11-02.
+- GitHub Pro raised the job limit from 20 to 40. A UHC wave maps in ~3.5 h and reduces in ~1.75 h, so mapping was
+  the bottleneck: each orchestrator map run now takes the next two waves (MAP_WAVES_PER_RUN, 24 shards) with map
+  max-parallel 24, and reduce max-parallel is 14; 2 slots stay free for orchestrate and the app lane.
+
 ## 2026-10-30: wave reduces split provider_set across 8 jobs; the code table is reduced with pyarrow
 - Blue batch 1's wave 4 reduce (shards 28-33) failed in two dims jobs. `dims-code`: DuckDB ran out of 6.5 GB on
   BCBS Michigan's code rows (their bundle text is 9.7 GB decoded). `dims-provider_set`: the runner was lost after an

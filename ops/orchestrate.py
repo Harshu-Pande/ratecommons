@@ -17,6 +17,9 @@ BUCKET = "ratecommons/work"
 # map -> reduce -> delete map output wave by wave.
 PIPELINE = {"uhc": 1024}
 MAX_WAVES_IN_FLIGHT = 2
+# GitHub Pro (2026-11-02): 40 concurrent jobs. A UHC wave maps in ~3.5 h and reduces in ~1.75 h, so each map run
+# takes the next two waves (24 shards, map.yml max-parallel 24) beside one reduce (max-parallel 14)
+MAP_WAVES_PER_RUN = 2
 # payers whose serving pack (serve.yml) and cloud pack (cloud.yml) are built automatically once merged
 AUTO_PACK = ["bcbs", "anthem"]
 # payers whose reduced/ wave outputs are deleted once their merge is published (storage decision 2026-10-30;
@@ -228,7 +231,8 @@ def clean(waves):
 
 
 def start_maps(waves):
-    """For PIPELINE payers: start the next wave's map run when no map run is going and few waves wait."""
+    """For PIPELINE payers: start a map run of the next waves (MAP_WAVES_PER_RUN) when no map run is going and few
+    mapped waves wait for their reduce."""
     import os
 
     me = os.environ.get("SELF_RUN_ID")
@@ -245,25 +249,28 @@ def start_maps(waves):
         if not mine:
             continue
         mapped = mapped_shards(payer, mine[0][1])
-        in_flight, nxt = 0, None
+        in_flight, todo = 0, []
         for w in mine:
             a, b = map(int, w[3].split("-"))
             if wave_done(payer, w[1], w[2]):
                 continue
-            got = sum(1 for s in range(a, b + 1) if s in mapped)
-            if got == b - a + 1:
-                in_flight += 1
-            elif nxt is None:
-                # partly or not mapped: run only its missing shards (one failed download re-ran all 12, 2.5 hours)
-                nxt = w + [",".join(str(x) for x in range(a, b + 1) if x not in mapped)]
+            missing = [x for x in range(a, b + 1) if x not in mapped]
+            if not missing:
+                if not todo:
+                    in_flight += 1
+                continue
+            # partly or not mapped: run only its missing shards (one failed download re-ran all 12, 2.5 hours)
+            todo.append((w[2], missing))
+            if len(todo) == MAP_WAVES_PER_RUN:
                 break
-        if nxt and in_flight < MAX_WAVES_IN_FLIGHT:
-            print(f"starting map of {payer} wave {nxt[2]} (shards {nxt[4]})")
+        if todo and in_flight < MAX_WAVES_IN_FLIGHT:
+            rng = ",".join(str(x) for _, m in todo for x in m)
+            print(f"starting map of {payer} wave(s) {', '.join(w for w, _ in todo)} (shards {rng})")
             subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/workflows/map.yml/dispatches",
                                    "-f", "ref=main", "-f", f"inputs[payer]={payer}", "-f", f"inputs[shards]={shards}",
-                                   "-f", "inputs[limit]=", "-f", f"inputs[range]={nxt[4]}"])
+                                   "-f", "inputs[limit]=", "-f", f"inputs[range]={rng}"])
             return
-        print(f"{payer}: {in_flight} mapped wave(s) wait for reduce; next map: {nxt and nxt[2]}")
+        print(f"{payer}: {in_flight} mapped wave(s) wait for reduce; next map: {todo and todo[0][0]}")
 
 
 def packs(waves):
@@ -329,6 +336,12 @@ def main():
     # called at the end of a successful reduce run (SELF_RUN_ID), an older failure is not a reason to stop
     from_reduce = me and os.environ.get("SELF_KIND", "reduce") == "reduce"
     if runs and runs[0]["conclusion"] != "success" and not from_reduce:
+        # GitHub sometimes gives a job a smaller runner (72 GB disk, 32 GB free, not 104): UHC wave 12 lost three
+        # fact parts to it and stood still for a weekend. Re-run the failed jobs once; a second failure stops
+        if runs[0]["conclusion"] == "failure" and runs[0].get("run_attempt", 1) < 2:
+            print(f"last reduce run {runs[0]['id']} failed; re-running its failed jobs once")
+            subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/runs/{runs[0]['id']}/rerun-failed-jobs"])
+            return
         print(f"last reduce run {runs[0]['id']} ended {runs[0]['conclusion']}; stopping until someone looks")
         return
 

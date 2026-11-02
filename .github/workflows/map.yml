@@ -80,7 +80,7 @@ jobs:
     timeout-minutes: 350
     strategy:
       fail-fast: false
-      max-parallel: 12   # design: keep GitHub Actions concurrency well below the 20-job cap
+      max-parallel: 24   # GitHub Pro: 40 concurrent jobs; map 24 + reduce 14 (two UHC waves per run), 2 left for the rest
       matrix:
         shard: ${{ fromJson(needs.plan.outputs.shards) }}
     env:
