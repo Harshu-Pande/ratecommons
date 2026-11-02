@@ -81,6 +81,11 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-02 18:45 CT [pipeline] UHC back on October: the November run 41527886315 was cancelled (the 16:55 request is
+  resolved); one more November run (41533695599) came from its next step on the old commit; its successor 41539453778
+  (waves 14-15, shards 156-179) maps from the stored October plan. clean() deleted the stray November output. Wave 13
+  reduced; part 1 (waves 1-12, 864 files) merged in 20 min to 70.1 GB (part-00: 498M wave facts -> 111M distinct;
+  12 separate waves were ~300 GB) and waves 1-12 were deleted. BCBS serving pack done, cloud pack running (app).
 - 2026-11-02 17:40 CT [pipeline] UHC October files are still served (runner probe); UHC map dispatch re-enabled with the
   stored October plan pinned (MAP_PLANS) and the stray November map output (map/2026-11/uhc) cleaned by clean().
   Run 41527886315 (November) still runs; once it ends, its next step dispatches October waves 14-15. Cancelling it
