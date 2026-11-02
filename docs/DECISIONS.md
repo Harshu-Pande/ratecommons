@@ -3,6 +3,17 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-02: a payer's map runs use one stored plan for the whole release (UHC posted November mid-release)
+- UHC posted its November files on 2026-11-01. Map runs planned from the live index each time, so the run started
+  after wave 13 planned November files: they went to map/2026-11/uhc (release from the file names), shard numbers
+  meant different files, and the orchestrator, waiting for October shards, dispatched again (waves 14-15, November).
+- A runner probe (`ticdata probe-plan`) showed the October files are still served (200, 9-15 GB each), and every
+  1,024-shard UHC plan stored since 2026-10-27 is identical. `MAP_PLANS` pins UHC to the 2026-10-30 plan (map.yml
+  `plan` dispatch input), so October finishes as one release; November is a later release from its own plan.
+- `STRAY_MAPS` lists map output to delete that no waves.txt release uses (uhc 2026-11), cleaned by clean().
+- UHC's download endpoint answers a `Range: bytes=0-0` request with the whole file: a probe without `stream=True`
+  read 15 GB files into memory and took two runners down.
+
 ## 2026-11-02: storage decision applied: merged payers drop their waves, UHC merges in parts, list tables shrink
 - (a) `DROP_REDUCED = {"aetna", "anthem"}`: once a payer's merge is published (merge_done with its file count),
   `clean()` writes `reduced/<release>/<payer>/dropped.json` (files per wave, read back before anything goes) and

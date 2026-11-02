@@ -252,7 +252,8 @@ def test_start_maps_reruns_only_missing_shards(monkeypatch):
     waves = [["uhc", "2026-10", "1", "0-11"], ["uhc", "2026-10", "2", "12-23"], ["uhc", "2026-10", "3", "24-35"],
              ["uhc", "2026-10", "4", "36-39"], ["uhc", "2026-10", "5", "40-43"]]
     orchestrate.start_maps(waves)  # wave 3's missing shard and all of wave 4 (two waves per map run)
-    assert calls and calls[0][-1] == "inputs[range]=32,36,37,38,39"
+    assert calls and "inputs[range]=32,36,37,38,39" in calls[0]
+    assert f"inputs[plan]={orchestrate.MAP_PLANS['uhc']}" in calls[0]  # the stored October plan, not the live index
 
 
 def test_batched_split_of_a_big_fact_part_gives_the_same_wave(tmp_path, monkeypatch):
@@ -543,7 +544,11 @@ def test_clean_deletes_waves_held_by_a_complete_part(monkeypatch):
     fb.install(monkeypatch, o)
     waves = [["uhc", "2026-10", "1", "0-11"], ["uhc", "2026-10", "2", "12-23"], ["uhc", "2026-10", "part=1", "1-2"],
              ["uhc", "2026-10", "3", "24-35"], ["uhc", "2026-10", "merge"]]
+    stray = {"map/2026-11/uhc/shard-156-00/rate_fact.parquet": "x", "map/2026-11/bcbs/shard-001-00/code.parquet": "x"}
+    fb.files.update(stray)
     o.clean(waves)
+    assert "map/2026-11/uhc/shard-156-00/rate_fact.parquet" not in fb.files  # listed in STRAY_MAPS
+    assert "map/2026-11/bcbs/shard-001-00/code.parquet" in fb.files  # not listed: kept
     assert not any(p.startswith((f"{pre}wave-1/", f"{pre}wave-2/")) for p in fb.files)
     assert any(p.startswith(f"{pre}wave-3/") for p in fb.files) and f"{pre}part-1/waves.json" in fb.files
     o._REDUCED.clear()

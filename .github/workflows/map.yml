@@ -13,6 +13,7 @@ on:
       shards: { description: "number of shards (<= 256)", required: true, default: "40" }
       limit: { description: "only the first N files (testing)", required: false, default: "" }
       range: { description: "only shards a-b of the plan", required: false, default: "" }
+      plan: { description: "a stored plan.json in the ops dataset to use instead of planning from the live index", required: false, default: "" }
   push:
     branches: [main]
     paths: ["ops/map-request.txt"]
@@ -51,7 +52,7 @@ jobs:
             perfile=*) perfile="${w#perfile=}";; plan=*) stored="${w#plan=}";; esac; done
           [ "$limit" = "0" ] && limit=""
           [ -n "${{ github.event.inputs.payer }}" ] && payer="${{ github.event.inputs.payer }}" && shards="${{ github.event.inputs.shards }}" && limit="${{ github.event.inputs.limit }}"
-          [ -n "${{ github.event.inputs.payer }}" ] && range="${{ github.event.inputs.range }}" && match="" && base="" && release="" && stored="" && perfile=""
+          [ -n "${{ github.event.inputs.payer }}" ] && range="${{ github.event.inputs.range }}" && match="" && base="" && release="" && stored="${{ github.event.inputs.plan }}" && perfile=""
           echo "payer=$payer shards=$shards limit=$limit"
           # UHC: parse one file per identical-content group (gzip trailer fingerprints from uhc-tails)
           [ "$payer" = uhc ] && export TIC_DUP_TAILS="runs/2026-10-27-gha-run-40546293263/uhc-tails.json"

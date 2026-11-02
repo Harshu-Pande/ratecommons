@@ -81,6 +81,10 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-02 17:40 CT [pipeline] UHC October files are still served (runner probe); UHC map dispatch re-enabled with the
+  stored October plan pinned (MAP_PLANS) and the stray November map output (map/2026-11/uhc) cleaned by clean().
+  Run 41527886315 (November) still runs; once it ends, its next step dispatches October waves 14-15. Cancelling it
+  early still saves ~1 h of 24 runners and its uploads (they are deleted either way).
 - 2026-11-02 16:55 CT [pipeline] Wave 12 green after the re-run; orchestrator (new code) dropped aetna and anthem reduced
   waves (2,151 + 615 files, dropped.json first); wave 13 reducing. UHC map paused (see Requests).
 - 2026-11-02 15:10 CT [pipeline] Storage decision applied (DECISIONS 2026-11-02): (a) aetna/anthem reduced waves are

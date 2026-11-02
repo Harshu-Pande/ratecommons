@@ -15,9 +15,12 @@ BUCKET = "ratecommons/work"
 # payers whose map runs the orchestrator starts itself, one wave at a time (value: shards in the map plan).
 # Map output is ~1 GB per GB of gzip and the bucket has a few TB free, so UHC (93.8 TB) must flow
 # map -> reduce -> delete map output wave by wave.
-# paused 2026-11-02: UHC posted its November files and the map plan is recomputed from the live index, so new map
-# runs map November files (map/2026-11) while waves 1-13 are October; see DECISIONS 2026-11-02
-PIPELINE = {}  # was {"uhc": 1024}
+PIPELINE = {"uhc": 1024}
+# map runs use these stored plans (ops dataset) instead of planning from the live index: on 2026-11-01 UHC posted
+# November files and a fresh plan mapped them mid-release (the October files are still served)
+MAP_PLANS = {"uhc": "runs/2026-10-30-map-uhc-41139836536/plan.json"}
+# map output of no release in waves.txt, deleted by clean(): November UHC files mapped by mistake on 2026-11-02
+STRAY_MAPS = [("uhc", "2026-11")]
 MAX_WAVES_IN_FLIGHT = 2
 # GitHub Pro (2026-11-02): 40 concurrent jobs. A UHC wave maps in ~3.5 h and reduces in ~1.75 h, so each map run
 # takes the next two waves (24 shards, map.yml max-parallel 24) beside one reduce (max-parallel 14)
@@ -205,6 +208,13 @@ def clean(waves):
             for s in range(a, b + 1):
                 folders[key].pop(s, None)
 
+    for payer, release in STRAY_MAPS:
+        if (payer, release) in {(w[0], w[1]) for w in waves}:
+            continue  # a release the waves use is never stray
+        paths = [p for ps in map_folders(payer, release).values() for p in ps]
+        if paths:
+            delete(paths, f"stray map output of {payer} {release}")
+
     for payer, release in sorted({(w[0], w[1]) for w in waves}):
         pre = f"reduced/{release}/{payer}/"
         paths, covered, dropped = reduced_state(payer, release)
@@ -271,7 +281,8 @@ def start_maps(waves):
             print(f"starting map of {payer} wave(s) {', '.join(w for w, _ in todo)} (shards {rng})")
             subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/workflows/map.yml/dispatches",
                                    "-f", "ref=main", "-f", f"inputs[payer]={payer}", "-f", f"inputs[shards]={shards}",
-                                   "-f", "inputs[limit]=", "-f", f"inputs[range]={rng}"])
+                                   "-f", "inputs[limit]=", "-f", f"inputs[range]={rng}",
+                                   "-f", f"inputs[plan]={MAP_PLANS.get(payer, '')}"])
             return
         print(f"{payer}: {in_flight} mapped wave(s) wait for reduce; next map: {todo and todo[0][0]}")
 
