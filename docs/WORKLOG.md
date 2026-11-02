@@ -81,6 +81,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-02 app: BCBS cloud pack with the 28 new Blue companies is live (serve/v2/bcbs, built 23:30Z). Fixed lookup_rates crash for BCBS (main network with no plan names, cloud/api/_rc.py). Shop rebuild 'all' dispatched (run 41547830524).
 - 2026-11-02 18:45 CT [pipeline] UHC back on October: the November run 41527886315 was cancelled (the 16:55 request is
   resolved); one more November run (41533695599) came from its next step on the old commit; its successor 41539453778
   (waves 14-15, shards 156-179) maps from the stored October plan. clean() deleted the stray November output. Wave 13

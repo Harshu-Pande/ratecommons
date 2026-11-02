@@ -969,9 +969,11 @@ def main_network_labels(p: str) -> list[str]:
     hx = {x.upper() for x in ((m.get("code_subset") or {}).get("all_codes_networks") or [])}
     out: list[str] = []
     if hx and m.get("real_networks"):
-        rows = _q(f"SELECT product, len(plan_names) AS n FROM realnet_{p} WHERE network_id IN ({', '.join(_lit(x) for x in hx)}) "
-                  "ORDER BY n DESC")
-        out = [f"{r['product']}, network used by {r['n']:,} employer plans" for r in rows]
+        rows = _q(f"SELECT product, coalesce(len(plan_names), 0) AS n FROM realnet_{p} "
+                  f"WHERE network_id IN ({', '.join(_lit(x) for x in hx)}) ORDER BY n DESC")
+        # a network can publish no employer plan names (some BCBS networks), so n can be 0
+        out = [f"{r['product']}, network used by {r['n']:,} employer plans" if r["n"] else f"{r['product']}"
+               for r in rows]
     elif hx:
         lab = {n["net"]: n.get("label") for n in m["networks"]}
         out = sorted({lab.get(n["net"]) or "" for n in m["networks"] if str(n.get("network_id", "")).upper() in hx})
