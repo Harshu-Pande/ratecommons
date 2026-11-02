@@ -22,6 +22,13 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
 ## Requests
+- 2026-11-02 16:55 CT [pipeline -> user] UHC map paused (PIPELINE = {}, ae29232): UHC published November files and the
+  map plan is recomputed from the live index, so the 20:44 UTC map run mapped November files into map/2026-11/uhc
+  (shards 156-167 under November's plan; nothing the orchestrator counts) and its next step started run 41527886315
+  (waves 14-15, also November). Cancelling 41527886315 was refused by the session's permission check: it keeps
+  uploading November map output nothing will reduce or clean (~0.4 TB per wave). Please cancel it if you agree
+  (Actions -> run 41527886315 -> Cancel). Waves 1-13 (October) are reduced; deciding how to finish October vs start
+  November after a probe of the October URLs from a runner.
 - 2026-10-30 08:45 CT [user, relayed by app -> pipeline] Storage decision: do all three options. (a) delete the
   reduced/ wave outputs of Aetna and Anthem (keep BCBS's: the other Blue companies are being re-merged into bcbs);
   (b) merge UHC in parts and delete its reduced waves as parts merge; (c) map Blue Shield of California and BCBS
@@ -74,6 +81,8 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-02 16:55 CT [pipeline] Wave 12 green after the re-run; orchestrator (new code) dropped aetna and anthem reduced
+  waves (2,151 + 615 files, dropped.json first); wave 13 reducing. UHC map paused (see Requests).
 - 2026-11-02 15:10 CT [pipeline] Storage decision applied (DECISIONS 2026-11-02): (a) aetna/anthem reduced waves are
   deleted by the orchestrator's clean() after writing dropped.json (re-merging them now needs a re-reduce); (b) UHC
   merges in 7 parts (waves.txt `part=P a-b`; part 1 = waves 1-12 runs after wave 12), each part's waves deleted once
