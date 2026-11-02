@@ -3,6 +3,17 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-02: BCBS with 28 more Blue companies is served; three app-lane lessons
+- The BCBS serve pack (4,183 networks grouped into 391 products, 122 main networks, 312M rate rows, 1.03B pg_npi rows,
+  17.8 GB) built after pg_state was split into 8 hash slices; its cloud pack built without further changes.
+- Some BCBS main networks publish no employer plan names, so `len(plan_names)` is NULL and formatting it crashed
+  every BCBS `lookup_rates` call. Main-network labels now coalesce to 0 and drop the plan count when it is 0.
+- `gh workflow run` fails from Claude sessions (GraphQL is blocked); dispatch through REST:
+  `gh api -X POST repos/Harshu-Pande/ratecommons/actions/workflows/<wf>.yml/dispatches -f ref=main -f 'inputs[request]=...'`.
+- Pushing app code does not release it: the Vercel project `ratecommons-cloud` is not git-connected. Set `RC_CODE_REF`
+  to the commit and redeploy. The Vercel connector can lose its grant to team `atticusfinch`; `authorize_team_access`
+  gives a one-time consent link the user approves.
+
 ## 2026-11-02: a payer's map runs use one stored plan for the whole release (UHC posted November mid-release)
 - UHC posted its November files on 2026-11-01. Map runs planned from the live index each time, so the run started
   after wave 13 planned November files: they went to map/2026-11/uhc (release from the file names), shard numbers
