@@ -5,7 +5,12 @@ async function getWorker(onProgress) {
   getWorker.onProgress = onProgress
   worker ||= (async () => {
     const { createWorker } = await import('tesseract.js')
+    const base = `${window.location.origin}/ocr`
     return createWorker('eng', 1, {
+      workerPath: `${base}/worker.min.js`,
+      corePath: base,
+      langPath: base,
+      workerBlobURL: false,
       logger: (m) => {
         if (m.status === 'recognizing text' && typeof getWorker.onProgress === 'function') getWorker.onProgress(m.progress)
       },

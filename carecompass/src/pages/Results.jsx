@@ -60,6 +60,8 @@ export default function Results() {
   const [kinds, setKinds] = useState([])
   const [q, setQ] = useState('')
   const [view, setView] = useState('list')
+  const [mapOn, setMapOn] = useState(() => { try { return sessionStorage.getItem('rc-map') === '1' } catch { return false } })
+  const showMap = () => { setMapOn(true); try { sessionStorage.setItem('rc-map', '1') } catch { /* private mode */ } }
   const [active, setActive] = useState(null)
   const [hover, setHover] = useState(null)
   const [edit, setEdit] = useState(false)
@@ -267,10 +269,21 @@ export default function Results() {
           </div>
         </div>
         <div className={`${view === 'map' ? 'block' : 'hidden'} relative w-full lg:block lg:flex-1`}>
-          <Suspense fallback={<div className="flex h-full items-center justify-center bg-canvas text-ink-mute">Loading map…</div>}>
-            {origin && <ResultsMap rows={rows} origin={origin} radius={radius} activeId={active} hoverId={hover} onSelect={setActive} onHover={setHover} flyTarget={null} />}
-          </Suspense>
-          <div className="pointer-events-none absolute bottom-8 left-3 z-[500] rounded-xl bg-white/95 px-3 py-2 text-[10.5px] shadow-card sm:bottom-6 sm:left-4 sm:text-[11px]">
+          {mapOn ? (
+            <Suspense fallback={<div className="flex h-full items-center justify-center bg-canvas text-ink-mute">Loading map…</div>}>
+              {origin && <ResultsMap rows={rows} origin={origin} radius={radius} activeId={active} hoverId={hover} onSelect={setActive} onHover={setHover} flyTarget={null} />}
+            </Suspense>
+          ) : (
+            <div className="flex h-full items-center justify-center bg-[#e9eeec] p-6">
+              <div className="max-w-sm rounded-2xl bg-white p-6 text-center shadow-card">
+                <MapIcon className="mx-auto h-8 w-8 text-brand-600" aria-hidden="true" />
+                <p className="mt-3 font-display text-lg font-bold text-ink">See these places on a map</p>
+                <p className="mt-2 text-sm leading-relaxed text-ink-soft">Map images come from Esri. Showing the map sends the area you are viewing to Esri. Nothing else about your search is shared.</p>
+                <button type="button" onClick={showMap} className="btn-go mt-4">Show the map</button>
+              </div>
+            </div>
+          )}
+          <div className={`${mapOn ? '' : 'hidden'} pointer-events-none absolute bottom-8 left-3 z-[500] rounded-xl bg-white/95 px-3 py-2 text-[10.5px] shadow-card sm:bottom-6 sm:left-4 sm:text-[11px]`}>
             <div className="mb-1 font-semibold text-ink">Negotiated price</div>
             <div className="flex items-center gap-3 text-ink-soft">
               <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-mint-600" />Lower third</span>
@@ -299,13 +312,6 @@ export default function Results() {
     </div>
   )
 }
-
-const Stat = ({ label, v, tone = 'text-white' }) => (
-  <div className="rounded-xl bg-white/5 px-2 py-2">
-    <div className="text-[11px] text-night-text">{label}</div>
-    <div className={`font-display text-lg font-extrabold ${tone}`}>{v}</div>
-  </div>
-)
 
 function Empty({ radius, hidden, onWiden, onShowHidden, payerName, planName, onAnyPlan }) {
   return (

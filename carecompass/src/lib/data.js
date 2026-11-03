@@ -1,7 +1,7 @@
 import procedures from '../data/procedures.json'
 import { miles } from './geo'
 
-export const DATA = import.meta.env.VITE_DATA_URL || 'https://huggingface.co/buckets/ratecommons/work/resolve/shop/v1'
+export const DATA = import.meta.env.VITE_DATA_URL || '/data/shop'
 export const PROCS = procedures
 export const PROC_BY_ID = Object.fromEntries(procedures.map((p) => [p.id, p]))
 export const CATEGORIES = [...new Set(procedures.map((p) => p.cat))]

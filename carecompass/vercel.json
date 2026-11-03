@@ -1,1 +1,33 @@
-{ "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/api/tool/:name", "destination": "https://ratecommons-cloud.vercel.app/api/tool/:name" },
+    { "source": "/api/tools", "destination": "https://ratecommons-cloud.vercel.app/api/tools" },
+    { "source": "/api/health", "destination": "https://ratecommons-cloud.vercel.app/api/health" },
+    { "source": "/mcp", "destination": "https://ratecommons-cloud.vercel.app/mcp" },
+    { "source": "/mcp/", "destination": "https://ratecommons-cloud.vercel.app/mcp/" },
+    { "source": "/gradio_api/mcp/", "destination": "https://ratecommons-cloud.vercel.app/gradio_api/mcp/" },
+    { "source": "/data/shop/:path*", "destination": "/api/shopdata?p=:path*" },
+    { "source": "/((?!api/|ocr/|assets/).*)", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; img-src 'self' data: blob: https://server.arcgisonline.com; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" },
+        { "key": "Referrer-Policy", "value": "no-referrer" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Permissions-Policy", "value": "camera=(self), microphone=(), geolocation=(), interest-cohort=(), browsing-topics=()" },
+        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains" }
+      ]
+    },
+    {
+      "source": "/assets/(.*)",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+    },
+    {
+      "source": "/ocr/(.*)",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=2592000" }]
+    }
+  ]
+}
