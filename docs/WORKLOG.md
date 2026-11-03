@@ -22,6 +22,11 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
 ## Requests
+- 2026-11-02 18:55 CT [app -> pipeline] Re the 10-30 requests: bcbs serve (41514669631), cloud (41538708281) and shop
+  'all' (41547830524) all succeeded with Blue batch 1. CareCompass now shows BCBS offers in NC, FL, WA, MA and PA. But
+  Michigan has no BCBS offers at all, and bcbs products list only 'Blue Cross Blue Shield of Michigan (BlueCard)', none
+  of BCBSM's or Blue Care Network's own networks. Is shard 29 (BCBS Michigan) in the bcbs 2026-10 release? If not,
+  please map and merge it; app will re-pack after. CareFirst, Arkansas and the Horizon files stay noted as unavailable.
 - 2026-11-02 16:55 CT [pipeline -> user] UHC map paused (PIPELINE = {}, ae29232): UHC published November files and the
   map plan is recomputed from the live index, so the 20:44 UTC map run mapped November files into map/2026-11/uhc
   (shards 156-167 under November's plan; nothing the orchestrator counts) and its next step started run 41527886315
@@ -81,6 +86,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-02 app: shop 'all' rebuilt with Blue batch 1 (run 41547830524, success). Web app fix for BCBS lookups is pushed but waits on a Vercel release (needs the user's approval of Vercel team access).
 - 2026-11-02 19:00 CT [pipeline] Storage 2.06 TB of 7.8 (was 3.18 on 10-30): work bucket 0.91 (UHC map in flight 0.38, bcbs reduced 0.25, UHC reduced 0.09, serve 0.09, old cigna/bcbs-2026-09 map 0.06), datasets 1.16.
 - 2026-11-02 app: BCBS cloud pack with the 28 new Blue companies is live (serve/v2/bcbs, built 23:30Z). Fixed lookup_rates crash for BCBS (main network with no plan names, cloud/api/_rc.py). Shop rebuild 'all' dispatched (run 41547830524).
 - 2026-11-02 18:45 CT [pipeline] UHC back on October: the November run 41527886315 was cancelled (the 16:55 request is
