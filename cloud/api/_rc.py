@@ -185,17 +185,20 @@ BLUE_HOSTS = (
 )
 
 
+def blue_company(url: str) -> str | None:
+    """The Blue company that publishes a file, from its address (display and grouping only, never identity)."""
+    m = re.search(r"//mrfdata\.hmhs\.com/files/(\d{3})/", url or "")
+    if m:  # Highmark's host serves several Blue plans, one folder per plan code
+        return BLUE_PLANS.get(m.group(1), f"Blue plan {m.group(1)}")
+    for pat, co in BLUE_HOSTS:
+        if re.search(pat, url or "", re.I):
+            return co
+    return None
+
+
 def _blue_from_url(url: str, name: str) -> tuple[str, str] | None:
     """(product, label) of a Blue plan's own file from its publisher address, or None."""
-    m = re.search(r"//mrfdata\.hmhs\.com/files/(\d{3})/", url or "")
-    company = None
-    if m:  # Highmark's host serves several Blue plans, one folder per plan code
-        company = BLUE_PLANS.get(m.group(1), f"Blue plan {m.group(1)}")
-    else:
-        for pat, co in BLUE_HOSTS:
-            if re.search(pat, url or "", re.I):
-                company = co
-                break
+    company = blue_company(url)
     if not company:
         return None
     m = re.match(r"([GS])-([A-Z])\d([A-Z]{3})\d+-innetwork-\d+_EXC_([A-Z]+)_([A-Z])", name)

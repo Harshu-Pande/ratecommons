@@ -244,15 +244,19 @@ def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str, 
 PRODUCT_MODE_NETWORKS = 2000  # above this many networks the app copy groups networks by product (Aetna: 6,219)
 
 
-def _label_fn():
-    """The app's own network labeler (cloud/api/_rc.py), so packs, the app and CareCompass name products alike."""
+def _rc_module():
+    """The app's own module (cloud/api/_rc.py), so packs, the app and CareCompass name products alike."""
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("rcapi", os.path.join(os.path.dirname(__file__), "..", "..",
                                                                          "cloud", "api", "_rc.py"))
     rc = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(rc)
-    return rc._label
+    return rc
+
+
+def _label_fn():
+    return _rc_module()._label
 
 
 def network_products(payer: str, src: str, plans: dict | None) -> dict | None:
@@ -278,8 +282,9 @@ MAIN_NETWORKS = int(os.environ.get("RC_MAIN_NETWORKS", "20"))
 def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NETWORKS) -> list:
     """The networks that keep every code, as whole network families (a family is every network id carrying the same
     app label: BCBS Tennessee posts Network S as 32 part files, Anthem splits files into _01_04 parts, and each part
-    is its own network id). Aetna: the n families used by the most employer plans. BCBS: every home family of the
-    plans in RC_BCBS_MAIN_PLANS (default TN). Anthem: its n largest own families. Returns network ids."""
+    is its own network id). Aetna: the n families used by the most employer plans. BCBS: the home families named by
+    RC_BCBS_MAIN_PLANS (TN all, IL and TX 3, every other Blue company its largest). Anthem: its n largest own
+    families. Returns network ids."""
     import re
 
     import duckdb
@@ -295,34 +300,52 @@ def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NE
             g["score"].update(p for nm in names for p in (plans or {}).get(nm, []))
         ranked = sorted(fam.values(), key=lambda g: -len(g["score"]))[:n]
         return [i for g in ranked for i in g["ids"]]
-    label = _label_fn()
-    # "TN:all,IL:3,TX:3": every home family of TN, the 3 largest of IL and of TX (IL/TX lists are wide)
+    rc = _rc_module()
+    label = rc._label
+    # "TN:all,IL:3,TX:3,other:1": every home family of TN, the 3 largest of IL and of TX (IL/TX lists are wide), and
+    # the largest home family of every other Blue company that posts its own files (company from the file address)
     cap = {}
-    for x in os.environ.get("RC_BCBS_MAIN_PLANS", "TN:all,IL:3,TX:3").split(","):
+    for x in os.environ.get("RC_BCBS_MAIN_PLANS", "TN:all,IL:3,TX:3,other:1").split(","):
         k, _, v = x.partition(":")
         cap[k.strip()] = None if v in ("", "all") else int(v)
-    want = list(cap)
-    for nid, names, b in rows:
+    # a family bigger than this (gzip GB) is skipped for "other" companies, and they stop at a total budget, so the
+    # serving pack still fits one runner
+    fam_max = float(os.environ.get("RC_BCBS_MAIN_FAMILY_GB", "13"))
+    budget = float(os.environ.get("RC_BCBS_MAIN_OTHER_GB", "45")) * 1e9
+    if payer == "bcbs":
+        rows = duckdb.sql(f"SELECT network_id, list(name ORDER BY name), sum(bytes), list(url ORDER BY name) "
+                          f"FROM read_parquet('{sf}') GROUP BY 1").fetchall()
+    else:
+        rows = [(*r, None) for r in rows]
+    for nid, names, b, urls in rows:
+        plan = None
         if payer == "bcbs":  # home networks only (BlueCard files are other plans' networks)
             if all(re.match(r"\d{4}-\d{2}_\d{3}_[0-9A-Z]{4}_", x) for x in names):
                 continue
             x = " ".join(names)
-            plan = "TN" if "_890_" in x else "IL" if "Illinois" in x else "TX" if "Texas" in x else "other"
-            if plan not in want:
+            plan = "TN" if "_890_" in x else "IL" if "Illinois" in x else "TX" if "Texas" in x else None
+            if plan is None:
+                co = next((c for c in map(rc.blue_company, urls or []) if c), None)
+                plan = ("other", co) if co and not co.startswith("EyeMed") else None  # vision files: no medical codes
+            if plan is None or (plan if isinstance(plan, str) else "other") not in cap:
                 continue
         elif payer == "anthem" and not any(re.match(r"[A-Z]{2}_", x) for x in names):
             continue
-        g = fam.setdefault(label(payer, names, None)[1], {"ids": [], "score": 0})
+        g = fam.setdefault(label(payer, names, None, urls)[1], {"ids": [], "score": 0, "plan": plan})
         g["ids"].append(nid)
         g["score"] += b or 0
     ranked = sorted(fam.items(), key=lambda kv: -kv[1]["score"])
     if payer == "bcbs":  # per Blue plan caps
-        kept, cnt = [], {}
+        kept, cnt, spent = [], {}, 0
         for k, g in ranked:
-            pl = "TN" if "Tennessee" in k else "IL" if ("BCBSIL" in k or "Illinois" in k) else "TX" if ("BCBSTX" in k or "Texas" in k) else "other"
-            if pl in cap and (cap[pl] is None or cnt.get(pl, 0) < cap[pl]):
+            pl = g["plan"]
+            c = cap["other" if isinstance(pl, tuple) else pl]
+            if isinstance(pl, tuple) and (g["score"] > fam_max * 1e9 or spent + g["score"] > budget):
+                continue
+            if c is None or cnt.get(pl, 0) < c:
                 kept.append((k, g))
                 cnt[pl] = cnt.get(pl, 0) + 1
+                spent += g["score"] if isinstance(pl, tuple) else 0
         ranked = kept
     else:
         ranked = ranked[:n]
