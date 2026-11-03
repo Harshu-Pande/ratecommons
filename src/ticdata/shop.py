@@ -394,6 +394,10 @@ def build(states: list[str], work: str = "/tmp/shop", out: str = "/tmp/shop-out"
         from .cloudpack import upload
 
         res["uploaded"] = upload(out, prefix, upload_to)
+    bad = {k: v["error"][:200] for k, v in res["states"].items() if isinstance(v, dict) and v.get("error")}
+    if bad:  # the good states are uploaded; the run still fails so a failed state is never mistaken for a success
+        _log(json.dumps({"failed_states": bad}))
+        raise RuntimeError(f"{len(bad)} state(s) failed: {', '.join(bad)}")
     return res
 
 
@@ -452,13 +456,17 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
                         FROM read_parquet('{d}/pgnpi.parquet') n JOIN addr_s a USING (npi)
                         WHERE n.pg IN (SELECT DISTINCT pg FROM ogr)""")
         # qualified clinicians per group, place, procedure part; with Medicare evidence for the code (or its family)
-        con.execute("""CREATE OR REPLACE TABLE q AS
-            SELECT gp.pg, gp.place_key, c.proc, c.role, c.code, count(DISTINCT gp.npi) AS nq,
-                   count(DISTINCT gp.npi) FILTER (WHERE ev.npi IS NOT NULL OR ef.npi IS NOT NULL) AS nev
-            FROM gp JOIN npigrp g USING (npi) JOIN catg c ON c.grp = g.grp
-            LEFT JOIN ev ON ev.npi = gp.npi AND ev.hcpcs = c.code
-            LEFT JOIN evfam ef ON ef.npi = gp.npi AND ef.fam = left(c.code, 4)
-            GROUP BY ALL""")
+        # in slices of groups (BCBS in Oklahoma ran out of 11 GB here: count(DISTINCT) over every BlueCard group)
+        kq = max(1, -(-con.execute("SELECT count(*) FROM gp").fetchone()[0] // int(os.environ.get("RC_SHOP_Q_ROWS", "1000000"))))
+        for i in range(kq):
+            con.execute(f"""{'CREATE OR REPLACE TABLE q AS' if i == 0 else 'INSERT INTO q'}
+                SELECT gp.pg, gp.place_key, c.proc, c.role, c.code, count(DISTINCT gp.npi) AS nq,
+                       count(DISTINCT gp.npi) FILTER (WHERE ev.npi IS NOT NULL OR ef.npi IS NOT NULL) AS nev
+                FROM (SELECT * FROM gp WHERE {'true' if kq == 1 else f'hash(pg) % {kq} = {i}'}) gp
+                JOIN npigrp g USING (npi) JOIN catg c ON c.grp = g.grp
+                LEFT JOIN ev ON ev.npi = gp.npi AND ev.hcpcs = c.code
+                LEFT JOIN evfam ef ON ef.npi = gp.npi AND ef.fam = left(c.code, 4)
+                GROUP BY ALL""")
         # a flat all-services contract applies to the visit whatever its code: match it to the group's best code
         con.execute("""CREATE OR REPLACE TABLE qx AS SELECT * FROM q UNION ALL
                        SELECT pg, place_key, proc, role, 'FLAT' AS code, max(nq), max(nev) FROM q GROUP BY ALL""")
@@ -662,4 +670,8 @@ def meta(work: str = "/tmp/shop-meta", out: str = "/tmp/shop-meta-out", upload_t
         from .cloudpack import upload
 
         res["uploaded"] = upload(out, prefix, upload_to)
+    bad = {k: v["error"][:200] for k, v in res["states"].items() if isinstance(v, dict) and v.get("error")}
+    if bad:  # the good states are uploaded; the run still fails so a failed state is never mistaken for a success
+        _log(json.dumps({"failed_states": bad}))
+        raise RuntimeError(f"{len(bad)} state(s) failed: {', '.join(bad)}")
     return res
