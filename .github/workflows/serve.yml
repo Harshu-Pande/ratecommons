@@ -57,7 +57,7 @@ jobs:
     needs: [args, shared]
     if: always() && needs.args.outputs.packs != '[]' && needs.shared.result != 'failure'
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 355   # GitHub allows 360; BCBS with every Blue company's main network took >300 once
     strategy:
       fail-fast: false
       matrix:
