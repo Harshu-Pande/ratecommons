@@ -3,6 +3,16 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-02: Blue plans' own files are named by their publisher's address, not by file name
+- In the first pack with the 28 Blue companies, 3,216 of BCBS's 4,183 networks (Florida Blue, BCBS NC, Michigan,
+  Excellus, Premera, Wellmark, Capital, Horizon, Highmark-hosted plans, Independence, ...) carried names with no Blue
+  plan code, so the labeler returned "bcbs" and product mode merged them all into one product called "bcbs".
+- Product mode now also reads source_file.url; `_rc.BLUE_HOSTS` maps publisher hosts to companies (Highmark's
+  mrfdata.hmhs.com by plan-code folder), and Excellus's one-file-per-employer-group names group by plan family.
+  4,183 networks -> 763 products. Packs now carry each product's label (network.parquet `product`, cloud meta
+  `networks[].product`), so the app and CareCompass use it instead of relabelling from file names alone.
+- Labels are display text only; identity stays TIN + NPIs and network_id.
+
 ## 2026-11-02: BCBS with 28 more Blue companies is served; three app-lane lessons
 - The BCBS serve pack (4,183 networks grouped into 391 products, 122 main networks, 312M rate rows, 1.03B pg_npi rows,
   17.8 GB) built after pg_state was split into 8 hash slices; its cloud pack built without further changes.
