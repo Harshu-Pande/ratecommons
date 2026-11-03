@@ -354,6 +354,9 @@ def build(states: list[str], work: str = "/tmp/shop", out: str = "/tmp/shop-out"
         con.execute(f"CREATE OR REPLACE TABLE prod_{p} AS SELECT DISTINCT n.ns, x.prod FROM read_parquet('{work}/{p}/ns.parquet') n "
                     f"JOIN (SELECT unnest(?) AS net, unnest(?) AS prod) x USING (net)",
                     [list(netmap.keys()), list(netmap.values())])
+        # one row per network set with its products: joining prod_ row by row multiplied every rate by its products
+        con.execute(f"CREATE OR REPLACE TABLE nsprod_{p} AS SELECT ns, list(DISTINCT prod ORDER BY prod) AS prods "
+                    f"FROM prod_{p} GROUP BY ns")
         cf = pf[p]["code_files"]
         con.execute(f"""CREATE OR REPLACE TABLE rates_{p} AS
             SELECT code, ps, ns, negotiated_type AS ntype, round(rate, 2) AS rate, rate_raw, billing_class AS bclass,
@@ -409,18 +412,29 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
             continue
         con.execute(f"""CREATE OR REPLACE TABLE psg AS SELECT DISTINCT b.ps, l.pg FROM read_parquet({buckets!r}) b
                         JOIN read_parquet('{d}/plipg.parquet') l USING (pli)""")
-        con.execute(f"""CREATE OR REPLACE TABLE og AS
-            SELECT g.pg, r.code, r.ntype, r.rate, r.bclass, r.mods,
-                   (r.pos = '' OR list_contains(string_split(r.pos, ','), '11') OR r.pos LIKE 'CSTM%') AS office,
-                   list(DISTINCT pr.prod ORDER BY pr.prod) AS prods
-            FROM rates_{p} r JOIN psg g USING (ps) JOIN prod_{p} pr USING (ns)
-            GROUP BY ALL""")
+        # offers per provider group, built a slice of codes at a time: in one statement, Aetna's 96M rate rows times
+        # each provider set's groups spilled ~90 GB and failed most states (since 2026-10-29)
+        nrows = con.execute(f"SELECT count(*) FROM rates_{p} r SEMI JOIN psg USING (ps)").fetchone()[0]
+        k = max(1, -(-nrows // int(os.environ.get("RC_SHOP_SLICE_ROWS", "4000000"))))
+        for i in range(k):
+            con.execute(f"""{'CREATE OR REPLACE TABLE og AS' if i == 0 else 'INSERT INTO og'}
+                WITH rp AS (  -- rates per provider set, products already merged per network set
+                    SELECT r.ps, r.code, r.ntype, r.rate, r.bclass, r.mods,
+                           (r.pos = '' OR list_contains(string_split(r.pos, ','), '11') OR r.pos LIKE 'CSTM%') AS office,
+                           list_distinct(flatten(list(np.prods))) AS prods
+                    FROM rates_{p} r JOIN nsprod_{p} np USING (ns)
+                    WHERE r.ps IN (SELECT ps FROM psg) AND hash(r.code) % {k} = {i}
+                    GROUP BY ALL)
+                SELECT g.pg, rp.code, rp.ntype, rp.rate, rp.bclass, rp.mods, rp.office,
+                       list_sort(list_distinct(flatten(list(rp.prods)))) AS prods
+                FROM rp JOIN psg g USING (ps)
+                GROUP BY ALL""")
         flatb = f"{d}/pspli/_cstm_all.parquet"
         if os.path.exists(flatb):  # flat all-services arrangements (e.g. one amount per urgent-care visit)
             con.execute(f"""INSERT INTO og SELECT l.pg, 'FLAT' AS code, f.ntype, f.rate, f.bclass, '' AS mods, true AS office,
-                                   list(DISTINCT pr.prod ORDER BY pr.prod) AS prods
+                                   list_sort(list_distinct(flatten(list(np.prods)))) AS prods
                             FROM flat_{p} f JOIN read_parquet('{flatb}') b USING (ps)
-                            JOIN read_parquet('{d}/plipg.parquet') l USING (pli) JOIN prod_{p} pr USING (ns)
+                            JOIN read_parquet('{d}/plipg.parquet') l USING (pli) JOIN nsprod_{p} np USING (ns)
                             GROUP BY ALL""")
         con.execute(f"""CREATE OR REPLACE TABLE ogr AS
             SELECT og.*, m.proc, m.role, m.addon FROM og JOIN rolemap m ON m.code = og.code AND (
