@@ -28,7 +28,7 @@ PAYERS = ["cigna", "aetna", "uhc", "bcbs", "anthem"]
 # BCBS of Tennessee network names by file prefix, from the descriptions in its index (Oct 2026)
 BCBST_NETWORKS = {"58A0": "Network S", "58B0": "Network P", "58M0": "Network E", "58Q0": "Network L",
                   "BHBH": "Behavioral Health", "MDEN": "Medical Dental", "TLDC": "Teladoc"}
-BLUE_PLANS = {"020": "Arkansas Blue Cross and Blue Shield", "030": "Blue Cross Blue Shield Of Arizona", "040": "Anthem Blue Cross California", "042": "Blue Shield of California", "051": "Anthem Blue Cross and Blue Shield Colorado", "062": "Anthem Blue Cross and Blue Shield Connecticut", "070": "Highmark Blue Cross Blue Shield Delaware", "102": "Anthem Blue Cross and Blue Shield Georgia", "110": "Blue Cross of Idaho", "131": "Anthem Blue Cross and Blue Shield Indiana", "140": "Wellmark Blue Cross and Blue Shield of Iowa", "141": "Wellmark Blue Cross and Blue Shield of South Dakota", "150": "Blue Cross and Blue Shield of Kansas", "170": "Blue Cross and Blue Shield of Louisiana", "182": "Anthem Blue Cross and Blue Shield Maine", "230": "Blue Cross & Blue Shield of Mississippi", "240": "Blue Cross and Blue Shield of Kansas City", "250": "Blue Cross and Blue Shield of Montana", "254": "Empire BlueCross BlueShield", "260": "Blue Cross and Blue Shield of Nebraska", "266": "Anthem Blue Cross and Blue Shield Nevada", "271": "Anthem Blue Cross and Blue Shield New Hampshire", "280": "Horizon Blue Cross Blue Shield of New Jersey", "290": "Blue Cross and Blue Shield of New Mexico", "301": "Highmark Blue Cross Blue Shield of Western New York", "302": "Excellus BlueCross BlueShield", "310": "Blue Cross and Blue Shield of North Carolina", "320": "Blue Cross Blue Shield of North Dakota", "340": "Blue Cross and Blue Shield of Oklahoma", "361": "Capital BlueCross", "362": "Independence Blue Cross", "370": "Blue Cross & Blue Shield of Rhode Island", "378": "Highmark Blue Shield Pennsylvania", "380": "BlueCross BlueShield of South Carolina", "400": "Blue Cross and Blue Shield of Texas", "410": "Regence BlueCross BlueShield of Utah", "415": "Blue Cross and Blue Shield of Vermont", "425": "Anthem Blue Cross and Blue Shield Virginia", "430": "Premera Blue Cross", "443": "Highmark Blue Cross Blue Shield West Virginia", "458": "Anthem Blue Cross and Blue Shield Wisconsin", "460": "Blue Cross Blue Shield of Wyoming", "471": "Blue Cross and Blue Shield of Hawaii", "510": "Blue Cross and Blue Shield of Alabama", "590": "Florida Blue", "611": "Regence BlueShield of Idaho", "690": "CareFirst BlueCross BlueShield", "700": "Blue Cross Blue Shield of Massachusetts", "710": "Blue Cross Blue Shield of Michigan", "720": "Blue Cross and Blue Shield of Minnesota", "748": "Anthem Blue Cross and Blue Shield Missouri", "800": "Highmark Blue Shield of Northeastern New York", "850": "Regence BlueCross BlueShield of Oregon", "890": "BlueCross BlueShield of Tennessee", "932": "Regence BlueShield of Washington", "973": "BlueCross BlueShield of Puerto Rico"}
+BLUE_PLANS = {"020": "Arkansas Blue Cross and Blue Shield", "030": "Blue Cross Blue Shield Of Arizona", "040": "Anthem Blue Cross California", "042": "Blue Shield of California", "051": "Anthem Blue Cross and Blue Shield Colorado", "062": "Anthem Blue Cross and Blue Shield Connecticut", "070": "Highmark Blue Cross Blue Shield Delaware", "102": "Anthem Blue Cross and Blue Shield Georgia", "110": "Blue Cross of Idaho", "131": "Anthem Blue Cross and Blue Shield Indiana", "140": "Wellmark Blue Cross and Blue Shield of Iowa", "141": "Wellmark Blue Cross and Blue Shield of South Dakota", "150": "Blue Cross and Blue Shield of Kansas", "170": "Blue Cross and Blue Shield of Louisiana", "182": "Anthem Blue Cross and Blue Shield Maine", "230": "Blue Cross & Blue Shield of Mississippi", "240": "Blue Cross and Blue Shield of Kansas City", "250": "Blue Cross and Blue Shield of Montana", "254": "Empire BlueCross BlueShield", "260": "Blue Cross and Blue Shield of Nebraska", "266": "Anthem Blue Cross and Blue Shield Nevada", "271": "Anthem Blue Cross and Blue Shield New Hampshire", "280": "Horizon Blue Cross Blue Shield of New Jersey", "290": "Blue Cross and Blue Shield of New Mexico", "301": "Highmark Blue Cross Blue Shield of Western New York", "302": "Excellus BlueCross BlueShield", "310": "Blue Cross and Blue Shield of North Carolina", "320": "Blue Cross Blue Shield of North Dakota", "340": "Blue Cross and Blue Shield of Oklahoma", "361": "Capital BlueCross", "362": "Independence Blue Cross", "363": "Highmark Blue Cross Blue Shield (Pennsylvania)", "370": "Blue Cross & Blue Shield of Rhode Island", "378": "Highmark Blue Shield Pennsylvania", "380": "BlueCross BlueShield of South Carolina", "400": "Blue Cross and Blue Shield of Texas", "410": "Regence BlueCross BlueShield of Utah", "415": "Blue Cross and Blue Shield of Vermont", "425": "Anthem Blue Cross and Blue Shield Virginia", "430": "Premera Blue Cross", "443": "Highmark Blue Cross Blue Shield West Virginia", "458": "Anthem Blue Cross and Blue Shield Wisconsin", "460": "Blue Cross Blue Shield of Wyoming", "471": "Blue Cross and Blue Shield of Hawaii", "510": "Blue Cross and Blue Shield of Alabama", "590": "Florida Blue", "611": "Regence BlueShield of Idaho", "690": "CareFirst BlueCross BlueShield", "700": "Blue Cross Blue Shield of Massachusetts", "710": "Blue Cross Blue Shield of Michigan", "720": "Blue Cross and Blue Shield of Minnesota", "748": "Anthem Blue Cross and Blue Shield Missouri", "800": "Highmark Blue Shield of Northeastern New York", "850": "Regence BlueCross BlueShield of Oregon", "890": "BlueCross BlueShield of Tennessee", "932": "Regence BlueShield of Washington", "973": "BlueCross BlueShield of Puerto Rico"}
 DOLLAR_TYPES = ("negotiated", "fee schedule", "derived")
 MAX_ROWS = 2000
 FACILITY_POS = ("19", "21", "22", "23", "24", "26", "31", "34", "41", "42", "51", "52", "53", "56", "61")
@@ -163,7 +163,59 @@ def _aetna_product(plan: str) -> str:
     return "Aetna (other)"
 
 
-def _label(payer: str, files: list[str], plans: list[str] | None) -> tuple[str, str]:
+# Blue plans that publish their own files under names that carry no plan code: the publisher's address names the
+# company (checked against bcbs release 2026-10 source_file.url, Nov 2026). Display labels only, never identity.
+BLUE_HOSTS = (
+    (r"//mrf\.healthsparq\.com/exc-egress", "Excellus BlueCross BlueShield"),
+    (r"//mrf\.healthsparq\.com/premera-egress", "Premera Blue Cross"),
+    (r"//mrf\.healthsparq\.com/wmrk-egress", "Wellmark Blue Cross and Blue Shield"),
+    (r"//mrf\.healthsparq\.com/capbc-egress", "Capital BlueCross"),
+    (r"//mrf\.healthsparq\.com/bcbsne-egress", "Blue Cross and Blue Shield of Nebraska"),
+    (r"//mrf\.healthsparq\.com/bcbsaz-egress", "Blue Cross Blue Shield Of Arizona"),
+    (r"//horizonblue\.", "Horizon Blue Cross Blue Shield of New Jersey"),
+    (r"//bcbsm\.sapphiremrfhub", "Blue Cross Blue Shield of Michigan"),
+    (r"//bcbsla\.sapphiremrfhub", "Blue Cross and Blue Shield of Louisiana"),
+    (r"//bcbskc\.sapphiremrfhub", "Blue Cross and Blue Shield of Kansas City"),
+    (r"//mrfmftprod\.bcbsnc\.com", "Blue Cross and Blue Shield of North Carolina"),
+    (r"//d1hgtx7rrdl2cn\.cloudfront\.net", "Florida Blue"),
+    (r"carefirst", "CareFirst BlueCross BlueShield"),
+    (r"//storage\.googleapis\.com/ihg-dart", "Independence Blue Cross"),
+    (r"//mktg\.bluecrossmn\.com", "Blue Cross and Blue Shield of Minnesota"),
+    (r"eyemedvisioncare", "EyeMed (vision, HCSC plans)"),
+)
+
+
+def _blue_from_url(url: str, name: str) -> tuple[str, str] | None:
+    """(product, label) of a Blue plan's own file from its publisher address, or None."""
+    m = re.search(r"//mrfdata\.hmhs\.com/files/(\d{3})/", url or "")
+    company = None
+    if m:  # Highmark's host serves several Blue plans, one folder per plan code
+        company = BLUE_PLANS.get(m.group(1), f"Blue plan {m.group(1)}")
+    else:
+        for pat, co in BLUE_HOSTS:
+            if re.search(pat, url or "", re.I):
+                company = co
+                break
+    if not company:
+        return None
+    m = re.match(r"([GS])-([A-Z])\d([A-Z]{3})\d+-innetwork-\d+_EXC_([A-Z]+)_([A-Z])", name)
+    if m:  # Excellus posts one file per employer group: G-H1CMC0000123-innetwork-1_EXC_SM_N; group by plan family
+        fam = f"{m.group(2)} {m.group(3)} {m.group(4)}"
+        return f"{company} {fam}", f"{company} {fam} ({m.group(1)}, {m.group(5)})"
+    stem = re.sub(r"\.json(\.gz|\.zip)?$", "", name)
+    stem = re.sub(r"^\d{4}-\d{2}(-\d{2})?_", "", stem)
+    stem = re.sub(r"[_-]?(in-?network(-rates)?|ffs_in-network|innetwork)(_\d+_of_\d+)?.*$", "", stem, flags=re.I)
+    stem = re.sub(r"_\d+_of_\d+$", "", stem)
+    net = stem.replace("_", " ").replace("-", " ").strip()
+    if re.fullmatch(r"\d{6,}", net):  # Highmark host: numeric network code
+        prod = f"{company} network {net.lstrip('0') or '0'}"
+    else:
+        prod = f"{company} {net[:50]}".strip()
+    return prod, f"{company} {net}".strip()
+
+
+def _label(payer: str, files: list[str], plans: list[str] | None,
+           urls: list[str] | None = None) -> tuple[str, str]:
     name = (files or [""])[0]
     if payer == "aetna":
         prods = Counter(_aetna_product(p) for p in plans or [])
@@ -198,6 +250,9 @@ def _label(payer: str, files: list[str], plans: list[str] | None) -> tuple[str, 
             st = {"Illinois": "IL", "Texas": "TX", "Montana": "MT", "New-Mexico": "NM", "Oklahoma": "OK"}.get(m.group(1), m.group(1))
             net = m.group(2).replace("-", " ")
             return f"BCBS{st} {net.split('  ')[0][:40]}", f"BCBS{st} {net}"
+        got = _blue_from_url(urls[0], name) if (urls and payer == "bcbs") else None
+        if got:  # a Blue plan's own file whose name carries no plan code
+            return got
         return payer, stem
     if payer == "uhc":
         prod = (parts[2] if len(parts) > 2 else stem).replace("-", " ").replace("Ppo", "PPO")
@@ -213,7 +268,10 @@ def meta(p: str) -> dict | None:
             return None
         m = json.load(open(path))
         for n in m["networks"]:
-            n["product"], n["label"] = _label(p, n.get("file_names") or [], n.get("plan_names") or [])
+            pr, lab = _label(p, n.get("file_names") or [], n.get("plan_names") or [])
+            if n.get("product"):  # product-mode packs name each product at pack time (from file names and URLs)
+                pr, lab = n["product"], n["product"] if pr == p else lab
+            n["product"], n["label"] = pr, lab
         rows = [(p, n["net"], n["product"], n["label"], len(n.get("plan_names") or []), n.get("file_names") or [],
                  n.get("plan_names") or []) for n in m["networks"]]
         cur = con()

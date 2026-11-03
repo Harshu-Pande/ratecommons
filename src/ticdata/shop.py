@@ -262,7 +262,8 @@ def _products(payer: str, meta: dict) -> tuple[list[str], dict]:
                                                                          "cloud", "api", "_rc.py"))
     rc = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(rc)
-    lab = {n["net"]: rc._label(payer, n.get("file_names") or [], n.get("plan_names") or [])[0] for n in meta["networks"]}
+    lab = {n["net"]: n.get("product") or rc._label(payer, n.get("file_names") or [], n.get("plan_names") or [])[0]
+           for n in meta["networks"]}
     names = sorted(set(lab.values()))
     idx = {p: i for i, p in enumerate(names)}
     return names, {net: idx[p] for net, p in lab.items()}

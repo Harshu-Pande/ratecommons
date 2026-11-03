@@ -259,15 +259,15 @@ def network_products(payer: str, src: str, plans: dict | None) -> dict | None:
     """network_id -> product label, for payers with more than PRODUCT_MODE_NETWORKS networks; else None."""
     import duckdb
 
-    rows = duckdb.sql(f"SELECT network_id, list(name ORDER BY name) FROM read_parquet('{src}/source_file.parquet') "
-                      "GROUP BY 1").fetchall()
+    rows = duckdb.sql(f"SELECT network_id, list(name ORDER BY name), list(url ORDER BY name) "
+                      f"FROM read_parquet('{src}/source_file.parquet') GROUP BY 1").fetchall()
     if len(rows) <= PRODUCT_MODE_NETWORKS:
         return None
     label = _label_fn()
     out = {}
-    for nid, names in rows:
+    for nid, names, urls in rows:  # URLs name the Blue plan when a file name does not (Florida Blue, Excellus, ...)
         pl = [x for n in names for x in (plans or {}).get(n, [])]
-        out[nid] = label(payer, names, pl)[0]
+        out[nid] = label(payer, names, pl, urls)[0]
     _log(f"product mode: {len(rows)} networks -> {len(set(out.values()))} products")
     return out
 

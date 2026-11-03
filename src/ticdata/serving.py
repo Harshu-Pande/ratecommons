@@ -106,7 +106,7 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
         con.execute("""CREATE OR REPLACE TABLE ns AS SELECT DISTINCT n.ns_id, unhex(md5(coalesce(m.product, 'other'))) AS network_id
                        FROM ns n LEFT JOIN prodmap m USING (network_id)""")
         # a product row carries its networks' file names and up to 200 plan names (the app labels it from them)
-        con.execute(f"""COPY (SELECT ? AS payer, unhex(md5(coalesce(product, 'other'))) AS network_id,
+        con.execute(f"""COPY (SELECT ? AS payer, unhex(md5(coalesce(product, 'other'))) AS network_id, product,
                                      (list(DISTINCT f ORDER BY f) FILTER (WHERE f IS NOT NULL))[1:50] AS file_names, sum(bytes) AS bytes,
                                      (list(DISTINCT q ORDER BY q) FILTER (WHERE q IS NOT NULL))[1:200] AS plan_names,
                                      count(DISTINCT network_id) AS real_networks

@@ -244,13 +244,15 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
     con.execute(f"""COPY (SELECT x.tin_value AS tin, list(DISTINCT s ORDER BY s) AS states
                           FROM pgx x, unnest(coalesce(x.states, ['XX'])) AS u(s) GROUP BY 1 ORDER BY 1)
                     TO '{out}/tin.parquet' {W}""")
-    nets = con.execute("SELECT net, hex(network_id), file_names, plan_names, bytes FROM net ORDER BY net").fetchall()
+    has_prod = "product" in [r[0] for r in con.execute("DESCRIBE net").fetchall()]
+    nets = con.execute(f"SELECT net, hex(network_id), file_names, plan_names, bytes, {'product' if has_prod else 'NULL'} "
+                       "FROM net ORDER BY net").fetchall()
     pj = f"{pack}/pack.json"  # a common-services serving pack says which codes it holds
     subset = (json.load(open(pj)).get("code_subset") if os.path.exists(pj) else None)
     meta = {"payer": payer, "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "pspli": "bucket3", **res,
             **({"code_subset": subset} if subset else {}),
-            "networks": [{"net": a, "network_id": b, "file_names": c, "plan_names": d or [], "bytes": e}
-                         for a, b, c, d, e in nets]}
+            "networks": [{"net": a, "network_id": b, "file_names": c, "plan_names": d or [], "bytes": e,
+                          **({"product": f} if f else {})} for a, b, c, d, e, f in nets]}
     json.dump(meta, open(f"{out}/meta.json", "w"), default=str)
     con.close()
     res["files"] = sum(1 for _ in glob.iglob(f"{out}/**/*.parquet", recursive=True))
