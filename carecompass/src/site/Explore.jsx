@@ -7,25 +7,25 @@ import { MCP_URL, PAYER_LABEL, callTool, usePageTitle } from './ui'
 export const TOOLS = [
   { group: 'Look up prices', name: 'lookup_rates', title: 'Rates for a service',
     blurb: 'Every published rate for one billing code in one state: one row per insurer product, provider group and price.',
-    ex: { code: '99213', state: 'MO', city: 'Saint Louis' } },
+    ex: { code: '99213', state: 'MO', zip_prefix: '631', limit: '200' } },
   { group: 'Look up prices', name: 'market_distribution', title: 'Market spread',
     blurb: 'The range of rates for one service in a state: low, typical and high, by insurer, product or setting, with Medicare alongside.',
     ex: { code: '99214', state: 'MO', group_by: 'payer', place: 'office' } },
   { group: 'Look up prices', name: 'provider_rates', title: "A provider's rates",
-    blurb: 'What each insurer pays one provider group for a set of services.',
-    ex: { provider: 'Washington University', codes: '99213,99214', state: 'MO' } },
+    blurb: 'What each insurer pays one provider group for a set of services. Search by name, NPI or tax ID (the example is Saint Louis University, tax ID 430654872).',
+    ex: { provider: '430654872', codes: '99213,99214', state: 'MO' } },
   { group: 'Compare and benchmark', name: 'compare_providers', title: 'Compare providers',
-    blurb: 'Several provider groups side by side for the same services and insurers.',
-    ex: { codes: '99213,99214', state: 'MO', providers: 'Washington University, Saint Louis University' } },
+    blurb: 'Several provider groups side by side for the same services and insurers. The example compares Saint Louis University and Washington University by tax ID.',
+    ex: { codes: '99213,99214', state: 'MO', providers: '430654872, 430653611' } },
   { group: 'Compare and benchmark', name: 'benchmark_provider', title: 'Benchmark a practice',
     blurb: "Where one practice's rates sit against its market and against Medicare, code by code.",
-    ex: { provider: 'Saint Louis University', codes: '99213,99214,99215', state: 'MO' } },
-  { group: 'Compare and benchmark', name: 'rank_providers', title: 'Rank groups nationally',
+    ex: { provider: '430654872', codes: '99213,99214,99215', state: 'MO' } },
+  { group: 'Compare and benchmark', name: 'rank_providers', title: 'Rank provider groups',
     blurb: 'Rank provider groups by their rates across a basket of codes, in one state or the whole country.',
-    ex: { codes: '70450,71250,74177,72148', state: 'US', specialty: 'Radiology' } },
+    ex: { codes: '70450,71250,74177,72148', state: 'MO', specialty: 'Radiology' } },
   { group: 'Networks and plans', name: 'find_plans', title: "Find an employer's plan",
     blurb: 'Search employer and plan names to find which insurer networks they use.',
-    ex: { query: 'Washington University' } },
+    ex: { query: 'Boeing' } },
   { group: 'Networks and plans', name: 'network_breadth', title: 'Network breadth',
     blurb: 'How many providers of a specialty each network includes in an area.',
     ex: { state: 'MO', specialty: 'Cardiovascular Disease' } },
@@ -64,6 +64,7 @@ const CHOICES = {
   modifier: [['', 'None (base rate)'], ['26', '26 (professional part)'], ['TC', 'TC (technical part)']],
 }
 const GROUP_BY = { market_distribution: [['payer', 'Insurer'], ['product', 'Product'], ['setting', 'Setting'], ['none', 'Nothing']] }
+const SLOW = new Set(['provider_rates', 'compare_providers', 'benchmark_provider'])
 const ADVANCED = new Set(['limit', 'max_rows', 'weights', 'min_codes', 'billing_class', 'modifier', 'zip_prefix', 'network'])
 
 const PREFER = ['median', 'median_rate', 'rate', 'p50', 'score', 'allowed', 'nonfacility_amount', 'providers', 'provider_groups', 'groups', 'n']
@@ -222,9 +223,11 @@ export default function Explore() {
 
   useEffect(() => { setArgs(initial()); setRes(null); setErr(''); ran.current = false }, [name]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const clean = (a) => Object.fromEntries(Object.entries(a).filter(([k, v]) => v !== '' && v != null && (!schema || k in props)))
+  const clean = (a) => Object.fromEntries(Object.entries(a)
+    .filter(([k, v]) => v !== '' && v != null && (!schema || k in props))
+    .map(([k, v]) => [k, ['integer', 'number'].includes(props[k]?.type) && v !== '' && !Number.isNaN(Number(v)) ? Number(v) : v]))
 
-  const run = async (e) => {
+  const run = async (e, override) => {
     e?.preventDefault()
     ctl.current?.abort()
     const c = new AbortController()
@@ -232,7 +235,7 @@ export default function Explore() {
     setBusy(true); setErr(''); setRes(null)
     const t0 = performance.now()
     try {
-      const body = clean(args)
+      const body = clean(override || args)
       const d = await callTool(name, body, { signal: c.signal })
       let rows = d.rows
       if (!rows) { const { ok, seconds, notes, truncated, ...rest } = d; rows = [rest] }
@@ -247,7 +250,7 @@ export default function Explore() {
   }
 
   useEffect(() => {
-    if (schema && params.get('run') === '1' && !ran.current) { ran.current = true; run() }
+    if (schema && params.get('run') === '1' && !ran.current) { ran.current = true; run(null, initial()) }
   }, [schema]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const copy = async (what, text) => {
@@ -282,7 +285,7 @@ export default function Explore() {
           ))}
         </nav>
 
-        <div className="grid min-w-0 flex-[999_1_720px] gap-5">
+        <div className="grid min-w-0 flex-[999_1_720px] grid-cols-[minmax(0,1fr)] gap-5">
           <div>
             <h1 className="font-display text-[32px] font-bold text-ink">{tool.title}</h1>
             <p className="mt-1.5 max-w-3xl text-base text-[#4a5a68]">{tool.blurb}</p>
@@ -331,7 +334,7 @@ export default function Explore() {
                   </button>
                   <button type="button" className="btn-line btn-sm" onClick={() => setArgs({ ...tool.ex })}>Load the example</button>
                   {hidden > 0 && <button type="button" className="text-sm font-semibold text-brand-700" onClick={() => setShowMore(true)}>More options ({hidden})</button>}
-                  {busy && <span className="text-sm text-ink-mute">Big queries can take up to a minute.</span>}
+                  {busy && <span className="text-sm text-ink-mute">{SLOW.has(name) ? 'Provider and row-level queries scan every network and can take two to four minutes.' : 'Market-wide queries can take about a minute.'}</span>}
                 </div>
               </>
             )}

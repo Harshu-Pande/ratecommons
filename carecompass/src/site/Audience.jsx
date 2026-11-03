@@ -55,8 +55,8 @@ const PAGES = {
     h1: 'Know what every insurer pays you, and everyone near you.',
     lead: 'Walk into contract talks with the same numbers the insurer has. Benchmark your rates against your market and Medicare, code by code, at no cost.',
     jobs: [
-      [Gauge, 'Benchmark a practice', 'Where your rates sit against the local median and Medicare for the codes you bill most.', ex('benchmark_provider', { provider: 'Saint Louis University', codes: '99213,99214,99215', state: 'MO' })],
-      [Scale, 'Compare with competitors', 'Line up nearby groups side by side for the same services and insurers.', ex('compare_providers', { codes: '99213,99214', state: 'MO', providers: 'Washington University, Saint Louis University' })],
+      [Gauge, 'Benchmark a practice', 'Where your rates sit against the local median and Medicare for the codes you bill most.', ex('benchmark_provider', { provider: '430654872', codes: '99213,99214,99215', state: 'MO' })],
+      [Scale, 'Compare with competitors', 'Line up nearby groups side by side for the same services and insurers.', ex('compare_providers', { codes: '99213,99214', state: 'MO', providers: '430654872, 430653611' })],
       [BarChart3, 'See the market spread', 'Low, typical and high rates for any code in your state, by insurer or product.', ex('market_distribution', { code: '99214', state: 'MO', group_by: 'payer', place: 'office' })],
       [Network, 'Check your networks', 'Which insurer networks list your group, and under which tax ID.', ex('provider_networks', { provider: 'Saint Louis University', state: 'MO' })],
     ],
@@ -73,7 +73,7 @@ const PAGES = {
     h1: 'See what your health plan actually pays.',
     lead: 'Self-funded employers have a legal duty to manage what the plan spends. RateCommons shows the rates behind your network, so you can steer people to fair-priced care and hold vendors to account.',
     jobs: [
-      [FileSearch, "Find your plan's network", 'Search your company or plan name to find which insurer network files apply.', ex('find_plans', { query: 'Washington University' })],
+      [FileSearch, "Find your plan's network", 'Search your company or plan name to find which insurer network files apply.', ex('find_plans', { query: 'Boeing' })],
       [BarChart3, 'Compare insurers for the same care', 'Medians and ranges for common services across every insurer in a state.', ex('market_distribution', { code: '99214', state: 'MO', group_by: 'payer', place: 'office' })],
       [Building2, 'Rank high-value providers', 'Rank groups by price across a basket of services, to design steerage or a narrow network.', ex('rank_providers', { codes: '70450,71250,74177,72148', state: 'MO', specialty: 'Radiology' })],
       [Users, 'Check network breadth', 'How many cardiologists, radiologists or therapists each network includes nearby.', ex('network_breadth', { state: 'MO', specialty: 'Cardiovascular Disease' })],

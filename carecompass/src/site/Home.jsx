@@ -130,14 +130,14 @@ export default function Home() {
             <p className="kicker">Why it matters</p>
             <h2 className="h-section">The same brain MRI, the same insurer, the same city: {fmt(MRI.min)} or {fmt(MRI.max)}.</h2>
             <p className="mt-5 text-lg leading-relaxed text-[#3a4a58]">
-              UnitedHealthcare’s published prices for a brain MRI without contrast, at {MRI.n} places within {MRI.radius} miles of
+              UnitedHealthcare’s published prices for a brain MRI without contrast, at the {MRI.n} places with a complete price (scan and reading) within {MRI.radius} miles of
               downtown St. Louis, differ more than tenfold. Until now, finding that out took a data team. Now it takes a ZIP code.
             </p>
             <Link to={`/care/results?payer=uhc&proc=mri-brain&zip=63110&r=25`} className="btn-line mt-7">See every place and price <ArrowRight className="h-4 w-4" /></Link>
           </div>
           <figure className="card m-0 p-6 sm:p-7">
             <figcaption className="text-[15px] font-semibold text-ink">Brain MRI without contrast · UnitedHealthcare · within 25 miles of 63110</figcaption>
-            <p className="mt-1 text-[13px] text-ink-mute">Each dot is one place’s total published price. {MRI.n} places, November 2026 data.</p>
+            <p className="mt-1 text-[13px] text-ink-mute">Each dot is one place’s total published price. {MRI.n} places with a complete price, November 2026 data.</p>
             <div className="mt-4"><MriDots /></div>
             <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-[13px] text-ink-soft">
               <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-brand-600" />Lowest quarter, up to {fmt(MRI.p25)}</span>
