@@ -357,6 +357,10 @@ def build(states: list[str], work: str = "/tmp/shop", out: str = "/tmp/shop-out"
         # one row per network set with its products: joining prod_ row by row multiplied every rate by its products
         con.execute(f"CREATE OR REPLACE TABLE nsprod_{p} AS SELECT ns, list(DISTINCT prod ORDER BY prod) AS prods "
                     f"FROM prod_{p} GROUP BY ns")
+        # each distinct product list once, as a small integer (grouping on lists does not spill to disk)
+        con.execute(f"CREATE OR REPLACE TABLE psets_{p} AS SELECT row_number() OVER () AS pset, prods "
+                    f"FROM (SELECT DISTINCT prods FROM nsprod_{p})")
+        con.execute(f"CREATE OR REPLACE TABLE nsps_{p} AS SELECT n.ns, s.pset FROM nsprod_{p} n JOIN psets_{p} s USING (prods)")
         cf = pf[p]["code_files"]
         con.execute(f"""CREATE OR REPLACE TABLE rates_{p} AS
             SELECT code, ps, ns, negotiated_type AS ntype, round(rate, 2) AS rate, rate_raw, billing_class AS bclass,
@@ -412,22 +416,21 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
             continue
         con.execute(f"""CREATE OR REPLACE TABLE psg AS SELECT DISTINCT b.ps, l.pg FROM read_parquet({buckets!r}) b
                         JOIN read_parquet('{d}/plipg.parquet') l USING (pli)""")
-        # offers per provider group, built a slice of codes at a time: in one statement, Aetna's 96M rate rows times
-        # each provider set's groups spilled ~90 GB and failed most states (since 2026-10-29)
-        nrows = con.execute(f"SELECT count(*) FROM rates_{p} r SEMI JOIN psg USING (ps)").fetchone()[0]
-        k = max(1, -(-nrows // int(os.environ.get("RC_SHOP_SLICE_ROWS", "4000000"))))
+        # offers per provider group, built in slices of groups: in one statement, Aetna's 96M rate rows times each
+        # provider set's groups (and, row by row, each product) spilled ~90 GB and failed most states since 2026-10-29
+        con.execute(f"""CREATE OR REPLACE TABLE rp AS SELECT DISTINCT r.ps, r.code, r.ntype, r.rate, r.bclass, r.mods,
+                           (r.pos = '' OR list_contains(string_split(r.pos, ','), '11') OR r.pos LIKE 'CSTM%') AS office,
+                           np.pset
+                        FROM rates_{p} r JOIN nsps_{p} np USING (ns) WHERE r.ps IN (SELECT ps FROM psg)""")
+        est = con.execute("""SELECT coalesce(sum(a.n * b.n), 0) FROM (SELECT ps, count(*) AS n FROM rp GROUP BY ps) a
+                             JOIN (SELECT ps, count(*) AS n FROM psg GROUP BY ps) b USING (ps)""").fetchone()[0]
+        k = max(1, -(-int(est) // int(os.environ.get("RC_SHOP_SLICE_ROWS", "3000000"))))
         for i in range(k):
             con.execute(f"""{'CREATE OR REPLACE TABLE og AS' if i == 0 else 'INSERT INTO og'}
-                WITH rp AS (  -- rates per provider set, products already merged per network set
-                    SELECT r.ps, r.code, r.ntype, r.rate, r.bclass, r.mods,
-                           (r.pos = '' OR list_contains(string_split(r.pos, ','), '11') OR r.pos LIKE 'CSTM%') AS office,
-                           list_distinct(flatten(list(np.prods))) AS prods
-                    FROM rates_{p} r JOIN nsprod_{p} np USING (ns)
-                    WHERE r.ps IN (SELECT ps FROM psg) AND hash(r.code) % {k} = {i}
-                    GROUP BY ALL)
                 SELECT g.pg, rp.code, rp.ntype, rp.rate, rp.bclass, rp.mods, rp.office,
-                       list_sort(list_distinct(flatten(list(rp.prods)))) AS prods
-                FROM rp JOIN psg g USING (ps)
+                       list_sort(list_distinct(flatten(list(s.prods)))) AS prods
+                FROM rp JOIN psg g USING (ps) JOIN psets_{p} s USING (pset)
+                WHERE {'true' if k == 1 else f'hash(g.pg) % {k} = {i}'}
                 GROUP BY ALL""")
         flatb = f"{d}/pspli/_cstm_all.parquet"
         if os.path.exists(flatb):  # flat all-services arrangements (e.g. one amount per urgent-care visit)
@@ -515,7 +518,7 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
         return {"places": 0}
     con.execute("CREATE OR REPLACE TABLE offers AS " + " UNION ALL ".join(f"SELECT * FROM {t}" for t in po_parts))
     con.execute("CREATE OR REPLACE TABLE team AS " + " UNION ALL ".join(f"SELECT * FROM {t}" for t in team_parts))
-    for t in po_parts + team_parts + ["og", "ogr", "gp", "q", "qx", "psg", "chk"]:
+    for t in po_parts + team_parts + ["og", "ogr", "gp", "q", "qx", "psg", "chk", "rp"]:
         con.execute(f"DROP TABLE IF EXISTS {t}")
     con.execute("CHECKPOINT")
     # places
