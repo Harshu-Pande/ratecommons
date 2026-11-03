@@ -3,7 +3,11 @@
 Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] what (files or runs)`.
 
 ## Claimed
-- 2026-11-03 01:00 UTC app: BCBS products relabelled from publisher URLs (06898ea); serve bcbs:dataset re-dispatched (41566296964), then cloud -> shop -> app release.
+- 2026-11-03 11:30 CT [app] (1) Every code for each Blue company's largest home networks and more Anthem families
+  (main_networks in src/ticdata/serve_jobs.py, serve/cloud/shop runs). (2) UHC into the apps part by part: serving
+  packs from reduced/2026-10/uhc/part-P as each part merges, labelled partial (serve_jobs.py pack for part sources,
+  cloud/api/_rc.py). (3) Why BCBS Michigan has no patient prices (shop.py). (4) Repo set-up for a second contributor
+  (Seyun): CONTRIBUTING.md, branch rules, status page. Pipeline: tell me here if any of this collides with your work.
 - 2026-10-29 13:50 CT [pipeline] BCBS: other Blue companies' own in-network files (research -> discover.py -> new bcbs
   shard ranges). Files: src/ticdata/discover.py, ops/map-request.txt, ops/waves.txt, docs/DECISIONS.md. 15:10 CT:
   batch 1 (28 companies, 3,420 files, 96 GB) mapping as shards 28-33 (run 40943309473), then wave 4 and re-merge.
@@ -23,6 +27,13 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
 ## Requests
+- 2026-11-03 11:30 CT [user, relayed by app -> pipeline] UHC: two ideas the user wants. (1) Main files first: re-plan
+  only the not-yet-mapped UHC files so one representative per (product code, near-equal size) group (the 1,268 groups
+  of DECISIONS 10-27, ~11.8 TB) maps first, then loners, then the dense near-copy clusters last. Every file is still
+  mapped, so order cannot lose data; shards already mapped keep their contents. Goal: every UHC network in the apps
+  within days, employer carve-outs filling in later. (2) Kaggle as extra UHC capacity (it reached UHC every time; 1.1 TB
+  disk avoids the small-runner 'No space left' failures), e.g. for the files that crash GitHub runners. App will pack
+  each merged part (part-1 now) into the apps, so earlier parts that cover more networks help most. Your call on how.
 - 2026-11-02 20:20 CT [user, relayed by app -> pipeline] Whole nation for the Blues: the user wants every Blue company's
   own networks, not BlueCard only. After BCBS Michigan (request above), please add discovery, map and merge for the
   ones bcbs does not have yet: BCBS Massachusetts, BCBS Rhode Island, BCBS Vermont, BCBS South Carolina, BCBS Kansas
@@ -94,6 +105,9 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-03 11:30 CT [app] BCBS relabel chain done: serve (41566296964), cloud (41575996770), shop all (41581045145),
+  app released at cececb2: bcbs products carry Blue company names. Coverage table fixed (3d25e3d): main networks show
+  'every published service', UHC shown as an early sample. Michigan still has no bcbs offers (claimed above).
 - 2026-11-03 11:00 CT [pipeline] Safety check: waves 17 (auto re-run: small runner, out of disk) and earlier reduced; 18 reducing, 20-21 mapping. Orchestrator now re-runs a failed reduce up to twice.
 - 2026-11-03 06:55 CT [pipeline] Safety check: UHC waves 14 (auto re-run), 15, 16 reduced; wave 17 queued, waves 18-19 mapping beside it. ~1 wave per 1.5 h now; part 2 (13-24) follows wave 24.
 - 2026-11-03 02:55 CT [pipeline] Safety check: waves 16-17 mapped (October plan, 41574448878); wave 14 reduce lost fact part 2 to a runner (log gone) and the orchestrator re-ran it by itself (attempt 2, running since 07:25 UTC). BCBS serve/cloud/shop all green again (app).
