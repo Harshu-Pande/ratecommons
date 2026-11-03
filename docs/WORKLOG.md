@@ -3,11 +3,6 @@
 Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] what (files or runs)`.
 
 ## Claimed
-- 2026-11-02 22:55 CT [app] New public website at ratecommons.org (user request, overnight): one Vite app in carecompass/
-  (home, audience pages, /care patient side rebranded from CareCompass, /explore, /ai, /data, /coverage, /methodology,
-  /privacy, /about), privacy fixes (self-hosted fonts and OCR, data via own domain, CSP), cloud /api/shop proxy if needed,
-  Vercel routes so ratecommons.org serves the site and /api + /mcp keep hitting the cloud app. Files: carecompass/**,
-  cloud/api/index.py (small), docs. Will release cloud from latest main so other app work is kept.
 - 2026-11-03 01:00 UTC app: BCBS products relabelled from publisher URLs (06898ea); serve bcbs:dataset re-dispatched (41566296964), then cloud -> shop -> app release.
 - 2026-10-29 13:50 CT [pipeline] BCBS: other Blue companies' own in-network files (research -> discover.py -> new bcbs
   shard ranges). Files: src/ticdata/discover.py, ops/map-request.txt, ops/waves.txt, docs/DECISIONS.md. 15:10 CT:
@@ -99,6 +94,9 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-03 [app] New public website live at ratecommons.org (carecompass/ app, Vercel routes on both projects,
+  privacy fixes, docs). See DECISIONS 2026-11-03. Known follow-ups: provider tools take 2-4 min; patient results
+  still include some unlikely places (data quality).
 - 2026-11-02 22:50 CT [pipeline] Safety check: waves 14-15 mapped from the October plan in ~3.5 h (two waves per run),
   wave 14 reducing (41565385989). Map and reduce were taking turns (MAX_WAVES_IN_FLIGHT 2 counted the two mapped
   waves), so it is now 3: the next two-wave map run starts while 14-15 reduce. BCBS cloud pack and CareCompass done.

@@ -239,7 +239,12 @@ export default function Explore() {
       const d = await callTool(name, body, { signal: c.signal })
       let rows = d.rows
       if (!rows) { const { ok, seconds, notes, truncated, ...rest } = d; rows = [rest] }
-      setRes({ rows, notes: d.notes || [], truncated: d.truncated, secs: ((performance.now() - t0) / 1000).toFixed(1) })
+      // some tools lead with a summary row (payer "_summary"): show it as a line, not as data
+      const summary = rows.filter((r) => r.payer === '_summary')
+      rows = rows.filter((r) => r.payer !== '_summary')
+      const sumNotes = summary.map((r) => Object.entries(r).filter(([k, v]) => k !== 'payer' && v != null && v !== '' && !(Array.isArray(v) && !v.length))
+        .map(([k, v]) => `${nice(k)}: ${fmt(v, k)}`).join(' · '))
+      setRes({ rows, notes: [...sumNotes, ...(d.notes || [])], truncated: d.truncated, secs: ((performance.now() - t0) / 1000).toFixed(1) })
       const q = new URLSearchParams({ tool: name, ...body })
       setParams(q, { replace: true })
     } catch (x) {
@@ -271,7 +276,17 @@ export default function Explore() {
   return (
     <div className="bg-[#f6f8f9]">
       <div className="mx-auto flex w-full max-w-[1360px] flex-wrap items-start gap-7 px-4 py-7 sm:px-7">
-        <nav aria-label="Tools" className="grid min-w-0 flex-[1_1_240px] gap-5 lg:sticky lg:top-24">
+        <label className="block w-full lg:hidden">
+          <span className="mb-1.5 block text-[13px] font-semibold text-[#2e3e4c]">Tool</span>
+          <select className="field w-full" value={name} onChange={(e) => setParams({ tool: e.target.value })}>
+            {GROUPS.map((g) => (
+              <optgroup key={g} label={g}>
+                {TOOLS.filter((t) => t.group === g).map((t) => <option key={t.name} value={t.name}>{t.title}</option>)}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+        <nav aria-label="Tools" className="hidden min-w-0 flex-[1_1_240px] gap-5 lg:sticky lg:top-24 lg:grid">
           {GROUPS.map((g) => (
             <div key={g}>
               <p className="mb-1.5 ml-3 text-xs font-bold uppercase tracking-[0.06em] text-ink-mute">{g}</p>

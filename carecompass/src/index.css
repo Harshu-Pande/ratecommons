@@ -3,6 +3,8 @@
 @tailwind utilities;
 
 @layer base {
+  /* grid and flex children may shrink below their content, so wide tables and code scroll inside instead of widening the page */
+  .grid > * { min-width: 0; }
   html { scroll-behavior: smooth; }
   body { @apply bg-white text-ink antialiased font-sans; font-feature-settings: 'tnum' 0; }
   h1, h2, h3 { @apply font-display tracking-tight; }

@@ -29,7 +29,7 @@ const CLIENTS = [
     name: 'Other MCP clients', note: 'Cursor, VS Code, Claude Code, agents you build, and anything that speaks MCP over HTTP.',
     steps: [
       <>Add a remote (streamable HTTP) server with the address above. No key or header is needed.</>,
-      <>Or, from a terminal with Claude Code: <code className="font-mono text-[13px]">claude mcp add --transport http ratecommons {MCP_URL}</code></>,
+      <>Or, from a terminal with Claude Code: <code className="break-all font-mono text-[13px]">claude mcp add --transport http ratecommons {MCP_URL}</code></>,
     ],
   },
 ]

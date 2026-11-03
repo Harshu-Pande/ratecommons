@@ -3,6 +3,26 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-03: ratecommons.org is one public website; the patient tool lives at /care
+- The whole site (home, /care patient tool, /explore, /ai, /data, /coverage, /methodology, /privacy, /about, /for/*)
+  is the Vite app in `carecompass/` (Vercel project `carecompass`). The CareCompass name is retired; it is all RateCommons.
+- Domains could not be moved between Vercel projects from here, so ratecommons.org stays on `ratecommons-cloud` and a
+  project route rewrites every path except `api/tool*`, `api/health`, `mcp`, `gradio_api` to
+  carecompass-health.vercel.app. The site's own vercel.json proxies `/api/tool*`, `/api/tools`, `/mcp` back to the cloud
+  app, so both hosts serve the same thing. Slow tools (provider_rates about 3 min) still finish through both proxies.
+- Old addresses: care.ratecommons.org/.me -> ratecommons.org/care/<path> (308, query kept); ratecommons-cloud.vercel.app
+  non-API pages -> ratecommons.org. Old patient paths (/results, /your-rights, ...) redirect inside the app.
+- Privacy is enforced by construction: fonts and the OCR engine (tesseract worker, core, eng traineddata copied to
+  public/ocr at build) are self-hosted; patient price files come through `/data/shop/*` -> `api/shopdata.js`, which
+  streams from the HF bucket (15 MB files pass; CDN-cached a day), so the browser contacts only our host. The map is
+  opt-in (Esri tiles). CSP `connect-src 'self'`. Verified with Playwright: only ratecommons.org is contacted until the
+  map is shown, and a card scan runs fully on-device.
+- The carecompass project's Git auto-deploys had stopped (no deploy since 10-28) and a plain redeploy built from the repo
+  root and failed (`vite: command not found`). Deploying with `rootDirectory: carecompass` fixed it; if a push to main
+  does not deploy, redeploy with that setting.
+- Wording: we say "we never receive your health information", not "HIPAA protected" (we are not a covered entity);
+  the privacy page explains why.
+
 ## 2026-11-02: Custom domains: ratecommons.org is the main address; Namecheap's "HTTPS ON" breaks Vercel
 - ratecommons.org (Explorer, MCP at /mcp) and care.ratecommons.org (CareCompass) are live on Vercel; www.ratecommons.org
   redirects to the apex. ratecommons.me, www.ratecommons.me and care.ratecommons.me 308-redirect to the .org addresses,

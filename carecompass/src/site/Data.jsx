@@ -81,7 +81,7 @@ export default function Data() {
                     <span className="mt-0.5 block text-sm text-ink-soft">{name}</span>
                   </td>
                   <td className="num hidden px-5 py-4 text-ink-soft sm:table-cell">{st?.payers?.[id] ? st.payers[id].networks.toLocaleString('en-US') : id === 'identity' ? '' : '…'}</td>
-                  <td className="num px-5 py-4 text-right font-semibold">{size}</td>
+                  <td className="num whitespace-nowrap px-5 py-4 text-right font-semibold">{size}</td>
                 </tr>
               ))}
             </tbody>
