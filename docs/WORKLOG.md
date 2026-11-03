@@ -7,7 +7,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   (main_networks in src/ticdata/serve_jobs.py, serve/cloud/shop runs). (2) UHC into the apps part by part: serving
   packs from reduced/2026-10/uhc/part-P as each part merges, labelled partial (serve_jobs.py pack for part sources,
   cloud/api/_rc.py). (3) Why BCBS Michigan has no patient prices (shop.py). (4) Repo set-up for a second contributor
-  (Seyun): CONTRIBUTING.md, branch rules, status page. Pipeline: tell me here if any of this collides with your work.
+  (Seyun): docs/ONBOARDING.md (fork-based worker; see Requests), status page. Pipeline: tell me here if any of this collides with your work.
 - 2026-10-29 13:50 CT [pipeline] BCBS: other Blue companies' own in-network files (research -> discover.py -> new bcbs
   shard ranges). Files: src/ticdata/discover.py, ops/map-request.txt, ops/waves.txt, docs/DECISIONS.md. 15:10 CT:
   batch 1 (28 companies, 3,420 files, 96 GB) mapping as shards 28-33 (run 40943309473), then wave 4 and re-merge.
@@ -27,6 +27,17 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
 ## Requests
+- 2026-11-03 12:10 CT [user, relayed by app -> pipeline] Second contributor with his own compute ("2 people, twice the
+  compute"): Seyun will run work from a FORK of this repo (his GitHub Actions limits, his Kaggle account), set up by
+  his own AI from docs/ONBOARDING.md. That needs a "worker mode" in your lane before his fork runs anything:
+  (1) a fork must never run the orchestrator's clean/part-merge/dispatch of serve, cloud, shop, nor cron work: guard
+  jobs on github.repository (main repo) vs. a worker fork; push-triggered request files must not fire in forks when
+  he syncs main; (2) `ops/workers.txt` (format yours; ONBOARDING.md assumes it lists the fork owner and the work, e.g.
+  a range of UHC waves to map and reduce, or a Kaggle job), which the main orchestrator skips when it dispatches maps
+  and a fork's runs are limited to; (3) whatever his runs need to write to the work bucket and ops dataset (app will
+  add his fork as a Hugging Face trusted publisher once we have his usernames; say if a different scope is needed).
+  He reports in a GitHub issue "Worker log: Seyun" and sends code only as pull requests that Harshu merges. Please
+  adjust ONBOARDING.md Part B/C to match what you build, and note here when worker mode is live.
 - 2026-11-03 11:30 CT [user, relayed by app -> pipeline] UHC: two ideas the user wants. (1) Main files first: re-plan
   only the not-yet-mapped UHC files so one representative per (product code, near-equal size) group (the 1,268 groups
   of DECISIONS 10-27, ~11.8 TB) maps first, then loners, then the dense near-copy clusters last. Every file is still
