@@ -141,3 +141,25 @@ def test_streamed_code_table_is_one_redacted_file_like_duckdb(tmp_path):
     assert rows(tmp_path / "duck/code.parquet") == rows(tmp_path / "stream/code.parquet")
     assert rows(tmp_path / "duck.restricted/code_text.parquet") == rows(tmp_path / "stream.restricted/code_text.parquet")
     assert all(r["name"] is None for r in rows(tmp_path / "stream/code.parquet") if r["billing_code_type"] == "CPT")
+
+
+def test_fetch_falls_back_to_one_file_at_a_time(tmp_path, monkeypatch):
+    """A batch that keeps failing (one broken transfer) is fetched file by file, each file retried on its own."""
+    import huggingface_hub
+
+    calls, broken = [], {"pre/b.parquet": 2}  # b fails twice on its own, then works
+
+    def dl(bucket, files, token):
+        calls.append([p for p, _ in files])
+        if len(files) > 1:
+            raise RuntimeError("CAS Client Error: Format error: I/O error: error decoding response body")
+        if broken.get(files[0][0], 0):
+            broken[files[0][0]] -= 1
+            raise RuntimeError("error decoding response body")
+
+    monkeypatch.setattr(huggingface_hub, "download_bucket_files", dl)
+    monkeypatch.setattr(reduce.time, "sleep", lambda s: None)
+    out = reduce._fetch("org/work", ["pre/a.parquet", "pre/b.parquet"], str(tmp_path), "pre/", None)
+    assert out == [str(tmp_path / "a.parquet"), str(tmp_path / "b.parquet")]
+    assert calls[:3] == [["pre/a.parquet", "pre/b.parquet"]] * 3  # three batch attempts
+    assert calls[3:] == [["pre/a.parquet"], ["pre/b.parquet"], ["pre/b.parquet"], ["pre/b.parquet"]]

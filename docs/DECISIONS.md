@@ -3,6 +3,15 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-03: bucket downloads fall back to one file at a time (UHC wave 18, CAS "error decoding response body")
+- UHC wave 18's reduce lost fact parts 1, 3, 5, 7, 9, 13 (attempt 1) and 1, 3, 5, 9, 13 (attempt 2) to
+  `download_bucket_files` raising "File reconstruction error: CAS Client Error: Format error: I/O error: error decoding
+  response body" on normal runners; part 7 passing on attempt 2 shows it is transient, but each fact part fetches
+  ~39 GB in 200-file batches and four quick retries (45 s in all) were not enough.
+- `_fetch` now tries a batch three times, then fetches its files one at a time, each with six tries and backoff up to
+  5 minutes (and a fresh OIDC token), so one broken transfer costs one file. Wave 18's facts were re-run as a fresh
+  run (a re-run of failed jobs would use the old commit).
+
 ## 2026-11-03: ratecommons.org is one public website; the patient tool lives at /care
 - The whole site (home, /care patient tool, /explore, /ai, /data, /coverage, /methodology, /privacy, /about, /for/*)
   is the Vite app in `carecompass/` (Vercel project `carecompass`). The CareCompass name is retired; it is all RateCommons.

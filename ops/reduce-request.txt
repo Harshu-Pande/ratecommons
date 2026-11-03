@@ -11,3 +11,5 @@ aetna 2026-10 all wave=2 8-23
 aetna 2026-10 all wave=3 24-39
 # Blue batch 1 wave 4: dims again after streamed code and 8 provider_set shares (facts already reduced)
 bcbs 2026-10 dims wave=4 28-33
+# UHC wave 18 facts again after per-file fetch retries (CAS download errors)
+uhc 2026-10 facts wave=18 204-215

@@ -116,6 +116,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-03 15:10 CT [pipeline] Safety check: UHC wave 18 reduce failed twice on transient Hugging Face download errors (5 fact parts); _fetch now falls back to per-file retries; wave 18 facts re-run fresh. Waves 20-21 mapped and waiting; the orchestrator resumes when wave 18 is green.
 - 2026-11-03 11:30 CT [app] BCBS relabel chain done: serve (41566296964), cloud (41575996770), shop all (41581045145),
   app released at cececb2: bcbs products carry Blue company names. Coverage table fixed (3d25e3d): main networks show
   'every published service', UHC shown as an early sample. Michigan still has no bcbs offers (claimed above).

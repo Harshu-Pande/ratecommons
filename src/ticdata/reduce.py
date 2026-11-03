@@ -51,14 +51,32 @@ def _fetch(bucket: str, paths: list[str], dest: str, prefix: str, token) -> list
 
             if oidc_available():
                 token = token_for(bk(bucket))
-        for attempt in range(4):  # transient CAS/xet errors ("error decoding response body") happen
+        batch = files[i:i + 200]
+        for attempt in range(3):  # transient CAS/xet errors ("error decoding response body") happen
             try:
-                download_bucket_files(bucket, files=files[i:i + 200], token=token)
+                download_bucket_files(bucket, files=batch, token=token)
                 break
-            except Exception:
-                if attempt == 3:
-                    raise
-                time.sleep(15 * (attempt + 1))
+            except Exception as e:
+                print(f"fetch: batch of {len(batch)} failed ({e!r:.120}); attempt {attempt + 1}", flush=True)
+                time.sleep(20 * (attempt + 1))
+        else:
+            # UHC wave 18 (2026-11-03): 5 of 16 fact parts lost a ~39 GB download to one broken transfer, twice; file by
+            # file, a bad transfer costs that file a retry, not the job
+            for f in batch:
+                for attempt in range(6):
+                    try:
+                        download_bucket_files(bucket, files=[f], token=token)
+                        break
+                    except Exception as e:
+                        if attempt == 5:
+                            raise
+                        print(f"fetch: {f[0]} failed ({e!r:.120}); attempt {attempt + 1}", flush=True)
+                        time.sleep(min(30 * 2 ** attempt, 300))
+                        if token:
+                            from .hfio import bucket as bk, oidc_available, token_for
+
+                            if oidc_available():
+                                token = token_for(bk(bucket))
     return [local for _, local in files]
 
 
