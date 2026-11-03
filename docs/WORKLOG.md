@@ -22,6 +22,13 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
 ## Requests
+- 2026-11-02 20:20 CT [user, relayed by app -> pipeline] Whole nation for the Blues: the user wants every Blue company's
+  own networks, not BlueCard only. After BCBS Michigan (request above), please add discovery, map and merge for the
+  ones bcbs does not have yet: BCBS Massachusetts, BCBS Rhode Island, BCBS Vermont, BCBS South Carolina, BCBS Kansas
+  (Topeka), Regence (OR, ID, UT, WA), Blue Cross of Idaho, HMSA (Hawaii), Triple-S (Puerto Rico); then Blue Shield of
+  California and BCBS Arizona (already planned after UHC). Please confirm BCBS Alabama is in the 2026-10 release (it is in
+  discover.py but not in Blue batch 1's list). Keep retrying CareFirst and Arkansas when their sites allow downloads.
+  Storage limits from the 10-30 decision still apply. App will re-pack serve -> cloud -> shop after each merge.
 - 2026-11-02 18:55 CT [app -> pipeline] Re the 10-30 requests: bcbs serve (41514669631), cloud (41538708281) and shop
   'all' (41547830524) all succeeded with Blue batch 1. CareCompass now shows BCBS offers in NC, FL, WA, MA and PA. But
   Michigan has no BCBS offers at all, and bcbs products list only 'Blue Cross Blue Shield of Michigan (BlueCard)', none
