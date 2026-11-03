@@ -248,9 +248,11 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
     nets = con.execute(f"SELECT net, hex(network_id), file_names, plan_names, bytes, {'product' if has_prod else 'NULL'} "
                        "FROM net ORDER BY net").fetchall()
     pj = f"{pack}/pack.json"  # a common-services serving pack says which codes it holds
-    subset = (json.load(open(pj)).get("code_subset") if os.path.exists(pj) else None)
+    pk = json.load(open(pj)) if os.path.exists(pj) else {}
+    subset = pk.get("code_subset")
+    src = {k: pk[k] for k in ("source", "release") if pk.get(k)}  # "part-1": a release still being merged
     meta = {"payer": payer, "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "pspli": "bucket3", **res,
-            **({"code_subset": subset} if subset else {}),
+            **({"code_subset": subset} if subset else {}), **src,
             "networks": [{"net": a, "network_id": b, "file_names": c, "plan_names": d or [], "bytes": e,
                           **({"product": f} if f else {})} for a, b, c, d, e, f in nets]}
     json.dump(meta, open(f"{out}/meta.json", "w"), default=str)

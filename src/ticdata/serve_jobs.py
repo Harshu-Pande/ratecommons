@@ -126,7 +126,48 @@ def _stream_files(repo: str, paths: list[str], dest: str, ahead: int = 3):
             yield path, local
 
 
-def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str, main: list | None = None) -> dict:
+def _stream_bucket(prefix: str, paths: list[str], dest: str, ahead: int = 3):
+    """Like _stream_files, for files in the work bucket (a merged part or wave): yields (bucket path, local path)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .config import load
+    from .hfio import bucket, oidc_available, token_for
+    from .reduce import _fetch
+
+    wb = load().work_bucket
+
+    def get(path):
+        tok = token_for(bucket(wb)) if oidc_available() else None  # OIDC tokens last an hour
+        _fetch(wb, [path], dest, prefix, tok)  # retries transient errors itself
+        return os.path.join(dest, os.path.relpath(path, prefix))
+
+    with ThreadPoolExecutor(ahead) as ex:
+        futs = [ex.submit(get, p) for p in paths[:ahead]]
+        for i, path in enumerate(paths):
+            local = futs[i].result()
+            if i + ahead < len(paths):
+                futs.append(ex.submit(get, paths[i + ahead]))
+            yield path, local
+
+
+def _bucket_files(prefix: str) -> list[str]:
+    from .config import load
+    from .hfio import bucket, oidc_available, token_for
+    from .reduce import _list
+
+    wb = load().work_bucket
+    return sorted(_list(wb, prefix, token_for(bucket(wb)) if oidc_available() else None))
+
+
+def _fetch_part_file(release: str, payer: str, part: str, name: str, local: str):
+    prefix = f"reduced/{release}/{payer}/{part}"
+    os.makedirs(os.path.dirname(local), exist_ok=True)
+    for path, got in _stream_bucket(prefix, [f"{prefix}/{name}"], os.path.dirname(local) + "/dl"):
+        shutil.move(got, local)
+
+
+def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str, main: list | None = None,
+              part: str | None = None) -> dict:
     """Write a release folder holding only the facts for `codes` (plus CSTM-ALL) and the dimension rows they
     use, streaming the published release one file at a time (the whole BCBS release is 110 GB, Aetna's 600 GB).
     build_pack then runs on it unchanged.
@@ -138,16 +179,26 @@ def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str, 
     from .serving import _duck
 
     repo = f"{ORG}/{payer}"
-    root = f"release={release}"
-    files = sorted(f.path for f in HfApi().list_repo_tree(repo, repo_type="dataset", path_in_repo=root, recursive=True)
-                   if f.path.endswith(".parquet"))
+    dl = f"{work}/dl"
+    if part:  # a merged part (or wave) in the work bucket instead of the published release
+        root = f"reduced/{release}/{payer}/{part}"
+        files = [f for f in _bucket_files(root) if f.endswith(".parquet")]
+
+        def stream(paths):
+            return _stream_bucket(root, paths, dl)
+    else:
+        root = f"release={release}"
+        files = sorted(f.path for f in HfApi().list_repo_tree(repo, repo_type="dataset", path_in_repo=root,
+                                                             recursive=True) if f.path.endswith(".parquet"))
+
+        def stream(paths):
+            return _stream_files(repo, paths, dl)
 
     def table(t):
         return [f for f in files if f.startswith(f"{root}/{t}/") or f == f"{root}/{t}.parquet"]
 
     shutil.rmtree(dest, ignore_errors=True)
     os.makedirs(dest)
-    dl = f"{work}/dl"
     con = _duck(f"{work}/duck")
     res: dict = {"codes": len(codes)}
 
@@ -157,7 +208,7 @@ def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str, 
         return o
 
     for t in ("source_file", "network", "code"):
-        for path, local in _stream_files(repo, table(t), dl):
+        for path, local in stream(table(t)):
             shutil.move(local, out_path(path))
     cl = ", ".join("'" + c.replace("'", "''") + "'" for c in codes)
     common = f"(r.billing_code IN ({cl}) OR r.billing_code_type = 'CSTM-ALL')"
@@ -165,7 +216,7 @@ def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str, 
     if main:  # network sets holding a main network, and their derived "main networks only" twins
         os.makedirs(ns_all, exist_ok=True)
         con.execute("CREATE TABLE seen_ns (ns_id BLOB)")
-        for path, local in _stream_files(repo, table("network_set"), dl):  # each set once (it repeats per fact slice)
+        for path, local in stream(table("network_set")):  # each set once (it repeats per fact slice)
             o = f"{ns_all}/{os.path.basename(path)}"
             con.execute(f"COPY (SELECT * FROM read_parquet('{local}') ANTI JOIN seen_ns USING (ns_id)) TO '{o}' "
                         "(FORMAT parquet, COMPRESSION zstd)")
@@ -178,7 +229,7 @@ def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str, 
         res["main_network_sets"] = con.execute("SELECT count(*) FROM mainns").fetchone()[0]
         _log(f"main networks {len(main)}: {res['main_network_sets']:,} network sets hold one")
     n = 0
-    for path, local in _stream_files(repo, table("rate_fact"), dl):
+    for path, local in stream(table("rate_fact")):
         o = out_path(path)
         if main:
             con.execute(f"""COPY (SELECT r.* REPLACE (CASE WHEN {common} THEN r.ns_id ELSE m.d_id END AS ns_id)
@@ -203,7 +254,7 @@ def prefilter(payer: str, release: str, codes: list[str], dest: str, work: str, 
         outs = []
         if once:
             con.execute(f"CREATE TABLE seen_{t} AS SELECT * FROM {keys} WHERE false")
-        for path, local in _stream_files(repo, table(t), dl):
+        for path, local in stream(table(t)):
             o = out_path(path)
             anti = f"ANTI JOIN seen_{t} USING ({key})" if once else ""
             con.execute(f"COPY (SELECT * FROM read_parquet('{local}') SEMI JOIN {keys} USING ({key}) {anti}) TO '{o}' "
@@ -279,7 +330,7 @@ def network_products(payer: str, src: str, plans: dict | None) -> dict | None:
 MAIN_NETWORKS = int(os.environ.get("RC_MAIN_NETWORKS", "20"))
 
 
-def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NETWORKS) -> list:
+def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NETWORKS, sf: str | None = None) -> list:
     """The networks that keep every code, as whole network families (a family is every network id carrying the same
     app label: BCBS Tennessee posts Network S as 32 part files, Anthem splits files into _01_04 parts, and each part
     is its own network id). Aetna: the n families used by the most employer plans. BCBS: the home families named by
@@ -290,7 +341,7 @@ def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NE
     import duckdb
     from huggingface_hub import hf_hub_download
 
-    sf = hf_hub_download(f"{ORG}/{payer}", f"release={release}/source_file.parquet", repo_type="dataset")
+    sf = sf or hf_hub_download(f"{ORG}/{payer}", f"release={release}/source_file.parquet", repo_type="dataset")
     rows = duckdb.sql(f"SELECT network_id, list(name), sum(bytes) FROM read_parquet('{sf}') GROUP BY 1").fetchall()
     fam: dict = {}
     if payer == "aetna":  # one family per file group (a file name can carry two network ids, one without facts)
@@ -331,9 +382,18 @@ def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NE
                 continue
         elif payer == "anthem" and not any(re.match(r"[A-Z]{2}_", x) for x in names):
             continue
+        elif payer == "uhc":  # employer files are near-copies: one network (the largest file) per product, the n
+            pr = label(payer, names, None)[0]  # products posted most often first
+            g = fam.setdefault(pr, {"ids": [], "score": 0, "best": (-1, None)})
+            g["score"] += 1
+            g["best"] = max(g["best"], (b or 0, nid))
+            continue
         g = fam.setdefault(label(payer, names, None, urls)[1], {"ids": [], "score": 0, "plan": plan})
         g["ids"].append(nid)
         g["score"] += b or 0
+    if payer == "uhc":
+        for g in fam.values():
+            g["ids"] = [g["best"][1]]
     ranked = sorted(fam.items(), key=lambda kv: -kv[1]["score"])
     if payer == "bcbs":  # per Blue plan caps
         kept, cnt, spent = [], {}, 0
@@ -372,12 +432,17 @@ def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload:
         codes, n_main = "main", int(codes.split(":", 1)[1])
     subset = None
     main = None
-    if codes in ("common", "main") and source == "dataset":
+    part = source if source.startswith("part-") else None  # a merged part of a release still being processed
+    if codes in ("common", "main") and (source == "dataset" or part):
         subset = common_codes()
         if codes == "main":
-            main = main_networks(payer, release, aetna_plans() if payer == "aetna" else None, n=n_main)
+            sf = None
+            if part:
+                sf = f"{work}/part_sf/source_file.parquet"
+                _fetch_part_file(release, payer, part, "source_file.parquet", sf)
+            main = main_networks(payer, release, aetna_plans() if payer == "aetna" else None, n=n_main, sf=sf)
             _log(f"main networks: {len(main)}")
-        pre = prefilter(payer, release, subset, f"{work}/src/release={release}", f"{work}/pre", main=main)
+        pre = prefilter(payer, release, subset, f"{work}/src/release={release}", f"{work}/pre", main=main, part=part)
         _log(f"prefilter: {json.dumps(pre)}")
         src = f"{work}/src/release={release}"
     elif source == "dataset":

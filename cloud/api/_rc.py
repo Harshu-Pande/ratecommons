@@ -968,7 +968,11 @@ def data_status():
                 row["coverage"] = (f"every billing code for {len(set(labs))} main networks; the other networks: {n} common "
                                    "services plus flat all-services contracts" if mains else
                                    f"common services only: {n} billing codes plus flat all-services contracts")
-            if p in PARTIAL:
+            src = str(m.get("source") or "")
+            if src.startswith("part-"):  # a serving pack built from merged parts of a release still being processed
+                row["partial"] = (f"the networks merged so far (through {src}, {len(m['networks']):,} files); the "
+                                  "rest are still being processed")
+            elif p in PARTIAL and not src:
                 row["partial"] = PARTIAL[p]
     return out
 
