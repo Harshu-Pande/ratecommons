@@ -94,6 +94,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-03 02:55 CT [pipeline] Safety check: waves 16-17 mapped (October plan, 41574448878); wave 14 reduce lost fact part 2 to a runner (log gone) and the orchestrator re-ran it by itself (attempt 2, running since 07:25 UTC). BCBS serve/cloud/shop all green again (app).
 - 2026-11-03 [app] New public website live at ratecommons.org (carecompass/ app, Vercel routes on both projects,
   privacy fixes, docs). See DECISIONS 2026-11-03. Known follow-ups: provider tools take 2-4 min; patient results
   still include some unlikely places (data quality).
