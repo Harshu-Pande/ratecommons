@@ -353,9 +353,10 @@ def main():
     from_reduce = me and os.environ.get("SELF_KIND", "reduce") == "reduce"
     if runs and runs[0]["conclusion"] != "success" and not from_reduce:
         # GitHub sometimes gives a job a smaller runner (72 GB disk, 32 GB free, not 104): UHC wave 12 lost three
-        # fact parts to it and stood still for a weekend. Re-run the failed jobs once; a second failure stops
-        if runs[0]["conclusion"] == "failure" and runs[0].get("run_attempt", 1) < 2:
-            print(f"last reduce run {runs[0]['id']} failed; re-running its failed jobs once")
+        # fact parts to it and stood still for a weekend. About one job per UHC wave lands on one, so re-run the failed
+        # jobs up to twice (a re-run can land on a small runner again); a third failure stops
+        if runs[0]["conclusion"] == "failure" and runs[0].get("run_attempt", 1) < 3:
+            print(f"last reduce run {runs[0]['id']} failed (attempt {runs[0].get('run_attempt', 1)}); re-running its failed jobs")
             subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{REPO}/actions/runs/{runs[0]['id']}/rerun-failed-jobs"])
             return
         print(f"last reduce run {runs[0]['id']} ended {runs[0]['conclusion']}; stopping until someone looks")

@@ -23,6 +23,11 @@ Newest first. One entry per lesson: what we saw, what we changed.
 - Wording: we say "we never receive your health information", not "HIPAA protected" (we are not a covered entity);
   the privacy page explains why.
 
+## 2026-11-03: a failed reduce is re-run up to twice (small runners hit about one UHC job per wave)
+- Wave 14 lost a fact part to a lost runner and wave 17 one to a small runner (`/dev/mapper/cow-root`, 32 GB free,
+  "No space left"); each was fixed by the orchestrator's automatic re-run. With ~31 jobs per wave, a single re-run
+  landing on a small runner again would stop UHC every ~16 waves; two re-runs (run_attempt < 3) make that rare.
+
 ## 2026-11-02: Custom domains: ratecommons.org is the main address; Namecheap's "HTTPS ON" breaks Vercel
 - ratecommons.org (Explorer, MCP at /mcp) and care.ratecommons.org (CareCompass) are live on Vercel; www.ratecommons.org
   redirects to the apex. ratecommons.me, www.ratecommons.me and care.ratecommons.me 308-redirect to the .org addresses,

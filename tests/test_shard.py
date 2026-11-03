@@ -331,7 +331,7 @@ def test_a_payer_waiting_for_shards_does_not_stall_the_next(monkeypatch):
     assert calls and calls[0][-1] == "inputs[request]=uhc 2026-10 all wave=4 36-47"
 
 
-def test_a_failed_reduce_is_rerun_once_then_stops(monkeypatch):
+def test_a_failed_reduce_is_rerun_twice_then_stops(monkeypatch):
     import sys
 
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ops"))
@@ -340,7 +340,7 @@ def test_a_failed_reduce_is_rerun_once_then_stops(monkeypatch):
     for step in ("clean", "start_maps", "packs"):
         monkeypatch.setattr(orchestrate, step, lambda w: None)
     monkeypatch.setattr("builtins.open", lambda *a, **k: __import__("io").StringIO("uhc 2026-10 12 132-143"))
-    for attempt, rerun in ((1, True), (2, False)):
+    for attempt, rerun in ((1, True), (2, True), (3, False)):
         calls = []
         run = {"id": 7, "status": "completed", "conclusion": "failure", "run_attempt": attempt}
         monkeypatch.setattr(orchestrate, "gh", lambda path, run=run: {"workflow_runs": [run]})
