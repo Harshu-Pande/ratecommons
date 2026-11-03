@@ -407,6 +407,16 @@ def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NE
                 cnt[pl] = cnt.get(pl, 0) + 1
                 spent += g["score"] if isinstance(pl, tuple) else 0
         ranked = kept
+    elif payer == "anthem" and os.environ.get("RC_ANTHEM_MAIN", "state:1").startswith("state"):
+        # the largest own family of each Anthem state (was the 5 largest overall: 3 states and a BlueCard file)
+        per = int(os.environ.get("RC_ANTHEM_MAIN", "state:1").partition(":")[2] or 1)
+        kept, cnt = [], {}
+        for k, g in ranked:
+            m = re.match(r"Anthem ([A-Z]{2}) network ", k)
+            if m and cnt.get(m.group(1), 0) < per:
+                kept.append((k, g))
+                cnt[m.group(1)] = cnt.get(m.group(1), 0) + 1
+        ranked = kept
     else:
         ranked = ranked[:n]
     _log("main network families: " + "; ".join(f"{k} ({len(v['ids'])})" for k, v in ranked[:40]))
