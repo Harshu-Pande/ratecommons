@@ -954,11 +954,24 @@ def data_status():
     for p in PAYERS:
         m = meta(p)
         if m:
-            out["payers"][p] = {"networks": len(m["networks"]), "codes": m.get("codes"), "built": m.get("built")}
+            row = out["payers"][p] = {"networks": len(m["networks"]), "codes": m.get("codes"), "built": m.get("built")}
             if m.get("code_subset"):
-                out["payers"][p]["coverage"] = (f"common services only: {len(m['code_subset'].get('codes') or [])} "
-                                                "billing codes plus flat all-services contracts")
+                n = len(m["code_subset"].get("codes") or [])
+                labs = main_network_labels(p)  # one label per main network group (Aetna: 20 groups of 2 products)
+                mains = list(dict.fromkeys(x.split(", network used by")[0] for x in labs))
+                row["common_codes"] = n
+                row["main_networks"] = len(set(labs))
+                row["main_examples"] = mains[:6]
+                row["coverage"] = (f"every billing code for {len(set(labs))} main networks; the other networks: {n} common "
+                                   "services plus flat all-services contracts" if mains else
+                                   f"common services only: {n} billing codes plus flat all-services contracts")
+            if p in PARTIAL:
+                row["partial"] = PARTIAL[p]
     return out
+
+
+# payers whose loaded data is a sample of a release still being processed (drop the entry once the full pack is live)
+PARTIAL = {"uhc": "an early sample of 2 networks; the rest of UnitedHealthcare's 7,316 files are still being processed"}
 
 
 PAYER_LABEL = {"cigna": "Cigna", "aetna": "Aetna", "uhc": "UnitedHealthcare", "bcbs": "Blue Cross Blue Shield",

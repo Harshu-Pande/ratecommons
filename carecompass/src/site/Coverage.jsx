@@ -56,7 +56,14 @@ export default function Coverage() {
                     <td className="num px-5 py-4 text-right">{v.networks.toLocaleString('en-US')}</td>
                     <td className="num px-5 py-4 text-right">{v.codes.toLocaleString('en-US')}</td>
                     <td className="px-5 py-4 text-ink-soft">
-                      {v.coverage
+                      {v.partial
+                        ? <span className="flex gap-1.5"><CircleDashed className="mt-0.5 h-4 w-4 shrink-0 text-clay-600" aria-hidden="true" />Every published service, but only {v.partial}</span>
+                        : v.main_networks
+                        ? <span className="flex flex-col gap-1">
+                            <span className="flex gap-1.5"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-brand-600" aria-hidden="true" />Every published service for its {v.main_networks} main networks</span>
+                            <span className="flex gap-1.5"><CircleDashed className="mt-0.5 h-4 w-4 shrink-0 text-clay-600" aria-hidden="true" />Other networks: {v.common_codes} common services plus flat all-services contracts, the rest being added</span>
+                          </span>
+                        : v.coverage
                         ? <span className="flex gap-1.5"><CircleDashed className="mt-0.5 h-4 w-4 shrink-0 text-clay-600" aria-hidden="true" />Common services first: {v.coverage.replace(/^common services only:\s*/, '')}</span>
                         : <span className="flex gap-1.5"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-brand-600" aria-hidden="true" />Every published service</span>}
                     </td>
