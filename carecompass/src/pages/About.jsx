@@ -18,11 +18,11 @@ export default function About() {
   const names = listOf(payers.map((k) => PAYER_NAMES[k]))
   return (
     <>
-      <section className="bg-gradient-to-b from-brand-800 to-brand-700 pb-14 pt-12 text-white">
+      <section className="bg-night pb-14 pt-12 text-white">
         <div className="mx-auto max-w-4xl px-4 sm:px-6">
-          <p className="text-xs font-bold uppercase tracking-[0.14em] text-mint-200">About the data</p>
-          <h1 className="mt-2 text-4xl font-extrabold sm:text-5xl">How CareCompass works</h1>
-          <p className="mt-4 max-w-2xl text-lg text-brand-100">
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-sea">About the data</p>
+          <h1 className="mt-2 text-4xl font-extrabold sm:text-5xl">How patient prices work</h1>
+          <p className="mt-4 max-w-2xl text-lg text-night-text">
             An advocacy project: making the prices insurers are now required to publish actually usable at the moment care is ordered.
           </p>
         </div>
@@ -42,9 +42,9 @@ export default function About() {
             <p>
               Prices come from the in-network negotiated-rate files that {names} publish every month under
               the federal Transparency in Coverage rule. The open <a href="https://huggingface.co/ratecommons" target="_blank" rel="noreferrer">RateCommons</a> project
-              downloads, de-duplicates and publishes them free. CareCompass uses a cleaned extract for the services in its list.
+              downloads, de-duplicates and publishes them free. The patient tool uses a cleaned extract for the services in its list.
             </p>
-            <p>Imaging prices are listed three ways, and CareCompass uses all three:</p>
+            <p>Imaging prices are listed three ways, and the patient tool uses all three:</p>
             <ul>
               <li><b>Modifier 26 — professional component:</b> the radiologist’s reading fee.</li>
               <li><b>Modifier TC — technical component:</b> the facility fee (equipment, staff, supplies).</li>
@@ -116,7 +116,7 @@ export default function About() {
             </ul>
           </section>
           <p className="text-sm">
-            Questions or corrections? This is a student advocacy project for a Medicine &amp; Society course. <Link to="/">Back to price comparison →</Link>
+            Questions or corrections? See also the full <Link to="/methodology">methodology</Link> or <Link to="/about">contact us</Link>. <Link to="/care">Back to price comparison →</Link>
           </p>
         </div>
       </div>

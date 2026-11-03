@@ -21,11 +21,11 @@ var m = [{
   h = [`Ask for generics or a lower-tier alternative — your doctor can often switch to an equally effective, cheaper option.`, `Compare a discount-card cash price with your insurance copay. If you pay cash, it may not count toward your deductible — ask.`, `Use 90-day supplies and mail order for maintenance drugs.`, `Schedule non-urgent imaging at a freestanding imaging center: they’re often cheaper than hospital outpatient departments.`, `Check if a test is preventive (free) or diagnostic (subject to deductible) before your visit.`, `Always request an itemized bill and compare it with your EOB.`];
 function g() {
   return <Fragment>
-      <section className="bg-gradient-to-b from-brand-800 to-brand-700 pb-14 pt-12 text-white">
+      <section className="bg-night pb-14 pt-12 text-white">
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <p className="text-xs font-bold uppercase tracking-[0.14em] text-mint-200">Savings resources</p>
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-sea">Savings resources</p>
           <h1 className="mt-2 text-4xl font-extrabold sm:text-5xl">Tools that lower what you pay</h1>
-          <p className="mt-4 max-w-2xl text-lg text-brand-100">
+          <p className="mt-4 max-w-2xl text-lg text-night-text">
             Trusted places to save on prescriptions, check fair prices, find coverage and get help with medical bills.
           </p>
         </div>
@@ -67,7 +67,7 @@ function g() {
           </section>
         </div>
         <p className="mt-10 text-xs text-ink-mute">
-          CareCompass is independent and has no financial relationship with any organization listed. Links are provided
+          RateCommons is independent and has no financial relationship with any organization listed. Links are provided
           for education.
         </p>
       </div>

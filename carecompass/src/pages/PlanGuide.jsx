@@ -354,11 +354,11 @@ var P = [{
   F = [[`HMO`, `In-network only`, `Usually needed`, `None (except emergencies)`, `Lower`, `People who want low, predictable costs and are fine with a set network.`], [`EPO`, `In-network only`, `Usually not`, `None (except emergencies)`, `Low–moderate`, `People who want no referrals but can stay in-network.`], [`PPO`, `Large network`, `Not needed`, `Yes, at a higher cost`, `Higher`, `People who see many specialists or want to keep out-of-network doctors.`], [`POS`, `In-network + some out`, `Usually needed`, `Yes, at a higher cost`, `Moderate`, `A middle ground between HMO and PPO.`], [`HDHP + HSA`, `Any of the above`, `Depends`, `Depends`, `Lowest`, `Healthy people, or anyone who can save in a tax-free HSA to cover the higher deductible.`]];
 function I() {
   return <Fragment>
-      <section className="bg-gradient-to-b from-brand-800 to-brand-700 pb-16 pt-12 text-white">
+      <section className="bg-night pb-16 pt-12 text-white">
         <div className="mx-auto max-w-5xl px-4 sm:px-6">
-          <p className="text-xs font-bold uppercase tracking-[0.14em] text-mint-200">Education</p>
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-sea">Education</p>
           <h1 className="mt-2 text-4xl font-extrabold sm:text-5xl">Choosing the right health plan</h1>
-          <p className="mt-4 max-w-2xl text-lg text-brand-100">
+          <p className="mt-4 max-w-2xl text-lg text-night-text">
             The “cheapest” plan isn’t the one with the lowest premium — it’s the one with the lowest{" "}
             <b className="text-white">total</b> cost for how you actually use care. Here’s how to figure that out.
           </p>
@@ -627,7 +627,7 @@ function R() {
             <Cz path={f} />
             {(f.key === `employer` || f.key === `marketplace`) && <div className="card overflow-hidden">
                 <div className="bg-ink p-5 text-white">
-                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-mint-200">
+                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-sea">
                     <Award className="h-4 w-4" /> Best fit for you
                   </div>
                   <div className="mt-1 font-display text-2xl font-extrabold">{x.best.plan.name}</div>
@@ -637,7 +637,7 @@ function R() {
                   </div>
                   <ul className="mt-3 space-y-1.5 text-sm text-white/85">
                     {x.why.map(e => <li className="flex gap-2" key={e}>
-                        <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-mint-200" />
+                        <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-sea" />
                         {e}
                       </li>)}
                   </ul>
@@ -802,7 +802,7 @@ function Cz({
         </div>}
       <p className="mt-4 text-xs text-ink-mute">
         Need imaging soon?{" "}
-        <Link to="/" className="font-semibold text-brand-600 underline">
+        <Link to="/care" className="font-semibold text-brand-600 underline">
           Compare prices near you
         </Link>
         .

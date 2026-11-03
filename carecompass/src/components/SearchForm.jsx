@@ -13,7 +13,7 @@ export const PAYERS = ['aetna', 'anthem', 'bcbs', 'cigna', 'uhc']
 export function searchUrl(s) {
   const q = new URLSearchParams()
   for (const [k, v] of Object.entries(s)) if (v !== '' && v != null && v !== false) q.set(k, v === true ? '1' : v)
-  return `/results?${q}`
+  return `/care/results?${q}`
 }
 
 export function useAllPlans() {

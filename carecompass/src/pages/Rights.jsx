@@ -35,11 +35,11 @@ var Cg = ({
   };
 function v() {
   return <Fragment>
-      <section className="bg-gradient-to-b from-brand-800 to-brand-700 pb-14 pt-12 text-white">
+      <section className="bg-night pb-14 pt-12 text-white">
         <div className="mx-auto max-w-5xl px-4 sm:px-6">
-          <p className="text-xs font-bold uppercase tracking-[0.14em] text-mint-200">Know your rights</p>
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-sea">Know your rights</p>
           <h1 className="mt-2 text-4xl font-extrabold sm:text-5xl">Federal protections every patient should know</h1>
-          <p className="mt-4 max-w-2xl text-lg text-brand-100">
+          <p className="mt-4 max-w-2xl text-lg text-night-text">
             Laws passed since 2021 give you the right to see prices in advance, protect you from many surprise bills,
             and let you challenge bills that come in far above an estimate.
           </p>
@@ -75,7 +75,7 @@ function v() {
           </p>
         </Cg>
         <Cg id="transparency" icon={FileSearch} eyebrow="Hospital Price Transparency (2021) \xB7 Transparency in Coverage (2022\u20132024)" title="Price transparency rules">
-          <p>Two federal rules make the data behind CareCompass public:</p>
+          <p>Two federal rules make the data behind RateCommons public:</p>
           <ul>
             <li>
               <b>Hospital Price Transparency</b> (effective January 1, 2021) requires every hospital to post a
@@ -89,10 +89,10 @@ function v() {
               tool for all covered services (since January 2024).
             </li>
           </ul>
-          <CU title="How CareCompass uses this">
+          <CU title="How RateCommons uses this">
             We took UnitedHealthcare’s published negotiated rates for 10 CMS shoppable imaging services in Missouri,
             matched each billing group to a real location, and turned the numbers into a map-based estimate you can
-            personalize. <Link to="/about">Read the methodology →</Link>
+            personalize. <Link to="/care/how-prices-work">Read the methodology →</Link>
           </CU>
           <p>
             Your own insurer’s member portal must also offer a cost estimator based on your plan — use it to
@@ -144,13 +144,13 @@ function v() {
         </Cg>
         <div className="my-12 flex flex-col items-start justify-between gap-4 rounded-3xl bg-brand-800 p-7 text-white sm:flex-row sm:items-center">
           <div>
-            <div className="flex items-center gap-2 text-mint-200">
+            <div className="flex items-center gap-2 text-sea">
               <BadgeDollarSign className="h-5 w-5" />
               <span className="text-xs font-bold uppercase tracking-[0.14em]">Put it into practice</span>
             </div>
             <h2 className="mt-1 text-2xl font-bold">Compare imaging prices before you book</h2>
           </div>
-          <Link to="/" className="btn-cta shrink-0">
+          <Link to="/care" className="btn-cta shrink-0">
             Start comparing <ArrowRight className="h-5 w-5" />
           </Link>
         </div>

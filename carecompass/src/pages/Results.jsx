@@ -132,12 +132,12 @@ export default function Results() {
     if (active && listRef.current) listRef.current.querySelector(`[data-id="${CSS.escape(active)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [active])
 
-  if (!proc || !/^\d{5}$/.test(zip)) return <Navigate to="/" replace />
-  if (origin === null) return <Navigate to="/" replace />
+  if (!proc || !/^\d{5}$/.test(zip)) return <Navigate to="/care" replace />
+  if (origin === null) return <Navigate to="/care" replace />
   const sel = rows.find((r) => r.id === active)
 
   return (
-    <div className="flex h-[calc(100dvh-4rem)] flex-col">
+    <div className="flex h-[calc(100dvh-7rem)] flex-col">
       <div className="border-b border-line bg-white">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4 sm:px-6">
           <div className="min-w-0 flex-1">
@@ -153,7 +153,7 @@ export default function Results() {
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setPersonalize(true)} className={`btn-ghost ${personal ? '!border-mint-200 !text-mint-700' : ''}`}>
-              <SlidersHorizontal className="h-4 w-4" /> {personal ? 'Personalized ✓' : 'Personalize'}
+              <SlidersHorizontal className="h-4 w-4" /> {personal ? 'Personalized' : 'Personalize'}
             </button>
             <button onClick={() => setEdit(true)} className="btn-ghost"><Pencil className="h-4 w-4" /> Edit<span className="hidden sm:inline"> search</span></button>
           </div>
@@ -211,19 +211,29 @@ export default function Results() {
             {(loading || origin === undefined) ? (
               <div className="card flex items-center justify-center gap-2 p-10 text-ink-mute"><Loader2 className="h-5 w-5 animate-spin" /> Finding prices near {zip}…</div>
             ) : stats ? (
-              <div className="mb-4 rounded-2xl bg-brand-800 p-4 text-white">
-                <p className="text-sm text-brand-100"><b className="text-white">{rows.length}</b> place{rows.length > 1 ? 's' : ''} within {radius} mi with a published {payerName} price</p>
-                <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-                  <Stat label="Lowest price" v={moneyRound(stats.min)} tone="text-mint-200" />
-                  <Stat label="Median" v={moneyRound(stats.median)} />
-                  <Stat label="Highest" v={moneyRound(stats.max)} tone="text-sun-300" />
-                </div>
+              <div className="card mb-4 p-4 sm:p-5">
+                <p className="text-sm text-ink-soft"><b className="text-ink">{rows.length}</b> place{rows.length > 1 ? 's' : ''} within {radius} mi with a published {payerName} price</p>
+                {stats.max > stats.min ? (
+                  <div className="mt-8" aria-label={`Prices range from ${moneyRound(stats.min)} to ${moneyRound(stats.max)}; the median is ${moneyRound(stats.median)}.`}>
+                    <div className="relative h-3 rounded-full bg-[#dce7e2]">
+                      <div className="absolute inset-y-0 left-0 rounded-l-full bg-brand-600" style={{ width: `${Math.max(2, ((stats.median - stats.min) / (stats.max - stats.min)) * 100)}%` }} />
+                      <div className="absolute -top-[26px] -translate-x-1/2 whitespace-nowrap text-[13px] font-semibold text-ink" style={{ left: `${Math.min(88, Math.max(12, ((stats.median - stats.min) / (stats.max - stats.min)) * 100))}%` }}>Typical {moneyRound(stats.median)}</div>
+                      <div className="absolute -top-1.5 h-6 w-[3px] -translate-x-1/2 rounded bg-ink" style={{ left: `${((stats.median - stats.min) / (stats.max - stats.min)) * 100}%` }} />
+                    </div>
+                    <div className="num mt-2 flex justify-between text-sm text-ink-soft">
+                      <span><b className="text-brand-700">{moneyRound(stats.min)}</b> lowest</span>
+                      <span><b className="text-clay-600">{moneyRound(stats.max)}</b> highest</span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="num mt-2 font-display text-2xl font-bold">{moneyRound(stats.min)}</p>
+                )}
                 {stats.pMax - stats.pMin >= 5 && (
-                  <p className="mt-3 rounded-xl bg-white/10 px-3 py-2 text-sm">💡 Choosing the lowest-cost option could save you <b className="text-mint-200">{moneyRound(stats.pMax - stats.pMin)}</b> compared with the most expensive one nearby.</p>
+                  <p className="mt-4 rounded-xl bg-brand-50 px-3 py-2 text-sm text-ink">Choosing the lowest-cost option could save you <b className="text-brand-700">{moneyRound(stats.pMax - stats.pMin)}</b> compared with the most expensive one nearby.</p>
                 )}
                 {!personal && (
-                  <button onClick={() => setPersonalize(true)} className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2 text-sm font-semibold text-brand-800 hover:bg-brand-50">
-                    <SlidersHorizontal className="h-4 w-4" /> Showing full price. Add plan details for your real cost
+                  <button onClick={() => setPersonalize(true)} className="btn-go btn-sm mt-3 w-full">
+                    <SlidersHorizontal className="h-4 w-4" /> Showing the full price. Add plan details to see your cost
                   </button>
                 )}
               </div>
@@ -252,7 +262,7 @@ export default function Results() {
               ))}
             </ul>
             {rows.length > 0 && (
-              <p className="mt-6 text-center text-xs text-ink-mute">Estimates only. Confirm with the provider and your insurer. <Link to="/about" className="underline">How we get these prices</Link></p>
+              <p className="mt-6 text-center text-xs text-ink-mute">Estimates only. Confirm with the provider and your insurer. <Link to="/care/how-prices-work" className="underline">How we get these prices</Link></p>
             )}
           </div>
         </div>
@@ -292,7 +302,7 @@ export default function Results() {
 
 const Stat = ({ label, v, tone = 'text-white' }) => (
   <div className="rounded-xl bg-white/5 px-2 py-2">
-    <div className="text-[11px] text-brand-100">{label}</div>
+    <div className="text-[11px] text-night-text">{label}</div>
     <div className={`font-display text-lg font-extrabold ${tone}`}>{v}</div>
   </div>
 )
@@ -405,7 +415,7 @@ function Drawer({ row, proc, payerName, planName, median, kid, patient, onClose,
           <button onClick={onClose} className="rounded-full p-2 hover:bg-canvas" aria-label="Close"><X className="h-5 w-5" /></button>
         </div>
         <div className="flex-1 overflow-y-auto">
-          <div className="border-b border-line bg-gradient-to-b from-brand-50 to-white px-5 pb-5 pt-5 sm:px-7">
+          <div className="border-b border-line bg-brand-50/60 px-5 pb-5 pt-5 sm:px-7">
             <div className="flex flex-wrap gap-1.5">
               <span className="chip bg-white text-brand-700 ring-1 ring-brand-100"><Building2 className="h-3.5 w-3.5" /> {placeKindLabel(place.kind)}</span>
               <Badge b={price.badge} tip />
@@ -418,7 +428,7 @@ function Drawer({ row, proc, payerName, planName, median, kid, patient, onClose,
               <div className="rounded-2xl bg-ink p-4 text-white">
                 <div className="text-xs font-medium text-white/70">{est ? (est.personalized ? 'Your estimated cost' : 'You pay (deductible not met)') : 'Your cost'}</div>
                 <div className="mt-1 font-display text-3xl font-extrabold">{est ? moneyRound(est.patient) : 'Ask'}</div>
-                {est && !est.personalized && <button onClick={onPersonalize} className="mt-1 text-xs font-semibold text-mint-200 underline underline-offset-2">Personalize →</button>}
+                {est && !est.personalized && <button onClick={onPersonalize} className="mt-1 text-xs font-semibold text-sea underline underline-offset-2">Personalize →</button>}
               </div>
               <div className="rounded-2xl border border-line bg-white p-4">
                 <div className="text-xs font-medium text-ink-mute">Negotiated price<InfoTip k="negotiated" /></div>
