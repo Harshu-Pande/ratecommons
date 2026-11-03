@@ -3,6 +3,17 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-02: Custom domains: ratecommons.org is the main address; Namecheap's "HTTPS ON" breaks Vercel
+- ratecommons.org (Explorer, MCP at /mcp) and care.ratecommons.org (CareCompass) are live on Vercel; www.ratecommons.org
+  redirects to the apex. ratecommons.me, www.ratecommons.me and care.ratecommons.me 308-redirect to the .org addresses,
+  path kept, through Vercel project routes (no code change). The old vercel.app addresses still work.
+- DNS lives at Namecheap: A `@` 216.198.79.1, CNAME `www` cname.vercel-dns.com, CNAME `care` the project-specific
+  vercel-dns-017.com target from `get_domain_config`.
+- Namecheap's per-record "HTTPS ON" switch puts Namecheap's own CDN proxy in front (the apex resolved to a CloudFront IP,
+  not Vercel's), and its phone-width "Add Host Record" pop-up always asks for that proxy and fails with "An unknown
+  error occurred". Every record must have HTTPS off; add records from the desktop-width table row, not the pop-up.
+- Vercel issued certificates 5 to 15 minutes after each record went live.
+
 ## 2026-11-02: Blue plans' own files are named by their publisher's address, not by file name
 - In the first pack with the 28 Blue companies, 3,216 of BCBS's 4,183 networks (Florida Blue, BCBS NC, Michigan,
   Excellus, Premera, Wellmark, Capital, Horizon, Highmark-hosted plans, Independence, ...) carried names with no Blue
