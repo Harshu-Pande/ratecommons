@@ -217,6 +217,13 @@ def _blue_from_url(url: str, name: str) -> tuple[str, str] | None:
     return prod, f"{company} {net}".strip()
 
 
+UHC_FAMILIES = (("CHOICE-PLUS", "Choice Plus"), ("CHOICE PLUS", "Choice Plus"), ("_CSP", "Choice Plus"),
+                ("OPTIONS", "Options PPO"), ("SELECT-PLUS", "Select Plus"), ("NAVIGATE", "Navigate"),
+                ("CHARTER", "Charter"), ("DOCTORS-PLAN", "Doctors Plan"), ("NEXUS", "NexusACO"), ("SUREST", "Surest"),
+                ("BEHAVIOR", "Behavioral Health"), ("DENTAL", "Dental"), ("VISION", "Vision"), ("EPO", "EPO"),
+                ("HMO", "HMO"), ("PPO", "PPO"))
+
+
 def _label(payer: str, files: list[str], plans: list[str] | None,
            urls: list[str] | None = None) -> tuple[str, str]:
     name = (files or [""])[0]
@@ -259,7 +266,15 @@ def _label(payer: str, files: list[str], plans: list[str] | None,
         return payer, stem
     if payer == "uhc":
         prod = (parts[2] if len(parts) > 2 else stem).replace("-", " ").replace("Ppo", "PPO")
-        return f"UHC {prod}", f"UHC {prod} ({' '.join(parts[0:2])} {parts[3] if len(parts) > 3 else ''})".strip()
+        # product = the UnitedHealthcare network family the file names (display only). UMR posts one file per employer
+        # plan, so one price can sit in hundreds of files: a product per file made every such price a row per file and
+        # ran the app out of memory (part-1: 864 files)
+        up = name.upper()
+        fam = next((f for k, f in UHC_FAMILIES if k in up), None)
+        who = "UMR employer plans" if "UMR" in up else None
+        product = (f"UnitedHealthcare {fam}" + (f" ({who})" if who else "") if fam else
+                   "UnitedHealthcare employer direct-contract networks (UMR)" if who else f"UHC {prod}")
+        return product, f"UHC {prod} ({' '.join(parts[0:2])} {parts[3] if len(parts) > 3 else ''})".strip()
     return payer, stem
 
 
