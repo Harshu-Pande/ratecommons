@@ -3,6 +3,27 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-03: UHC part 1 is in the apps; main networks for every Blue company and every Anthem state; the patient tool had been failing most states
+- **Serving packs from a merged part.** `serve uhc:part-1` packs `reduced/2026-10/uhc/part-1` from the work bucket
+  (prefilter streams it like a release): the 62 common codes for all 864 networks, every code for 20 main networks
+  (the largest file of each of the 20 products posted most often; employer files are near-copies). 806M facts kept;
+  cloud pack 13 GB, 19,520 codes. The cloud meta carries `source`, and data_status / the website mark the payer as
+  partial ("through part-1"). Repeat per part as the pipeline merges them.
+- **UHC products are network families.** UMR posts one file per employer plan; with a product per file, one price in
+  hundreds of files became hundreds of rows and the 1.7 GB app function ran out of memory. Products are now the family
+  named in the file (Choice Plus, Options PPO, Select Plus, ..., or "employer direct-contract networks (UMR)");
+  labels stay per file and `network=` still finds an employer plan. Display only, never identity.
+- **Main networks.** BCBS: RC_BCBS_MAIN_PLANS gains `other:1`, the largest home family of each Blue company that
+  posts its own files (company from the file address), capped at 13 GB per family and 45 GB in total; EyeMed is left
+  out. Anthem: the largest own network of each of its 15 states (was 5 overall, one a BlueCard file), same size.
+- **The patient tool's 'shop all' failed 26-29 states on every run since 2026-10-29** (CA, TX, FL, NY, MI, NC, IL,
+  ...: DuckDB spilled ~90 GB in the offers step once Aetna's every-code pack made 96M catalog rate rows), and those
+  states kept older offer files, which is why Michigan never showed BCBS. The run itself reported success. Offers are
+  now built from distinct (provider set, price, product-set id) rows, joined to groups in hash slices of the group.
+  Rule: a shop run must fail when a state fails, and its per-state errors must be read, not just its conclusion.
+- The website's coverage table said "common services only" for payers whose main networks have every code; it now
+  shows both (data_status `main_networks`, `common_codes`, `partial`).
+
 ## 2026-11-03: bucket downloads fall back to one file at a time (UHC wave 18, CAS "error decoding response body")
 - UHC wave 18's reduce lost fact parts 1, 3, 5, 7, 9, 13 (attempt 1) and 1, 3, 5, 9, 13 (attempt 2) to
   `download_bucket_files` raising "File reconstruction error: CAS Client Error: Format error: I/O error: error decoding
