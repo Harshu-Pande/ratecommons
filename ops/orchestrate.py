@@ -21,7 +21,9 @@ PIPELINE = {"uhc": 1024}
 MAP_PLANS = {"uhc": "runs/2026-10-30-map-uhc-41139836536/plan.json"}
 # map output of no release in waves.txt, deleted by clean(): November UHC files mapped by mistake on 2026-11-02
 STRAY_MAPS = [("uhc", "2026-11")]
-MAX_WAVES_IN_FLIGHT = 2
+# mapped waves waiting for their reduce before another map run starts: 3 lets a two-wave map run go while two waves
+# reduce (with 2, map and reduce took turns); ~0.19 TB of map output per UHC wave, so <= ~0.75 TB at a time
+MAX_WAVES_IN_FLIGHT = 3
 # GitHub Pro (2026-11-02): 40 concurrent jobs. A UHC wave maps in ~3.5 h and reduces in ~1.75 h, so each map run
 # takes the next two waves (24 shards, map.yml max-parallel 24) beside one reduce (max-parallel 14)
 MAP_WAVES_PER_RUN = 2

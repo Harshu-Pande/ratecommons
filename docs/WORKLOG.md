@@ -94,6 +94,9 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-02 22:50 CT [pipeline] Safety check: waves 14-15 mapped from the October plan in ~3.5 h (two waves per run),
+  wave 14 reducing (41565385989). Map and reduce were taking turns (MAX_WAVES_IN_FLIGHT 2 counted the two mapped
+  waves), so it is now 3: the next two-wave map run starts while 14-15 reduce. BCBS cloud pack and CareCompass done.
 - 2026-11-02 app: shop 'all' rebuilt with Blue batch 1 (run 41547830524, success). Web app fix for BCBS lookups is pushed but waits on a Vercel release (needs the user's approval of Vercel team access).
 - 2026-11-02 19:00 CT [pipeline] Storage 2.06 TB of 7.8 (was 3.18 on 10-30): work bucket 0.91 (UHC map in flight 0.38, bcbs reduced 0.25, UHC reduced 0.09, serve 0.09, old cigna/bcbs-2026-09 map 0.06), datasets 1.16.
 - 2026-11-02 app: BCBS cloud pack with the 28 new Blue companies is live (serve/v2/bcbs, built 23:30Z). Fixed lookup_rates crash for BCBS (main network with no plan names, cloud/api/_rc.py). Shop rebuild 'all' dispatched (run 41547830524).

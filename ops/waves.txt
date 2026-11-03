@@ -1,7 +1,7 @@
 # Reduce waves the orchestrator runs, in order, once every shard of a wave is mapped.
 # <payer> <release> <wave> <first shard>-<last shard>, or <payer> <release> merge
 # Map output of a finished wave is deleted (work bucket space); for payers in PIPELINE (orchestrate.py) the
-# orchestrator also starts each wave's map run itself, at most two waves of map output at a time.
+# orchestrator also starts the map runs itself (two waves per run, at most three mapped waves waiting).
 # <payer> <release> part=P a-b merges reduced waves a-b into reduced/<release>/<payer>/part-P (wave format);
 # the orchestrator then deletes those waves. UHC is merged in parts (storage decision 2026-10-30).
 aetna 2026-10 1 0-7
