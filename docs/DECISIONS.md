@@ -24,6 +24,17 @@ Newest first. One entry per lesson: what we saw, what we changed.
 - The website's coverage table said "common services only" for payers whose main networks have every code; it now
   shows both (data_status `main_networks`, `common_codes`, `partial`).
 
+## 2026-11-03: a map chunk Hugging Face cannot serve is deleted and re-mapped (UHC shard 206 chunk 02)
+- The per-file retries showed every failure of UHC wave 18 was one chunk: `map/2026-10/uhc/shard-206-02/rate_fact/*`
+  (one UMR file, 12.6 GB) fails "CAS ... error decoding response body" on every try, from runners and from a Claude
+  session alike, while its metas.json reads. The earlier note calling it transient was wrong.
+- `BAD_CHUNKS` lists such chunks; clean() deletes the chunk and its shard's status file once, so the shard counts as
+  unmapped and start_maps re-maps it (a resumed run parses only that chunk's file, into a new chunk number).
+  Re-uploading the same bytes in place was rejected: storage deduplicates content and could relink the broken data.
+- While a wave's shards are re-mapped the orchestrator does not re-run the wave's failed reduce jobs (they would read
+  the wave without the chunk); the chain reduces it again once the shard is back. `ticdata reduce --wave` itself now
+  refuses a wave that is not ready, because a re-run of failed jobs skips the args job's check.
+
 ## 2026-11-03: bucket downloads fall back to one file at a time (UHC wave 18, CAS "error decoding response body")
 - UHC wave 18's reduce lost fact parts 1, 3, 5, 7, 9, 13 (attempt 1) and 1, 3, 5, 9, 13 (attempt 2) to
   `download_bucket_files` raising "File reconstruction error: CAS Client Error: Format error: I/O error: error decoding

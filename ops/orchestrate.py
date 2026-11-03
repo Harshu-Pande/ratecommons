@@ -21,6 +21,10 @@ PIPELINE = {"uhc": 1024}
 MAP_PLANS = {"uhc": "runs/2026-10-30-map-uhc-41139836536/plan.json"}
 # map output of no release in waves.txt, deleted by clean(): November UHC files mapped by mistake on 2026-11-02
 STRAY_MAPS = [("uhc", "2026-11")]
+# map chunks Hugging Face cannot serve back (every download of their rate_fact parts fails with "CAS ... error decoding
+# response body"): clean() deletes the chunk and its shard's status file once, so the shard is re-mapped (a resumed
+# run parses only the chunk's files, into a new chunk number)
+BAD_CHUNKS = [("uhc", "2026-10", 206, 2)]
 # mapped waves waiting for their reduce before another map run starts: 3 lets a two-wave map run go while two waves
 # reduce (with 2, map and reduce took turns); ~0.19 TB of map output per UHC wave, so <= ~0.75 TB at a time
 MAX_WAVES_IN_FLIGHT = 3
@@ -210,6 +214,13 @@ def clean(waves):
             for s in range(a, b + 1):
                 folders[key].pop(s, None)
 
+    for payer, release, shard, chunk in BAD_CHUNKS:
+        pre = f"map/{release}/{payer}/shard-{shard:03d}-{chunk:02d}/"
+        paths = [p for p in map_folders(payer, release).get(shard, []) if p.startswith(pre)]
+        if paths:  # status last: until it is gone the shard counts as mapped
+            delete(paths + [f"map/{release}/{payer}/shard-{shard:03d}-status.json"],
+                   f"unreadable chunk {pre} and its shard's status (the shard is re-mapped)")
+
     for payer, release in STRAY_MAPS:
         if (payer, release) in {(w[0], w[1]) for w in waves}:
             continue  # a release the waves use is never stray
@@ -351,7 +362,17 @@ def main():
         return
     # called at the end of a successful reduce run (SELF_RUN_ID), an older failure is not a reason to stop
     from_reduce = me and os.environ.get("SELF_KIND", "reduce") == "reduce"
-    if runs and runs[0]["conclusion"] != "success" and not from_reduce:
+    # a wave whose shards are being re-mapped (a bad chunk was deleted) is reduced again by the chain once they are
+    # in, as a fresh run: re-running the failed jobs would read the wave without them
+    remapping = [w for w in waves if w[0] in PIPELINE and is_wave(w) and not wave_done(*w[:3])][:1]
+    if remapping:
+        a, b = map(int, remapping[0][3].split("-"))
+        mapped = mapped_shards(remapping[0][0], remapping[0][1])
+        remapping = [s for s in range(a, b + 1) if s not in mapped]
+    if remapping and runs and runs[0]["conclusion"] != "success" and not from_reduce:
+        print(f"last reduce run {runs[0]['id']} failed, but the next wave waits for shards {remapping} to be (re-)mapped;"
+              " not re-running it")
+    elif runs and runs[0]["conclusion"] != "success" and not from_reduce:
         # GitHub sometimes gives a job a smaller runner (72 GB disk, 32 GB free, not 104): UHC wave 12 lost three
         # fact parts to it and stood still for a weekend. About one job per UHC wave lands on one, so re-run the failed
         # jobs up to twice (a re-run can land on a small runner again); a third failure stops

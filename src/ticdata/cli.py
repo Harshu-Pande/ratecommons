@@ -274,6 +274,12 @@ def main(argv=None) -> int:
         tok = hfio.token_for(hfio.bucket(cfg.work_bucket))
         outdir = f"/tmp/reduce-out/{a.payer}/{a.release}"
         shards = tuple(int(x) for x in a.shards.split("-")) if a.shards else None
+        if a.wave and shards:  # also here, not only in the args job: a re-run of failed jobs skips the args job
+            from . import pipeline
+
+            why = pipeline.wave_ready(cfg.work_bucket, a.release, a.payer, shards)
+            if why:
+                sys.exit("wave not ready: " + "; ".join(why))
         is_dims = a.part.startswith("dims")
         table = (a.part.split("-", 1)[1] if "-" in a.part else "all") if is_dims else None
         share = None  # "dims-provider_set.3of8": job 3 of 8 of a table split across jobs (big waves and merges)

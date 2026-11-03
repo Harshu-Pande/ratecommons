@@ -340,6 +340,8 @@ def test_a_failed_reduce_is_rerun_twice_then_stops(monkeypatch):
     for step in ("clean", "start_maps", "packs"):
         monkeypatch.setattr(orchestrate, step, lambda w: None)
     monkeypatch.setattr("builtins.open", lambda *a, **k: __import__("io").StringIO("uhc 2026-10 12 132-143"))
+    monkeypatch.setattr(orchestrate, "wave_done", lambda p, r, w: False)
+    monkeypatch.setattr(orchestrate, "mapped_shards", lambda p, r: set(range(132, 144)))
     for attempt, rerun in ((1, True), (2, True), (3, False)):
         calls = []
         run = {"id": 7, "status": "completed", "conclusion": "failure", "run_attempt": attempt}
@@ -604,3 +606,37 @@ def test_chain_dispatches_a_part_once_its_waves_are_reduced(monkeypatch):
     monkeypatch.setattr("builtins.open", lambda *a, **k: __import__("io").StringIO("\n".join(" ".join(w) for w in waves)))
     o.main()
     assert calls and calls[0][-1] == "inputs[request]=uhc 2026-10 all part=1 1-2"
+
+
+def test_a_failed_reduce_is_not_rerun_while_its_wave_is_remapped(monkeypatch):
+    o = _orchestrate()
+    for step in ("clean", "start_maps", "packs"):
+        monkeypatch.setattr(o, step, lambda w: None)
+    monkeypatch.setattr("builtins.open", lambda *a, **k: __import__("io").StringIO("uhc 2026-10 18 204-215"))
+    monkeypatch.setattr(o, "wave_done", lambda p, r, w: False)
+    monkeypatch.setattr(o, "mapped_shards", lambda p, r: set(range(204, 216)) - {206})  # bad chunk deleted
+    calls = []
+    run = {"id": 9, "status": "completed", "conclusion": "failure", "run_attempt": 1}
+    monkeypatch.setattr(o, "gh", lambda path: {"workflow_runs": [run]})
+    monkeypatch.setattr(o.subprocess, "check_call", lambda cmd: calls.append(cmd))
+    o.main()
+    assert calls == []  # no re-run of the failed jobs (they would read the wave without shard 206), no dispatch yet
+
+
+def test_clean_deletes_a_bad_chunk_and_its_status_once(monkeypatch):
+    o = _orchestrate()
+    pre = "map/2026-10/uhc/"
+    files = {f"{pre}shard-206-0{c}/rate_fact/part-05.parquet": "x" for c in range(4)}
+    files.update({f"{pre}shard-206-0{c}/metas.json": "[]" for c in range(4)})
+    files[f"{pre}shard-206-status.json"] = '{"failed": []}'
+    fb = _FakeBucket(files)
+    fb.install(monkeypatch, o)
+    monkeypatch.setattr(o, "BAD_CHUNKS", [("uhc", "2026-10", 206, 2)])
+    monkeypatch.setattr(o, "STRAY_MAPS", [])
+    o.clean([["uhc", "2026-10", "18", "204-215"]])
+    assert not any("shard-206-02/" in p for p in fb.files) and f"{pre}shard-206-status.json" not in fb.files
+    assert f"{pre}shard-206-03/metas.json" in fb.files
+    fb.files[f"{pre}shard-206-status.json"] = '{"failed": []}'  # the re-map wrote it again (new chunk 04)
+    fb.files[f"{pre}shard-206-04/metas.json"] = "[]"
+    o.clean([["uhc", "2026-10", "18", "204-215"]])
+    assert f"{pre}shard-206-status.json" in fb.files and f"{pre}shard-206-04/metas.json" in fb.files
