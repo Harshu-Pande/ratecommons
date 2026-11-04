@@ -418,24 +418,35 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
         buckets = [b for b in glob.glob(f"{d}/pspli/*/*.parquet")]
         if not buckets:
             continue
-        con.execute(f"""CREATE OR REPLACE TABLE psg AS SELECT DISTINCT b.ps, l.pg FROM read_parquet({buckets!r}) b
-                        JOIN read_parquet('{d}/plipg.parquet') l USING (pli)""")
+        bl, pl = f"read_parquet({buckets!r})", f"read_parquet('{d}/plipg.parquet')"
         # offers per provider group, built in slices of groups: in one statement, Aetna's 96M rate rows times each
         # provider set's groups (and, row by row, each product) spilled ~90 GB and failed most states since 2026-10-29
         con.execute(f"""CREATE OR REPLACE TABLE rp AS SELECT DISTINCT r.ps, r.code, r.ntype, r.rate, r.bclass, r.mods,
                            (r.pos = '' OR list_contains(string_split(r.pos, ','), '11') OR r.pos LIKE 'CSTM%') AS office,
                            np.pset
-                        FROM rates_{p} r JOIN nsps_{p} np USING (ns) WHERE r.ps IN (SELECT ps FROM psg)""")
-        est = con.execute("""SELECT coalesce(sum(a.n * b.n), 0) FROM (SELECT ps, count(*) AS n FROM rp GROUP BY ps) a
-                             JOIN (SELECT ps, count(*) AS n FROM psg GROUP BY ps) b USING (ps)""").fetchone()[0]
-        k = max(1, -(-int(est) // int(os.environ.get("RC_SHOP_SLICE_ROWS", "3000000"))))
-        for i in range(k):
-            con.execute(f"""{'CREATE OR REPLACE TABLE og AS' if i == 0 else 'INSERT INTO og'}
-                SELECT g.pg, rp.code, rp.ntype, rp.rate, rp.bclass, rp.mods, rp.office,
-                       list_sort(list_distinct(flatten(list(s.prods)))) AS prods
-                FROM rp JOIN psg g USING (ps) JOIN psets_{p} s USING (pset)
-                WHERE {'true' if k == 1 else f'hash(g.pg) % {k} = {i}'}
-                GROUP BY ALL""")
+                        FROM rates_{p} r JOIN nsps_{p} np USING (ns) WHERE r.ps IN (SELECT DISTINCT ps FROM {bl})""")
+        # provider set -> group pairs, also in slices of groups: for Aetna in Florida and California the pli join
+        # before DISTINCT filled the 88 GB disk (2026-11-03)
+        jr = con.execute(f"""SELECT coalesce(sum(a.n * b.n), 0) FROM (SELECT pli, count(*) AS n FROM {bl} GROUP BY pli) a
+                             JOIN (SELECT pli, count(*) AS n FROM {pl} GROUP BY pli) b USING (pli)""").fetchone()[0]
+        m = max(1, -(-int(jr) // int(os.environ.get("RC_SHOP_PSG_ROWS", "40000000"))))
+        first = True
+        for j in range(m):
+            con.execute(f"""CREATE OR REPLACE TABLE psg AS SELECT DISTINCT b.ps, l.pg FROM {bl} b JOIN {pl} l USING (pli)
+                            WHERE {'true' if m == 1 else f'hash(l.pg) % {m} = {j}'}""")
+            est = con.execute("""SELECT coalesce(sum(a.n * b.n), 0) FROM (SELECT ps, count(*) AS n FROM rp GROUP BY ps) a
+                                 JOIN (SELECT ps, count(*) AS n FROM psg GROUP BY ps) b USING (ps)""").fetchone()[0]
+            k = max(1, -(-int(est) // int(os.environ.get("RC_SHOP_SLICE_ROWS", "3000000"))))
+            for i in range(k):  # a second hash (salted) so these slices are independent of the psg slices
+                con.execute(f"""{'CREATE OR REPLACE TABLE og AS' if first else 'INSERT INTO og'}
+                    SELECT g.pg, rp.code, rp.ntype, rp.rate, rp.bclass, rp.mods, rp.office,
+                           list_sort(list_distinct(flatten(list(s.prods)))) AS prods
+                    FROM rp JOIN psg g USING (ps) JOIN psets_{p} s USING (pset)
+                    WHERE {'true' if k == 1 else f"hash(g.pg, 'og') % {k} = {i}"}
+                    GROUP BY ALL""")
+                first = False
+        if m > 1:
+            _log(json.dumps({"state": s, "payer": p, "psg_slices": m, "join_rows": int(jr)}))
         flatb = f"{d}/pspli/_cstm_all.parquet"
         if os.path.exists(flatb):  # flat all-services arrangements (e.g. one amount per urgent-care visit)
             con.execute(f"""INSERT INTO og SELECT l.pg, 'FLAT' AS code, f.ntype, f.rate, f.bclass, '' AS mods, true AS office,
