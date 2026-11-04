@@ -121,7 +121,7 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             if os.path.exists(dest):  # the code was in an earlier part too: merge, never overwrite (BCBS
                 # rate parts split by code_id put one billing code in several parts and lost rows, 2026-11-04)
-                con.execute(f"COPY (SELECT * FROM read_parquet({[dest] + files!r}) ORDER BY ps) TO '{dest}.merge' {W}")
+                con.execute(f"COPY (SELECT * FROM read_parquet({[dest] + files!r}, hive_partitioning = false) ORDER BY ps) TO '{dest}.merge' {W}")
                 os.replace(f"{dest}.merge", dest)
             elif len(files) == 1:
                 shutil.move(files[0], dest)
