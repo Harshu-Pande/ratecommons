@@ -360,9 +360,10 @@ def main_networks(payer: str, release: str, plans: dict | None, n: int = MAIN_NE
         k, _, v = x.partition(":")
         cap[k.strip()] = None if v in ("", "all") else int(v)
     # a family bigger than this (gzip GB) is skipped for "other" companies, and they stop at a total budget, so the
-    # serving pack still fits one runner
-    fam_max = float(os.environ.get("RC_BCBS_MAIN_FAMILY_GB", "13"))
-    budget = float(os.environ.get("RC_BCBS_MAIN_OTHER_GB", "45")) * 1e9
+    # serving pack still fits one runner. 13/45 GB (North Carolina 11.9 GB and Michigan 6.3 GB families in) made
+    # 643M facts and ran out of GitHub's 6 hours twice (2026-11-03/04); those two need a pack of their own
+    fam_max = float(os.environ.get("RC_BCBS_MAIN_FAMILY_GB", "2"))
+    budget = float(os.environ.get("RC_BCBS_MAIN_OTHER_GB", "10")) * 1e9
     if payer == "bcbs":
         rows = duckdb.sql(f"SELECT network_id, list(name ORDER BY name), sum(bytes), list(url ORDER BY name) "
                           f"FROM read_parquet('{sf}') GROUP BY 1").fetchall()
