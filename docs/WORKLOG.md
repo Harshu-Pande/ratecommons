@@ -117,7 +117,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
 
 ## Done
 - 2026-11-04 12:00 CT [app] Claim parts (1) and (3) done. BCBS: every code for 33 main network families (TN, IL,
-  TX and the largest home family of 26 more Blue companies; North Carolina and Michigan get a smaller family: their
+  TX and the largest home family of 20 more Blue companies; North Carolina and Michigan get a smaller family: their
   largest need a pack of their own). Serve 41808926636 (804M rate rows), cloud 41852460738 (223,583 codes; code
   rows match the serve pack after the split-code fix). Patient tool: every state builds again (group slices; MI has
   Blue Cross); shop all 41880676454 refreshing with the new BCBS. Lessons in DECISIONS 2026-11-03 (evening).
