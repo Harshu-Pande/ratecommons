@@ -227,8 +227,13 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
     con.execute("UPDATE pg_npi SET state = 'XX' WHERE state IS NULL OR length(state) <> 2 OR NOT regexp_matches(state, '^[A-Z]{2}$')")
     if states:
         con.execute(f"DELETE FROM pg_npi WHERE state NOT IN ({st})")
-    con.execute(f"COPY (SELECT state, pg_id, npi FROM pg_npi ORDER BY state, pg_id) TO '{out}/pg_npi' "
-                f"(FORMAT parquet, COMPRESSION zstd, PARTITION_BY (state), ROW_GROUP_SIZE 50000)")
+    # one state at a time (same layout as a PARTITION_BY write): one sorted partitioned write of BCBS with every Blue
+    # company's main network filled the disk (2026-11-04)
+    for (st_,) in con.execute("SELECT DISTINCT state FROM pg_npi ORDER BY 1").fetchall():
+        os.makedirs(f"{out}/pg_npi/state={st_}", exist_ok=True)
+        con.execute(f"""COPY (SELECT pg_id, npi FROM pg_npi WHERE state = ? ORDER BY pg_id)
+                        TO '{out}/pg_npi/state={st_}/data_0.parquet' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 50000)""",
+                    [st_])
     # (group, state) pairs first: listing states over every NPI row of BCBS TN+IL+TX ran out of 10 GB
     con.execute("CREATE TABLE pg_state (pg_id BLOB, state VARCHAR)")
     for k in range(8):  # in hash slices: one DISTINCT over BCBS with 28 more Blue companies (4.4M groups) ran out of 10 GB
