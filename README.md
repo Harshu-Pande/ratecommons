@@ -17,7 +17,7 @@ Everything runs on free, no-card services: GitHub Actions, Hugging Face, Kaggle 
 | --- | --- | --- |
 | Cigna | `ratecommons/cigna`, complete | Every code, every network |
 | Aetna | `ratecommons/aetna`, complete (about 6,200 networks) | Every code for the 20 largest network groups; the 62 common services for every network; exact employer-plan lookup |
-| BCBS (Blue companies) | `ratecommons/bcbs`: TN, IL and TX own networks plus BlueCard, and 28 more Blue companies | Every code for the main TN, IL and TX networks; the 62 common services for every network. The 28 newer companies are being packed. |
+| BCBS (Blue companies) | `ratecommons/bcbs`: TN, IL and TX own networks plus BlueCard, and 28 more Blue companies | Every code for 33 main networks (TN, IL, TX and the largest home network of 26 more Blue companies); the 62 common services for every network. |
 | Anthem (14 states) | `ratecommons/anthem`, complete | Every code for the 5 largest network families; the 62 common services for every network |
 | UnitedHealthcare | `ratecommons/uhc`, being reduced wave by wave | 2 test files only, more in batches as waves finish |
 

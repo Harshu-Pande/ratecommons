@@ -3,7 +3,7 @@
 Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] what (files or runs)`.
 
 ## Claimed
-- 2026-11-03 11:30 CT [app] (1) Every code for each Blue company's largest home networks and more Anthem families
+- 2026-11-03 11:30 CT [app] (parts 1 and 3 done 2026-11-04, see Done) (1) Every code for each Blue company's largest home networks and more Anthem families
   (main_networks in src/ticdata/serve_jobs.py, serve/cloud/shop runs). (2) UHC into the apps part by part: serving
   packs from reduced/2026-10/uhc/part-P as each part merges, labelled partial (serve_jobs.py pack for part sources,
   cloud/api/_rc.py). (3) Why BCBS Michigan has no patient prices (shop.py). (4) Repo set-up for a second contributor
@@ -116,6 +116,11 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-04 12:00 CT [app] Claim parts (1) and (3) done. BCBS: every code for 33 main network families (TN, IL,
+  TX and the largest home family of 26 more Blue companies; North Carolina and Michigan get a smaller family: their
+  largest need a pack of their own). Serve 41808926636 (804M rate rows), cloud 41852460738 (223,583 codes; code
+  rows match the serve pack after the split-code fix). Patient tool: every state builds again (group slices; MI has
+  Blue Cross); shop all 41880676454 refreshing with the new BCBS. Lessons in DECISIONS 2026-11-03 (evening).
 - 2026-11-04 09:50 CT [pipeline] Safety check: UHC waves 20 (re-run) and 21 reduced, 22 queued, 23-24 mapping. workflow_run never fired (bot-started runs), so a failed reduce now dispatches the orchestrator itself (after-failure job).
 - 2026-11-04 05:45 CT [pipeline] Safety check: wave 19 green (attempt 2); wave 20 lost part 3 to a runner at 09:31 UTC and waited 2 h: no scheduled orchestrator run at all since 07:40. orchestrate.yml now also runs on every map/reduce run end (workflow_run); pass dispatched by hand.
 - 2026-11-04 01:40 CT [pipeline] Safety check: wave 19 lost part 13 to a small runner (05:51 UTC) and sat for ~2 h because the cron did not fire (last 02:13 UTC); orchestrate dispatched by hand (re-run), cron now every 15 min.
