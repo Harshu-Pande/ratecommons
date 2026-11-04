@@ -25,6 +25,13 @@ Newest first. One entry per lesson: what we saw, what we changed.
   written one state at a time, and the pack deletes each temporary source fact file once its rates are written.
   The pack then built in 1 h 41 min (804M rate rows; disk peaked under 116 GB). Note: ubuntu-latest runners here
   have no second disk; /mnt is on the same 145 GB disk, so RC_DUCK_TEMP=/mnt/duck changes nothing there.
+- **Mistake, caught after release:** the rate slices were cut by `hash(code_id)`, and one billing code can carry
+  several code_ids (descriptions), so a code landed in several rate files. The cloud pack wrote one file per code
+  per part and moved each part's file over the last: BCBS 99213 kept 4,195 of its rows, and codes.parquet listed
+  the code four times. Fixes: serving slices by `hash(billing_code_type, billing_code)`; the cloud pack merges a
+  code's file when it already exists and sums index rows per file. Rule: any change to how rate files are split
+  must keep a billing code whole, and a cloud pack is checked by comparing code_rows with the serving pack's
+  rate_rows and opening one common code before it is called done.
 
 ## 2026-11-03: UHC part 1 is in the apps; main networks for every Blue company and every Anthem state; the patient tool had been failing most states
 - **Serving packs from a merged part.** `serve uhc:part-1` packs `reduced/2026-10/uhc/part-1` from the work bucket
