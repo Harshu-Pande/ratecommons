@@ -9,8 +9,16 @@ Newest first. One entry per lesson: what we saw, what we changed.
   earlier, where provider sets meet their groups (`psg`): Aetna's pli join before DISTINCT. That step now runs in
   hash slices of the group too (`RC_SHOP_PSG_ROWS`, 40M join rows each), with a salted second hash for the offers
   slices inside it. Rule: any shop step that multiplies provider sets by groups runs in group slices.
-- The BCBS serve pack with every Blue company's main network (643M facts) hit GitHub's 300-minute job limit when
-  one Hugging Face step crawled; the pack job now may run 355 minutes (GitHub's maximum is 360).
+- Slicing alone was too slow: California's Aetna step re-read the provider parquet once per slice (547 slices,
+  5.5 h, cut off). The build now reads those tables once into DuckDB and uses fewer, larger slices (300M join rows
+  for provider-set pairs, 20M rows for offers) and logs each phase's seconds: California Aetna took 12 min for the
+  pairs and 81 min for offers (2,083 slices); the whole state 2.4 h. Every state now builds (NY, TX and FL ran
+  on the slower version, 2.5 to 3.9 h each).
+- The BCBS serve pack with every Blue company's main network (643M facts) ran out of time twice: first at 300
+  minutes, then at GitHub's 6-hour maximum even after the rate step was sliced by code (prefilter alone 2.2 h).
+  North Carolina's (11.9 GB) and Michigan's (6.3 GB) main families are three quarters of the other companies'
+  size, so "other" families are now capped at 2 GB (10 GB budget): 18 more Blue companies get every code; North
+  Carolina and Michigan need a pack of their own (multi-pack support, or a bigger machine).
 
 ## 2026-11-03: UHC part 1 is in the apps; main networks for every Blue company and every Anthem state; the patient tool had been failing most states
 - **Serving packs from a merged part.** `serve uhc:part-1` packs `reduced/2026-10/uhc/part-1` from the work bucket
