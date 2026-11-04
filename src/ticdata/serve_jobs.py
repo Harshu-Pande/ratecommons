@@ -485,7 +485,7 @@ def pack(payer: str, source: str, release: str, work: str = "/tmp/pack", upload:
         _log(f"match {match}: {len(networks)} networks")
     products = network_products(payer, src, plans)
     res = build_pack(payer, src, f"{work}/out", nppes, irs, networks=networks, plans=plans, work=f"{work}/duck",
-                     states=states, products=products)
+                     states=states, products=products, drop_src=src.startswith(work))
     res.update({"source": source, "release": release, "states": states})
     if subset:  # the app says when a code is outside the pack instead of "no published rate"
         res["code_subset"] = {"name": "common services (CareCompass procedures + flat all-services contracts)",

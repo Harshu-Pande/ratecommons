@@ -53,7 +53,10 @@ def _duck(work: str, mem: str | None = None):
     con.execute("SET preserve_insertion_order = false")
     con.execute("SET enable_progress_bar = false")
     con.execute(f"SET memory_limit = '{mem or os.environ.get('RC_DUCK_MEMORY', '10GB')}'")
-    con.execute(f"SET temp_directory = '{work}/tmp'")
+    # RC_DUCK_TEMP: spill elsewhere (serve.yml points it at the runner's second disk, /mnt)
+    tmp = os.environ.get("RC_DUCK_TEMP") or f"{work}/tmp"
+    os.makedirs(tmp, exist_ok=True)
+    con.execute(f"SET temp_directory = '{tmp}'")
     con.execute(f"SET threads = {int(os.environ.get('RC_DUCK_THREADS', '4'))}")
     return con
 
@@ -64,7 +67,7 @@ def _log(msg: str):
 
 def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], networks: list[bytes] | None = None,
                plans: dict[str, list[str]] | None = None, work: str = "/tmp/packwork",
-               states: list[str] | None = None, products: dict | None = None) -> dict:
+               states: list[str] | None = None, products: dict | None = None, drop_src: bool = False) -> dict:
     """`src` holds release tables (a published release, or one reduce wave). `nppes` is the shared
     nppes.parquet (npi, state, zip5...). `plans` maps source file name -> plan names. `states` limits the
     pack to provider groups practicing in those states (and the rates of their provider sets).
@@ -167,6 +170,8 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
             k = con.execute(f"SELECT count(*) FROM '{out}/rate/{oname}'").fetchone()[0]
             n += k
             _log(f"rate {oname}: {k:,}")
+        if drop_src:  # a temporary copy: free its disk for the provider steps (BCBS filled the disk, 2026-11-04)
+            os.remove(f)
     res["rate_rows"] = n
     con.execute("DROP TABLE IF EXISTS fx")
     R = f"read_parquet('{out}/rate/*.parquet')"
