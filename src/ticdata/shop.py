@@ -418,7 +418,10 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
         buckets = [b for b in glob.glob(f"{d}/pspli/*/*.parquet")]
         if not buckets:
             continue
-        bl, pl = f"read_parquet({buckets!r})", f"read_parquet('{d}/plipg.parquet')"
+        # read once into tables: each slice below scans them (re-reading the parquet per slice took 5.5 h in CA)
+        con.execute(f"CREATE OR REPLACE TABLE bt AS SELECT ps, pli FROM read_parquet({buckets!r})")
+        con.execute(f"CREATE OR REPLACE TABLE lt AS SELECT pli, pg FROM read_parquet('{d}/plipg.parquet')")
+        bl, pl = "bt", "lt"
         # offers per provider group, built in slices of groups: in one statement, Aetna's 96M rate rows times each
         # provider set's groups (and, row by row, each product) spilled ~90 GB and failed most states since 2026-10-29
         con.execute(f"""CREATE OR REPLACE TABLE rp AS SELECT DISTINCT r.ps, r.code, r.ntype, r.rate, r.bclass, r.mods,
@@ -429,14 +432,16 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
         # before DISTINCT filled the 88 GB disk (2026-11-03)
         jr = con.execute(f"""SELECT coalesce(sum(a.n * b.n), 0) FROM (SELECT pli, count(*) AS n FROM {bl} GROUP BY pli) a
                              JOIN (SELECT pli, count(*) AS n FROM {pl} GROUP BY pli) b USING (pli)""").fetchone()[0]
-        m = max(1, -(-int(jr) // int(os.environ.get("RC_SHOP_PSG_ROWS", "40000000"))))
-        first = True
+        m = max(1, -(-int(jr) // int(os.environ.get("RC_SHOP_PSG_ROWS", "300000000"))))
+        first, t_psg, t_og, n_og = True, 0.0, 0.0, 0
         for j in range(m):
+            t1 = time.time()
             con.execute(f"""CREATE OR REPLACE TABLE psg AS SELECT DISTINCT b.ps, l.pg FROM {bl} b JOIN {pl} l USING (pli)
                             WHERE {'true' if m == 1 else f'hash(l.pg) % {m} = {j}'}""")
             est = con.execute("""SELECT coalesce(sum(a.n * b.n), 0) FROM (SELECT ps, count(*) AS n FROM rp GROUP BY ps) a
                                  JOIN (SELECT ps, count(*) AS n FROM psg GROUP BY ps) b USING (ps)""").fetchone()[0]
-            k = max(1, -(-int(est) // int(os.environ.get("RC_SHOP_SLICE_ROWS", "3000000"))))
+            k = max(1, -(-int(est) // int(os.environ.get("RC_SHOP_SLICE_ROWS", "20000000"))))
+            t2 = time.time(); t_psg += t2 - t1; n_og += k
             for i in range(k):  # a second hash (salted) so these slices are independent of the psg slices
                 con.execute(f"""{'CREATE OR REPLACE TABLE og AS' if first else 'INSERT INTO og'}
                     SELECT g.pg, rp.code, rp.ntype, rp.rate, rp.bclass, rp.mods, rp.office,
@@ -445,8 +450,9 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
                     WHERE {'true' if k == 1 else f"hash(g.pg, 'og') % {k} = {i}"}
                     GROUP BY ALL""")
                 first = False
-        if m > 1:
-            _log(json.dumps({"state": s, "payer": p, "psg_slices": m, "join_rows": int(jr)}))
+            t_og += time.time() - t2
+        _log(json.dumps({"state": s, "payer": p, "psg_slices": m, "og_slices": n_og, "join_rows": int(jr),
+                         "psg_s": round(t_psg), "og_s": round(t_og)}))
         flatb = f"{d}/pspli/_cstm_all.parquet"
         if os.path.exists(flatb):  # flat all-services arrangements (e.g. one amount per urgent-care visit)
             con.execute(f"""INSERT INTO og SELECT l.pg, 'FLAT' AS code, f.ntype, f.rate, f.bclass, '' AS mods, true AS office,
@@ -537,7 +543,7 @@ def _build_state(con, s: str, env: dict, pf: dict, work: str, out: str, products
         return {"places": 0}
     con.execute("CREATE OR REPLACE TABLE offers AS " + " UNION ALL ".join(f"SELECT * FROM {t}" for t in po_parts))
     con.execute("CREATE OR REPLACE TABLE team AS " + " UNION ALL ".join(f"SELECT * FROM {t}" for t in team_parts))
-    for t in po_parts + team_parts + ["og", "ogr", "gp", "q", "qx", "psg", "chk", "rp"]:
+    for t in po_parts + team_parts + ["og", "ogr", "gp", "q", "qx", "psg", "chk", "rp", "bt", "lt"]:
         con.execute(f"DROP TABLE IF EXISTS {t}")
     con.execute("CHECKPOINT")
     # places
