@@ -47,6 +47,13 @@ Newest first. One entry per lesson: what we saw, what we changed.
 - The website's coverage table said "common services only" for payers whose main networks have every code; it now
   shows both (data_status `main_networks`, `common_codes`, `partial`).
 
+## 2026-11-04: the orchestrator also runs when a map or reduce run ends (`workflow_run`), not only on cron
+- GitHub's cron fired the orchestrator at 02:13 UTC and then not once until after 11:40, even after the schedule was
+  tightened to every 15 minutes; UHC waves 19 and 20 each sat ~2 h failed, waiting for their automatic re-run.
+- orchestrate.yml now also triggers on `workflow_run` (map, reduce; completed): every run's end, success or failure,
+  starts one orchestrator pass, and a failed run is complete by then, so `rerun-failed-jobs` works. Cron stays as a
+  backstop; the concurrency group keeps passes one at a time.
+
 ## 2026-11-03: a map chunk Hugging Face cannot serve is deleted and re-mapped (UHC shard 206 chunk 02)
 - The per-file retries showed every failure of UHC wave 18 was one chunk: `map/2026-10/uhc/shard-206-02/rate_fact/*`
   (one UMR file, 12.6 GB) fails "CAS ... error decoding response body" on every try, from runners and from a Claude

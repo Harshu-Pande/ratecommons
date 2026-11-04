@@ -4,6 +4,12 @@ name: orchestrate
 on:
   schedule:
     - cron: "2,17,32,47 * * * *"
+  # GitHub's schedule is not dependable here (no scheduled run at all from 07:40 to 11:40 UTC on 2026-11-04), so the
+  # orchestrator also runs whenever a map or reduce run ends, success or failure (a failed run is re-run from here,
+  # once it has completed; the runs' own `next` jobs only cover success)
+  workflow_run:
+    workflows: [map, reduce]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
