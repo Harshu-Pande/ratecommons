@@ -116,6 +116,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-03 19:35 CT [pipeline] Shard 206 re-mapped (new chunk 06 = the UMR SPRING-HEALTH file; status 6 files, 0 failed); wave 22 mapping. Wave 18 reduce 41709999742 ending (7-8 parts failed on the deleted chunk); its failed parts are re-run next, reading chunk 06.
 - 2026-11-03 17:30 CT [pipeline] UHC wave 18: the failures are one unreadable chunk (shard-206-02, Hugging Face storage), not transient errors; the orchestrator deletes it and re-maps shard 206 (BAD_CHUNKS), then reduces wave 18 again.
 - 2026-11-03 15:10 CT [pipeline] Safety check: UHC wave 18 reduce failed twice on transient Hugging Face download errors (5 fact parts); _fetch now falls back to per-file retries; wave 18 facts re-run fresh. Waves 20-21 mapped and waiting; the orchestrator resumes when wave 18 is green.
 - 2026-11-03 11:30 CT [app] BCBS relabel chain done: serve (41566296964), cloud (41575996770), shop all (41581045145),
