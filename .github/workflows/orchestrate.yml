@@ -1,16 +1,17 @@
 name: orchestrate
-# Every 15 minutes: start the next reduce wave from ops/waves.txt once its shards are mapped. (GitHub drops scheduled
-# runs under load: at 30 minutes it fired 02:13 then not again for 5 h on 2026-11-04 while a failed reduce waited.)
+# Starts the next map and reduce runs from ops/waves.txt. Who calls it: each successful reduce and every map run (their
+# `next` jobs), a failed reduce run (its `after-failure` job dispatches this with after_run, so the failed jobs are
+# re-run once that run has ended), and a cron backstop. GitHub's schedule fires only every 5-8 h here, and
+# workflow_run never fires for runs our own token started, so neither can be relied on.
 on:
   schedule:
     - cron: "2,17,32,47 * * * *"
-  # GitHub's schedule is not dependable here (no scheduled run at all from 07:40 to 11:40 UTC on 2026-11-04), so the
-  # orchestrator also runs whenever a map or reduce run ends, success or failure (a failed run is re-run from here,
-  # once it has completed; the runs' own `next` jobs only cover success)
-  workflow_run:
+  workflow_run:  # fires only for runs a person started (pushes)
     workflows: [map, reduce]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      after_run: { description: "wait until this run has ended first (a failed reduce dispatching its re-run)", required: false, default: "" }
 
 permissions:
   contents: read
@@ -24,12 +25,18 @@ concurrency:
 jobs:
   next:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - run: pip install -q -e .
+      - name: wait for the run that asked for this pass to end
+        if: github.event.inputs.after_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AFTER: ${{ github.event.inputs.after_run }}
+        run: for i in $(seq 40); do [ "$(gh api repos/${{ github.repository }}/actions/runs/$AFTER --jq .status)" = completed ] && break; sleep 15; done
       - run: python ops/orchestrate.py
         env:
           GH_TOKEN: ${{ github.token }}

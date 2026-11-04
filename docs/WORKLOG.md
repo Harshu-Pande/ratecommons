@@ -116,6 +116,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-04 09:50 CT [pipeline] Safety check: UHC waves 20 (re-run) and 21 reduced, 22 queued, 23-24 mapping. workflow_run never fired (bot-started runs), so a failed reduce now dispatches the orchestrator itself (after-failure job).
 - 2026-11-04 05:45 CT [pipeline] Safety check: wave 19 green (attempt 2); wave 20 lost part 3 to a runner at 09:31 UTC and waited 2 h: no scheduled orchestrator run at all since 07:40. orchestrate.yml now also runs on every map/reduce run end (workflow_run); pass dispatched by hand.
 - 2026-11-04 01:40 CT [pipeline] Safety check: wave 19 lost part 13 to a small runner (05:51 UTC) and sat for ~2 h because the cron did not fire (last 02:13 UTC); orchestrate dispatched by hand (re-run), cron now every 15 min.
 - 2026-11-03 22:35 CT [pipeline] UHC wave 18 green (41709999742 attempt 3: attempt 2 lost part 5 to a runner, no log); shard 206 repair complete. Wave 19 reducing; waves 20-22 mapped and waiting (3 in flight, so the next map starts after wave 20).

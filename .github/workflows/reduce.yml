@@ -108,3 +108,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SELF_RUN_ID: ${{ github.run_id }}
+
+  after-failure:
+    # a failed reduce cannot re-run itself while it runs, and GitHub's schedule is too rare to wait for: start an
+    # orchestrator pass that waits for this run to end, then re-runs its failed jobs (up to twice, orchestrate.py)
+    needs: reduce
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: gh api -X POST repos/${{ github.repository }}/actions/workflows/orchestrate.yml/dispatches -f ref=main -f "inputs[after_run]=${{ github.run_id }}"
+        env:
+          GH_TOKEN: ${{ github.token }}

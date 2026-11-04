@@ -54,6 +54,13 @@ Newest first. One entry per lesson: what we saw, what we changed.
 - The website's coverage table said "common services only" for payers whose main networks have every code; it now
   shows both (data_status `main_networks`, `common_codes`, `partial`).
 
+## 2026-11-04: a failed reduce dispatches the orchestrator itself (workflow_run does not fire for bot-started runs)
+- The `workflow_run` trigger added earlier today never fired: GitHub creates no workflow_run for runs started with
+  the workflows' own token (every orchestrator-dispatched run), and the schedule fired only every 5-8 h for days.
+- reduce.yml's `after-failure` job (needs: reduce, if: failure()) dispatches orchestrate.yml with `after_run`; that
+  pass waits (up to 10 min) for the failed run to end, then re-runs its failed jobs. Successes already chain through
+  the `next` jobs, so every reduce end now leads to an orchestrator pass.
+
 ## 2026-11-04: the orchestrator also runs when a map or reduce run ends (`workflow_run`), not only on cron
 - GitHub's cron fired the orchestrator at 02:13 UTC and then not once until after 11:40, even after the schedule was
   tightened to every 15 minutes; UHC waves 19 and 20 each sat ~2 h failed, waiting for their automatic re-run.
