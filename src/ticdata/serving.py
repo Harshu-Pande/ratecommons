@@ -152,13 +152,21 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
         con.execute(f"""CREATE OR REPLACE TABLE fx AS SELECT billing_code_type, billing_code, code_id, ps_id, pl_id, ns_id
                         FROM read_parquet('{f}') SEMI JOIN (SELECT DISTINCT ns_id FROM ns) USING (ns_id) {keep_ps}""")
         con.execute("INSERT INTO psns SELECT DISTINCT ps_id, ns_id FROM fx")
-        con.execute(f"""COPY (SELECT f.billing_code_type, f.billing_code, f.code_id, f.ps_id, f.ns_id, unnest(p.pt_ids) pt_id
-                              FROM fx f JOIN (SELECT pl_id, pt_ids FROM pl SEMI JOIN (SELECT DISTINCT pl_id FROM fx) USING (pl_id)) p
-                              USING (pl_id)
-                              ORDER BY billing_code_type, billing_code, ps_id) TO '{out}/rate/{name}' {W}""")
-        k = con.execute(f"SELECT count(*) FROM '{out}/rate/{name}'").fetchone()[0]
-        n += k
-        _log(f"rate {name}: {k:,}")
+        # large fact parts are written in slices by code (a code stays in one output file, as the cloud pack needs):
+        # BCBS with every Blue company's main network ran one 10 GB join + sort out of memory (2026-11-03)
+        nfx = con.execute("SELECT count(*) FROM fx").fetchone()[0]
+        ks = max(1, -(-nfx // int(os.environ.get("RC_PACK_RATE_ROWS", "12000000"))))
+        for i in range(ks):
+            sl = "true" if ks == 1 else f"hash(code_id) % {ks} = {i}"
+            oname = name if ks == 1 else name.replace(".parquet", f"-{i:03d}.parquet")
+            con.execute(f"""COPY (SELECT f.billing_code_type, f.billing_code, f.code_id, f.ps_id, f.ns_id, unnest(p.pt_ids) pt_id
+                                  FROM (SELECT * FROM fx WHERE {sl}) f
+                                  JOIN (SELECT pl_id, pt_ids FROM pl SEMI JOIN (SELECT DISTINCT pl_id FROM fx WHERE {sl}) USING (pl_id)) p
+                                  USING (pl_id)
+                                  ORDER BY billing_code_type, billing_code, ps_id) TO '{out}/rate/{oname}' {W}""")
+            k = con.execute(f"SELECT count(*) FROM '{out}/rate/{oname}'").fetchone()[0]
+            n += k
+            _log(f"rate {oname}: {k:,}")
     res["rate_rows"] = n
     con.execute("DROP TABLE IF EXISTS fx")
     R = f"read_parquet('{out}/rate/*.parquet')"
