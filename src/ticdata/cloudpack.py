@@ -94,8 +94,8 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
         res[t] = con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
     _log(json.dumps(res))
 
-    # one file per code, price fields inline. Rate parts are code-hash parts sorted by code, so a code is
-    # in one part: partitioned writes per part never collide.
+    # one file per code, price fields inline. A code is usually in one rate part; when it is in several, its file
+    # is merged part by part (below), and the index sums its rows.
     con.execute(f"CREATE TABLE pt AS SELECT * FROM read_parquet('{pack}/price_term.parquet')")
     os.makedirs(f"{out}/code", exist_ok=True)
     con.execute("SET partitioned_write_max_open_files = 64")
@@ -119,7 +119,11 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
             files = sorted(glob.glob(f"{d}/*.parquet"))
             dest = f"{out}/code/{t}/{k}.parquet"
             os.makedirs(os.path.dirname(dest), exist_ok=True)
-            if len(files) == 1:
+            if os.path.exists(dest):  # the code was in an earlier part too: merge, never overwrite (BCBS
+                # rate parts split by code_id put one billing code in several parts and lost rows, 2026-11-04)
+                con.execute(f"COPY (SELECT * FROM read_parquet({[dest] + files!r}) ORDER BY ps) TO '{dest}.merge' {W}")
+                os.replace(f"{dest}.merge", dest)
+            elif len(files) == 1:
                 shutil.move(files[0], dest)
             else:
                 con.execute(f"COPY (SELECT * FROM read_parquet({files!r})) TO '{dest}' {W}")
@@ -141,6 +145,8 @@ def build(payer: str, pack: str, out: str, nppes: str, work: str = "/tmp/cloudwo
         con.execute(f"COPY (SELECT * FROM read_parquet({allsvc!r}, union_by_name = true)) TO '{out}/cstm_all.parquet' {W}")
     con.execute("CREATE TABLE cidx (billing_code_type VARCHAR, billing_code VARCHAR, t VARCHAR, k VARCHAR, n BIGINT)")
     con.executemany("INSERT INTO cidx VALUES (?, ?, ?, ?, ?)", [r for part in idx for r in part])
+    con.execute("CREATE OR REPLACE TABLE cidx AS SELECT billing_code_type, billing_code, t, k, sum(n)::BIGINT AS n "
+                "FROM cidx GROUP BY ALL")
     con.execute(f"""COPY (SELECT c.*, any_value(CASE WHEN x.text_withheld THEN NULL ELSE x.name END) AS name
                           FROM cidx c LEFT JOIN read_parquet('{pack}/code.parquet') x
                             ON x.billing_code_type = c.billing_code_type AND x.billing_code = c.billing_code

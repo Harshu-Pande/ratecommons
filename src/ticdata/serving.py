@@ -160,7 +160,8 @@ def build_pack(payer: str, src: str, out: str, nppes: str, irs: list[str], netwo
         nfx = con.execute("SELECT count(*) FROM fx").fetchone()[0]
         ks = max(1, -(-nfx // int(os.environ.get("RC_PACK_RATE_ROWS", "12000000"))))
         for i in range(ks):
-            sl = "true" if ks == 1 else f"hash(code_id) % {ks} = {i}"
+            sl = "true" if ks == 1 else f"hash(billing_code_type, billing_code) % {ks} = {i}"  # not code_id: one
+            # billing code can have several code_ids (descriptions), and the cloud pack wants a code in one part
             oname = name if ks == 1 else name.replace(".parquet", f"-{i:03d}.parquet")
             con.execute(f"""COPY (SELECT f.billing_code_type, f.billing_code, f.code_id, f.ps_id, f.ns_id, unnest(p.pt_ids) pt_id
                                   FROM (SELECT * FROM fx WHERE {sl}) f
