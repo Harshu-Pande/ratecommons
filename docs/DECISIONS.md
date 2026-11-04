@@ -19,6 +19,12 @@ Newest first. One entry per lesson: what we saw, what we changed.
   North Carolina's (11.9 GB) and Michigan's (6.3 GB) main families are three quarters of the other companies'
   size, so "other" families are now capped at 2 GB (10 GB budget): 18 more Blue companies get every code; North
   Carolina and Michigan need a pack of their own (multi-pack support, or a bigger machine).
+- The cap barely shrank the pack (639M facts; North Carolina and Michigan fell back to smaller families), so the
+  size is mostly breadth (239 main network ids), not those two files. With the rate step sliced, the pack then
+  filled the disk twice in the provider steps (848M provider-set rows, 1.07B group-NPI rows). Fixes: pg_npi is
+  written one state at a time, and the pack deletes each temporary source fact file once its rates are written.
+  The pack then built in 1 h 41 min (804M rate rows; disk peaked under 116 GB). Note: ubuntu-latest runners here
+  have no second disk; /mnt is on the same 145 GB disk, so RC_DUCK_TEMP=/mnt/duck changes nothing there.
 
 ## 2026-11-03: UHC part 1 is in the apps; main networks for every Blue company and every Anthem state; the patient tool had been failing most states
 - **Serving packs from a merged part.** `serve uhc:part-1` packs `reduced/2026-10/uhc/part-1` from the work bucket
