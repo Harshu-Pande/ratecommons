@@ -54,6 +54,15 @@ Newest first. One entry per lesson: what we saw, what we changed.
 - The website's coverage table said "common services only" for payers whose main networks have every code; it now
   shows both (data_status `main_networks`, `common_codes`, `partial`).
 
+## 2026-11-04: the multi-block step of a fact slice is cut by its fan-out (UHC wave 22 out of memory)
+- UHC wave 22's reduce lost 11 of 16 fact parts to DuckDB "Out of Memory" (6.5 GB) twice, on normal runners. Its facts
+  repeat across blocks (part 3: 706M fact rows, 31M facts, 31.15M of them in several of 3,488 blocks over 72
+  networks), and `CREATE TABLE multi AS SELECT DISTINCT fact_id, net ... JOIN bnet` fans every fact row out to its
+  block's networks; DISTINCT over BLOB keys does not spill. Slices were sized by input rows only (15M).
+- Each slice now measures nets per block (from bnet) and runs the multi step in sub-slices of about RC_MULTI_PAIRS
+  (30M) joined rows, by `(hash(fact_id) // k) % m`; each fact still lands in one sub-slice. Tested: sub-slices give
+  the same facts and network sets. Wave 22's facts were re-run fresh (a re-run of failed jobs uses the old commit).
+
 ## 2026-11-04: a failed reduce dispatches the orchestrator itself (workflow_run does not fire for bot-started runs)
 - The `workflow_run` trigger added earlier today never fired: GitHub creates no workflow_run for runs started with
   the workflows' own token (every orchestrator-dispatched run), and the schedule fired only every 5-8 h for days.

@@ -326,6 +326,8 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
         # facts are grouped in slices by hash(fact_id): BLOB/VARCHAR aggregate states do not spill,
         # so each slice must fit in memory (about 15 million input rows per slice)
         k = presplit[0] if presplit else max(1, res["rows_in"] // int(os.environ.get("RC_SLICE_ROWS", "15000000")) + 1)
+        fan = con.execute("SELECT count(*)::DOUBLE / greatest(count(DISTINCT block_id), 1) FROM bnet").fetchone()[0] or 1.0
+        res["nets_per_block"] = round(fan, 2)
         res["slices"] = k
         os.makedirs(f"{local}/facts_tmp", exist_ok=True)
         os.makedirs(f"{local}/multi_dir", exist_ok=True)
@@ -347,24 +349,32 @@ def reduce_part_local(local: str, payer: str, release: str, part: int, out: str,
                       FROM {src_i} GROUP BY fact_id)
                 TO '{local}/fx.parquet' (FORMAT parquet, COMPRESSION zstd)""")
             fx = f"read_parquet('{local}/fx.parquet')"
-            con.execute(f"""CREATE OR REPLACE TABLE multi AS
-                            SELECT DISTINCT r.fact_id, b.net
-                            FROM (SELECT fact_id, block_id FROM {src_i}) r
-                            JOIN bnet b USING (block_id)
-                            WHERE r.fact_id IN (SELECT fact_id FROM {fx} WHERE b_min <> b_max)""")
-            # blk: a single-block fact's block (its networks are that block's); multi-block facts keep their
-            # (fact, net) pairs in multi_dir, so the sliced input is not read again and each slice can go
-            con.execute(f"""
-                COPY (
-                  SELECT f.{FACT_COLS.replace(', ', ', f.')}, bn.x1, bn.x2, bn.n_net, f.b_min AS blk
-                  FROM {fx} f JOIN bn ON bn.block_id = f.b_min WHERE f.b_min = f.b_max
-                  UNION ALL
-                  SELECT f.{FACT_COLS.replace(', ', ', f.')}, u.x1, u.x2, u.n_net, NULL AS blk
-                  FROM {fx} f JOIN (SELECT m.fact_id, bit_xor(n.h1) x1, bit_xor(n.h2) x2, count(*)::INTEGER n_net
-                                    FROM multi m JOIN nets n USING (net) GROUP BY m.fact_id) u USING (fact_id)
-                ) TO '{local}/facts_tmp/slice-{i:04d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
-            con.execute(f"COPY (SELECT fact_id, net FROM multi) TO '{local}/multi_dir/slice-{i:04d}.parquet' (FORMAT parquet)")
-            multi_n += con.execute("SELECT count(DISTINCT fact_id) FROM multi").fetchone()[0]
+            # (fact, net) pairs of multi-block facts: the join fans each fact row out to its block's networks and
+            # DISTINCT over BLOB keys does not spill. UHC wave 22 (31M facts each in ~22 of 3,488 blocks) ran 11 of
+            # 16 parts out of 6.5 GB here, so a slice is cut into sub-slices of about RC_MULTI_PAIRS joined rows
+            n_i = con.execute(f"SELECT count(*) FROM {src_i}").fetchone()[0]
+            m = max(1, int(n_i * fan) // int(os.environ.get("RC_MULTI_PAIRS", "30000000")) + 1)
+            res["multi_subslices"] = res.get("multi_subslices", 0) + m
+            for j in range(m):
+                sub = f"(hash(fact_id) // {k}) % {m} = {j}" if m > 1 else "true"
+                con.execute(f"""CREATE OR REPLACE TABLE multi AS
+                                SELECT DISTINCT r.fact_id, b.net
+                                FROM (SELECT fact_id, block_id FROM {src_i} WHERE {sub}) r
+                                JOIN bnet b USING (block_id)
+                                WHERE r.fact_id IN (SELECT fact_id FROM {fx} WHERE b_min <> b_max AND {sub})""")
+                # blk: a single-block fact's block (its networks are that block's); multi-block facts keep their
+                # (fact, net) pairs in multi_dir, so the sliced input is not read again and each slice can go
+                con.execute(f"""
+                    COPY (
+                      SELECT f.{FACT_COLS.replace(', ', ', f.')}, bn.x1, bn.x2, bn.n_net, f.b_min AS blk
+                      FROM {fx} f JOIN bn ON bn.block_id = f.b_min WHERE f.b_min = f.b_max AND {sub.replace('fact_id', 'f.fact_id')}
+                      UNION ALL
+                      SELECT f.{FACT_COLS.replace(', ', ', f.')}, u.x1, u.x2, u.n_net, NULL AS blk
+                      FROM {fx} f JOIN (SELECT m.fact_id, bit_xor(n.h1) x1, bit_xor(n.h2) x2, count(*)::INTEGER n_net
+                                        FROM multi m JOIN nets n USING (net) GROUP BY m.fact_id) u USING (fact_id)
+                    ) TO '{local}/facts_tmp/slice-{i:04d}-{j:03d}.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+                con.execute(f"COPY (SELECT fact_id, net FROM multi) TO '{local}/multi_dir/slice-{i:04d}-{j:03d}.parquet' (FORMAT parquet)")
+                multi_n += con.execute("SELECT count(DISTINCT fact_id) FROM multi").fetchone()[0]
             if delete_inputs and k > 1:  # UHC wave 3: the sliced input kept to the end filled 104 GB of disk
                 import shutil
 

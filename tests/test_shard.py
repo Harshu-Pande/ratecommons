@@ -640,3 +640,24 @@ def test_clean_deletes_a_bad_chunk_and_its_status_once(monkeypatch):
     fb.files[f"{pre}shard-206-04/metas.json"] = "[]"
     o.clean([["uhc", "2026-10", "18", "204-215"]])
     assert f"{pre}shard-206-status.json" in fb.files and f"{pre}shard-206-04/metas.json" in fb.files
+
+
+def test_multi_subslices_give_the_same_wave(tmp_path, monkeypatch):
+    """The multi-block step cut into sub-slices (UHC wave 22's fan-out) reduces to the same facts and sets."""
+    import shutil
+
+    from ticdata.reduce import reduce_part_local
+
+    _four_waves(tmp_path)  # leaves the four shards' map output in tmp_path/map
+    for label, pairs in (("one", None), ("sub", "1")):
+        if pairs:
+            monkeypatch.setenv("RC_MULTI_PAIRS", pairs)
+        local = tmp_path / f"in-{label}"
+        shutil.copytree(tmp_path / "map", local)
+        for k in range(16):
+            res = reduce_part_local(str(local), "test", "2026-10", k, str(tmp_path / label))
+        if pairs:
+            assert res.get("multi_subslices", 0) > 1
+    assert _fact_sets(tmp_path / "one") == _fact_sets(tmp_path / "sub")
+    ns = lambda d: sorted((r["ns_id"], tuple(r["network_ids"])) for r in pq.read_table(d / "network_set").to_pylist())  # noqa: E731
+    assert ns(tmp_path / "one") == ns(tmp_path / "sub")
