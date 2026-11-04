@@ -116,6 +116,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-04 13:50 CT [pipeline] Safety check: UHC wave 22 reducing (attempt 2; attempt 1 predates the after-failure hook, re-run came from a map run's next step); waves 23-24 mapped (shards 266, 285 re-mapped after failed files). Part 2 next after wave 24.
 - 2026-11-04 12:00 CT [app] Claim parts (1) and (3) done. BCBS: every code for 33 main network families (TN, IL,
   TX and the largest home family of 20 more Blue companies; North Carolina and Michigan get a smaller family: their
   largest need a pack of their own). Serve 41808926636 (804M rate rows), cloud 41852460738 (223,583 codes; code
