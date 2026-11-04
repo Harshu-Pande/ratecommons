@@ -3,6 +3,15 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-03 (evening): patient tool build slices every large join by provider group
+- With the group slices in the offers step and the clinician step, Michigan and Oklahoma build (Michigan now shows
+  Blue Cross in Detroit, Ann Arbor and Grand Rapids). Florida and California still filled the 88 GB disk one step
+  earlier, where provider sets meet their groups (`psg`): Aetna's pli join before DISTINCT. That step now runs in
+  hash slices of the group too (`RC_SHOP_PSG_ROWS`, 40M join rows each), with a salted second hash for the offers
+  slices inside it. Rule: any shop step that multiplies provider sets by groups runs in group slices.
+- The BCBS serve pack with every Blue company's main network (643M facts) hit GitHub's 300-minute job limit when
+  one Hugging Face step crawled; the pack job now may run 355 minutes (GitHub's maximum is 360).
+
 ## 2026-11-03: UHC part 1 is in the apps; main networks for every Blue company and every Anthem state; the patient tool had been failing most states
 - **Serving packs from a merged part.** `serve uhc:part-1` packs `reduced/2026-10/uhc/part-1` from the work bucket
   (prefilter streams it like a release): the 62 common codes for all 864 networks, every code for 20 main networks
