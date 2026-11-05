@@ -116,6 +116,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-04 21:30 CT [pipeline] UHC wave 22 facts green with the sub-sliced multi step (part 5: 23.4 nets per block, 576 sub-slices, 35 min); wave 23 green; both had lost-runner failures re-run within minutes by the new after-failure dispatch. Wave 24 reducing, waves 25-26 mapping; part 2 (13-24) next.
 - 2026-11-04 18:10 CT [pipeline] Safety check: UHC wave 22 fact reduce out of memory in 11 of 16 parts twice (facts repeated across many blocks); multi step now sub-sliced by fan-out; wave 22 facts re-requested fresh (queued behind attempt 3).
 - 2026-11-04 13:50 CT [pipeline] Safety check: UHC wave 22 reducing (attempt 2; attempt 1 predates the after-failure hook, re-run came from a map run's next step); waves 23-24 mapped (shards 266, 285 re-mapped after failed files). Part 2 next after wave 24.
 - 2026-11-04 12:00 CT [app] Claim parts (1) and (3) done. BCBS: every code for 33 main network families (TN, IL,
