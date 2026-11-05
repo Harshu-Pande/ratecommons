@@ -116,6 +116,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-05 09:40 CT [pipeline] Safety check: UHC wave 28 reducing (attempt 2), waves 30-31 mapping; shards 326/342 re-mapped. No action needed.
 - 2026-11-05 05:40 CT [pipeline] Safety check: UHC waves 26, 27 reduced (27 after an automatic re-run); shards 326, 342 re-mapping after failed files; wave 28 next. No action needed.
 - 2026-11-05 01:35 CT [pipeline] Safety check: UHC part 2 (waves 13-24) merged in 28 min: 864 files = the plan's 864 for shards 144-287, none missing, 30.1 GB; waves 13-24 deleted. Waves 24, 25 green (lost-runner re-runs automatic). UHC reduced now 118.7 GB for 25 waves (part-1 70.1, part-2 30.1, wave-25 18.5). Wave 26 waits for shard 308 (mapping with wave 27).
 - 2026-11-04 21:30 CT [pipeline] UHC wave 22 facts green with the sub-sliced multi step (part 5: 23.4 nets per block, 576 sub-slices, 35 min); wave 23 green; both had lost-runner failures re-run within minutes by the new after-failure dispatch. Wave 24 reducing, waves 25-26 mapping; part 2 (13-24) next.
