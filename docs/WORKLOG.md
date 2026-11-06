@@ -3,6 +3,11 @@
 Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] what (files or runs)`.
 
 ## Claimed
+- 2026-11-05 18:15 CT [app] Worker boards for helpers' forks (first: Seyun): an assignment file per helper that Harshu
+  edits any time, read every 15 minutes by the helper's fork; compute runs on the fork's GitHub Actions with no AI,
+  AI tasks run in the fork with a turn cap on the helper's Claude subscription. Files: workers/ (new),
+  .github/workflows/worker.yml, worker-job.yml, worker-ai.yml (new; they never run in this repository),
+  docs/ONBOARDING.md, fork guards on shop/cloud/serve. Compute kinds (map, reduce, kaggle) are the pipeline's: see Requests.
 - 2026-11-03 11:30 CT [app] (parts 1 and 3 done 2026-11-04, see Done) (1) Every code for each Blue company's largest home networks and more Anthem families
   (main_networks in src/ticdata/serve_jobs.py, serve/cloud/shop runs). (2) UHC into the apps part by part: serving
   packs from reduced/2026-10/uhc/part-P as each part merges, labelled partial (serve_jobs.py pack for part sources,
