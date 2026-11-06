@@ -23,6 +23,7 @@ run-name: "serve ${{ github.event.inputs.request || github.event.head_commit.mes
 
 jobs:
   args:
+    if: github.repository == 'Harshu-Pande/ratecommons'  # never in a helper's fork (workers/README.md)
     runs-on: ubuntu-latest
     outputs:
       shared: ${{ steps.a.outputs.shared }}
@@ -55,7 +56,7 @@ jobs:
 
   pack:
     needs: [args, shared]
-    if: always() && needs.args.outputs.packs != '[]' && needs.shared.result != 'failure'
+    if: always() && needs.args.result == 'success' && needs.args.outputs.packs != '[]' && needs.shared.result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 355   # GitHub allows 360; BCBS with every Blue company's main network took >300 once
     strategy:

@@ -3,6 +3,18 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-05: helpers get work from a board file, not from messages
+- Harshu wants to change a helper's work daily (UHC files one day, Molina or the website the next) without asking the
+  helper, and without spending the helper's Claude usage on coordination. So a helper's fork runs one scheduled
+  workflow (`worker`, every 15 min, no AI) that reads `workers/<user>.yml` on main and starts each new item once.
+  Compute items run `workers/kinds/<kind>.sh` on the fork's runners; AI items run Claude Code in the fork on the
+  helper's subscription (claude-code-action with CLAUDE_CODE_OAUTH_TOKEN, Sonnet, --max-turns, ai_per_day cap).
+- Every run checks out Harshu's main, so forks never need syncing (a fork's GITHUB_TOKEN cannot push workflow
+  changes anyway). Run names are item ids, so the fork's own run list is the only state; removing an item cancels
+  its compute. AI results leave as a patch artifact, reviewed and landed by Harshu's sessions: helpers need no push
+  rights, and nothing of theirs reaches main unreviewed.
+- Public repositories pay no Actions minutes; a second account adds concurrent runners (20 free, 40 with Pro).
+
 ## 2026-11-03 (evening): patient tool build slices every large join by provider group
 - With the group slices in the offers step and the clinician step, Michigan and Oklahoma build (Michigan now shows
   Blue Cross in Detroit, Ann Arbor and Grand Rapids). Florida and California still filled the 88 GB disk one step

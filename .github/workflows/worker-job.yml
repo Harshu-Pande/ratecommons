@@ -1,0 +1,53 @@
+name: worker-job
+# One compute item from a helper's board (workers/README.md), started by worker.yml. Runs only in a helper's fork,
+# on the fork's runners, from a fresh checkout of Harshu-Pande/ratecommons main: workers/kinds/<kind>.sh.
+run-name: "${{ inputs.id }}"
+on:
+  workflow_dispatch:
+    inputs:
+      id: { required: true }
+      kind: { required: true }
+      request: { required: false, default: "" }
+      parallel: { required: false, default: "1" }
+
+permissions:
+  contents: read
+  id-token: write   # Hugging Face trusted publishing, once the fork is a trusted publisher
+
+jobs:
+  plan:
+    if: github.repository != 'Harshu-Pande/ratecommons'
+    runs-on: ubuntu-latest
+    outputs:
+      parts: ${{ steps.p.outputs.parts }}
+    steps:
+      - id: p
+        env: { N: "${{ inputs.parallel }}" }
+        run: python3 -c "import os; n=max(1, min(int(os.environ['N'] or 1), 40)); print(f'parts={list(range(n))}')" >> "$GITHUB_OUTPUT"
+
+  run:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        part: ${{ fromJson(needs.plan.outputs.parts) }}
+    env:
+      PYTHONUNBUFFERED: "1"
+      RC_ID: ${{ inputs.id }}
+      RC_KIND: ${{ inputs.kind }}
+      RC_REQUEST: ${{ inputs.request }}
+      RC_PART: ${{ matrix.part }}
+      RC_PARTS: ${{ inputs.parallel }}
+      RC_WORKER: ${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { repository: Harshu-Pande/ratecommons, ref: main }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - name: kind
+        run: |
+          case "$RC_KIND" in ""|*[!a-z0-9-]*) echo "bad kind '$RC_KIND'"; exit 1;; esac
+          test -f "workers/kinds/$RC_KIND.sh" || { echo "no kind '$RC_KIND' in workers/kinds/ on main"; exit 1; }
+          bash "workers/kinds/$RC_KIND.sh"

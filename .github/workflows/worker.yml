@@ -1,0 +1,27 @@
+name: worker
+# Runs only in a helper's fork (workers/README.md). Every 15 minutes it reads workers/<fork owner>.yml from
+# Harshu-Pande/ratecommons main and starts new items as worker-job / worker-ai runs in the fork. Uses no AI.
+# In a fork, GitHub keeps scheduled workflows off until the owner enables this one in the Actions tab.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write   # start and cancel this fork's worker-job / worker-ai runs
+  contents: read
+
+concurrency: { group: worker-poll, cancel-in-progress: false }
+
+jobs:
+  poll:
+    if: github.repository != 'Harshu-Pande/ratecommons'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with: { repository: Harshu-Pande/ratecommons, ref: main, sparse-checkout: workers }
+      - run: pip install -q pyyaml
+      - run: python3 workers/worker.py
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

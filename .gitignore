@@ -9,3 +9,4 @@ kaggle/smoke/kernel-metadata.json
 build/
 dist/
 *.egg-info/
+workers/handoff/

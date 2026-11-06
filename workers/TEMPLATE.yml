@@ -1,0 +1,22 @@
+# Assignment board for one helper. Copy to workers/<their GitHub username, lowercase>.yml and edit any time.
+# The helper's fork reads this file every 15 minutes (workers/README.md) and starts each new item once.
+#   - Remove an item (or set paused: true) and its running compute is cancelled at the next check.
+#   - Items run in list order; ids must be unique and never reused (letters, digits, . _ -).
+#   - compute items use the fork's GitHub Actions only (no AI). ai items use the helper's Claude subscription.
+
+paused: false
+max_running: 2        # compute items running at once (each can fan out to `parallel` runners)
+ai_per_day: 2         # AI items started per 24 hours (the helper uses Claude for other things too)
+retries: 1            # times a failed item is started again
+
+compute:
+  # - id: smoke-1
+  #   kind: smoke               # a script in workers/kinds/<kind>.sh
+  #   request: "hello"          # handed to the script as RC_REQUEST
+  #   parallel: 2               # runners, 1 to 40; each gets RC_PART (0..parallel-1) and RC_PARTS
+
+ai:
+  # - id: 2026-11-06-example
+  #   budget: small             # small = 25 turns, medium = 60, large = 120 (Sonnet); or set turns: and model:
+  #   task: |
+  #     What to do, written as you would to a person. Say what "done" looks like.

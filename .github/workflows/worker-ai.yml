@@ -1,0 +1,56 @@
+name: worker-ai
+# One AI item from a helper's board (workers/README.md), started by worker.yml. Runs only in a helper's fork:
+# Claude Code on the helper's subscription (secret CLAUDE_CODE_OAUTH_TOKEN), Sonnet, capped turns, on a fresh
+# checkout of Harshu-Pande/ratecommons main. Claude commits locally; the commits leave as a patch artifact
+# ("handoff") for Harshu's sessions to review. Nothing is pushed.
+run-name: "${{ inputs.id }}"
+on:
+  workflow_dispatch:
+    inputs:
+      id: { required: true }
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  ai:
+    if: github.repository != 'Harshu-Pande/ratecommons'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RC_ID: ${{ inputs.id }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { repository: Harshu-Pande/ratecommons, ref: main }
+      - name: prompt
+        id: t
+        run: |
+          pip install -q pyyaml
+          git config user.name "${{ github.repository_owner }} (worker)"
+          git config user.email "${{ github.repository_owner }}@users.noreply.github.com"
+          echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git checkout -b "worker/$RC_ID"
+          python3 workers/ai_task.py "${{ github.repository_owner }}" "$RC_ID"
+          { echo "prompt<<RC_PROMPT_END"; cat "$RUNNER_TEMP/prompt.md"; echo "RC_PROMPT_END"; } >> "$GITHUB_OUTPUT"
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-actions[bot]"
+          prompt: ${{ steps.t.outputs.prompt }}
+          claude_args: >-
+            --model ${{ steps.t.outputs.model }}
+            --max-turns ${{ steps.t.outputs.turns }}
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,WebSearch,WebFetch"
+      - name: handoff
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/handoff"
+          git add -A -- . ':!workers/out/summary.md' && git commit -q -m "[worker] $RC_ID: uncommitted work" || true
+          git format-patch "${{ steps.t.outputs.base }}..HEAD" -o "$RUNNER_TEMP/handoff" || true
+          cp workers/out/summary.md "$RUNNER_TEMP/handoff/summary.md" 2>/dev/null || echo "(no summary written)" > "$RUNNER_TEMP/handoff/summary.md"
+          { echo "### $RC_ID"; echo; cat "$RUNNER_TEMP/handoff/summary.md"; echo; echo '```'; git log --oneline "${{ steps.t.outputs.base }}..HEAD"; git diff --stat "${{ steps.t.outputs.base }}..HEAD"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: handoff, path: "${{ runner.temp }}/handoff", retention-days: 30 }

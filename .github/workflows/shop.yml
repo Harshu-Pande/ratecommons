@@ -19,6 +19,7 @@ run-name: "shop ${{ github.event.inputs.request || github.event.head_commit.mess
 
 jobs:
   args:
+    if: github.repository == 'Harshu-Pande/ratecommons'  # never in a helper's fork (workers/README.md)
     runs-on: ubuntu-latest
     outputs:
       groups: ${{ steps.a.outputs.groups }}

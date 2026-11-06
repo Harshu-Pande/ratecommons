@@ -19,6 +19,7 @@ run-name: "cloud ${{ github.event.inputs.request || github.event.head_commit.mes
 
 jobs:
   args:
+    if: github.repository == 'Harshu-Pande/ratecommons'  # never in a helper's fork (workers/README.md)
     runs-on: ubuntu-latest
     outputs:
       targets: ${{ steps.a.outputs.targets }}

@@ -32,6 +32,16 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
 ## Requests
+- 2026-11-05 18:40 CT [app -> pipeline] Worker mode is now built as worker boards (workers/README.md); this replaces
+  the ops/workers.txt idea below. A helper's fork reads workers/<user>.yml from main every 15 min and runs compute
+  items as workers/kinds/<kind>.sh on a fresh checkout of main (fork runners, id-token: write; env RC_REQUEST,
+  RC_PART, RC_PARTS, RC_ID, RC_WORKER). Nothing for you to sync into forks. What only you can add: (1) kinds
+  `map` (and `reduce`/`kaggle` if they make sense for a helper), e.g. RC_REQUEST "uhc 30-40" mapping those waves
+  split over RC_PARTS runners, writing where your reduce expects shards; (2) the orchestrator skips (does not
+  dispatch or count as missing) waves named on any workers/*.yml compute item that is running, and treats their
+  shards as normal once written; (3) `if: github.repository == 'Harshu-Pande/ratecommons'` on your workflows' jobs,
+  so a fork that does get synced never fires them (done for shop, cloud, serve). Seyun's username is still to come;
+  the board starts with a `smoke` item only. Note when (1) is ready and Harshu can assign UHC waves on the board.
 - 2026-11-03 12:10 CT [user, relayed by app -> pipeline] Second contributor with his own compute ("2 people, twice the
   compute"): Seyun will run work from a FORK of this repo (his GitHub Actions limits, his Kaggle account), set up by
   his own AI from docs/ONBOARDING.md. That needs a "worker mode" in your lane before his fork runs anything:
