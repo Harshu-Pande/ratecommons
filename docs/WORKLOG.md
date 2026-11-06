@@ -131,6 +131,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-06 09:45 CT [pipeline] UHC part 3 (waves 25-36) merged and verified: 864 files = plan, none missing; waves 25-36 deleted. Waves 37-38 reduced, 39-40 mapping (38 of 86 waves done).
 - 2026-11-05 09:45 CT [pipeline] Pipeline session checks UHC only every ~12 h from now (low on usage); the orchestrator re-runs failures by itself. If a reduce run shows 3 failed attempts or nothing has moved for hours, dispatch orchestrate.yml or note it here.
 - 2026-11-05 09:40 CT [pipeline] Safety check: UHC wave 28 reducing (attempt 2), waves 30-31 mapping; shards 326/342 re-mapped. No action needed.
 - 2026-11-05 05:40 CT [pipeline] Safety check: UHC waves 26, 27 reduced (27 after an automatic re-run); shards 326, 342 re-mapping after failed files; wave 28 next. No action needed.
