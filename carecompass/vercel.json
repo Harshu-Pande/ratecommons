@@ -1,13 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
-    { "source": "/api/tool/:name", "destination": "https://ratecommons-cloud.vercel.app/api/tool/:name" },
-    { "source": "/api/tools", "destination": "https://ratecommons-cloud.vercel.app/api/tools" },
-    { "source": "/api/health", "destination": "https://ratecommons-cloud.vercel.app/api/health" },
-    { "source": "/mcp", "destination": "https://ratecommons-cloud.vercel.app/mcp" },
-    { "source": "/mcp/", "destination": "https://ratecommons-cloud.vercel.app/mcp/" },
-    { "source": "/gradio_api/mcp/", "destination": "https://ratecommons-cloud.vercel.app/gradio_api/mcp/" },
-    { "source": "/data/shop/:path*", "destination": "/api/shopdata?p=:path*" },
+    { "source": "/api/tool/:name", "destination": "https://harshu-pande-ratecommons-api.hf.space/api/tool/:name" },
+    { "source": "/api/tools", "destination": "https://harshu-pande-ratecommons-api.hf.space/api/tools" },
+    { "source": "/api/health", "destination": "https://harshu-pande-ratecommons-api.hf.space/api/health" },
+    { "source": "/api/status", "destination": "https://harshu-pande-ratecommons-api.hf.space/api/status" },
+    { "source": "/mcp", "destination": "https://harshu-pande-ratecommons-api.hf.space/mcp" },
+    { "source": "/mcp/", "destination": "https://harshu-pande-ratecommons-api.hf.space/mcp/" },
+    { "source": "/gradio_api/mcp/", "destination": "https://harshu-pande-ratecommons-api.hf.space/gradio_api/mcp/" },
+    { "source": "/data/shop/:path*", "destination": "https://harshu-pande-ratecommons-api.hf.space/data/shop/:path*" },
     { "source": "/((?!api/|ocr/|assets/).*)", "destination": "/index.html" }
   ],
   "headers": [

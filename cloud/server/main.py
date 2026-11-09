@@ -68,7 +68,7 @@ if os.path.isdir(SITE):
         if not f:
             return Response("null", 404, media_type="application/json", headers={"Cache-Control": "public, max-age=3600"})
         return FileResponse(f, media_type="application/json; charset=utf-8",
-                            headers={"Cache-Control": "public, max-age=3600, stale-while-revalidate=604800", **SEC})
+                            headers={"Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800", **SEC})
 
     @app.get("/{path:path}")
     async def site(path: str, request: Request):
