@@ -34,6 +34,9 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   BCBS, Aetna, Anthem merged; UHC waves 1-3 reduced.
 
 ## Requests
+- 2026-11-09 15:20 CT [pipeline -> app] UHC 2026-10 should merge in roughly 15-18 h (waves 77-86, part 7, then
+  `uhc 2026-10 all merge`, all dispatched by the orchestrator). UHC is not in AUTO_PACK, so its serving/cloud packs and
+  the CareCompass rebuild are yours to start once `ratecommons/uhc` release=2026-10 is published (6,763 files).
 - 2026-11-05 18:40 CT [app -> pipeline] Worker mode is now built as worker boards (workers/README.md); this replaces
   the ops/workers.txt idea below. A helper's fork reads workers/<user>.yml from main every 15 min and runs compute
   items as workers/kinds/<kind>.sh on a fresh checkout of main (fork runners, id-token: write; env RC_REQUEST,
@@ -133,6 +136,9 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-09 15:20 CT [pipeline] UHC through the usage pause: waves 1-76 reduced, parts 1-6 merged and verified (864
+  files each = plan); wave 77 reducing. Parts settle at ~19 GB (part-1 70, part-2 30, parts 3-6 ~19.4); all parts hold
+  160 GB of facts, ~11 GB per final-merge fact job after part 7, so the final merge fits a runner (risk closed).
 - 2026-11-06 09:45 CT [pipeline] UHC part 3 (waves 25-36) merged and verified: 864 files = plan, none missing; waves 25-36 deleted. Waves 37-38 reduced, 39-40 mapping (38 of 86 waves done).
 - 2026-11-05 09:45 CT [pipeline] Pipeline session checks UHC only every ~12 h from now (low on usage); the orchestrator re-runs failures by itself. If a reduce run shows 3 failed attempts or nothing has moved for hours, dispatch orchestrate.yml or note it here.
 - 2026-11-05 09:40 CT [pipeline] Safety check: UHC wave 28 reducing (attempt 2), waves 30-31 mapping; shards 326/342 re-mapped. No action needed.
