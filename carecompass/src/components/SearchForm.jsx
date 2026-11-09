@@ -8,7 +8,7 @@ import { useProfile } from '../lib/store'
 import { PROC_BY_ID, loadProducts, zipToPoint } from '../lib/data'
 import { PAYER_NAMES } from '../lib/format'
 
-export const PAYERS = ['aetna', 'anthem', 'bcbs', 'cigna', 'uhc']
+export const PAYERS = ['aetna', 'anthem', 'bcbs', 'cigna', 'uhc', 'medicare']
 
 export function searchUrl(s) {
   const q = new URLSearchParams()

@@ -15,6 +15,10 @@ async function getJSON(path) {
 }
 
 export const loadProducts = () => getJSON('meta/products.json')
+// Original Medicare's public 2026 rates (built by sites.medicare_table): opps[code] = [national rate, coinsurance, status],
+// pfs[state][code] = [global non-facility, professional in a facility, technical]
+let MCR = null
+export const loadMedicare = () => getJSON('meta/medicare.json').then((t) => (MCR = t))
 export const loadZip3Index = () => getJSON('meta/zip3.json')
 
 export async function zipToPoint(zip) {
@@ -26,7 +30,7 @@ export async function zipToPoint(zip) {
 
 /** Offer files near a point: every ZIP3 area whose centre is within radius + a margin. */
 export async function loadPlaces(procId, origin, radius) {
-  const idx = await loadZip3Index()
+  const [idx] = await Promise.all([loadZip3Index(), loadMedicare()])
   if (!idx || !origin) return []
   const want = []
   for (const [z3, [lat, lng, r3, states]] of Object.entries(idx)) {
@@ -85,8 +89,28 @@ export function priceAt(place, proc, sel) {
   return r
 }
 
+function medicarePrice(place, proc, patient) {
+  if (!MCR) return null
+  const pf = MCR.pfs[place.s] || MCR.pfs.US || {}
+  const code = proc.kind === 'visit' && patient === 'new' && proc.codes.length > 1 ? proc.codes[1] : proc.codes[0]
+  const p = pf[code]
+  const o = MCR.opps[code]
+  const notes = [`Original Medicare's published ${MCR.year} rate. You usually pay 20% after the yearly Part B deductible ($${MCR.part_b_deductible}); many screenings are $0. A Medigap or retiree plan may pay that 20%.`]
+  const hosp = place.kind === 'hospital'
+  if (proc.kind === 'imaging' && hosp && o && !['A', 'B', 'E1', 'E2', 'M'].includes(o[2])) {
+    notes.push("The hospital's facility fee is Medicare's national outpatient rate; each hospital's is adjusted for local wages, usually within about 15%.")
+    const bills = [{ key: 'facility', label: 'Hospital bill (facility fee)', short: 'facility', allowed: o[0], from: place.n }]
+    if (p?.[1]) bills.push({ key: 'professional', label: 'Radiologist bill (reading fee)', short: 'radiologist', allowed: p[1], from: 'the radiology group' })
+    return { kind: 'split', total: bills.reduce((s, b) => s + b.allowed, 0), badge: 'c', bills, notes, medicare: true, partial: !p?.[1] }
+  }
+  if (!p?.[0]) return null
+  return { kind: 'single', total: p[0], badge: 'c', notes, medicare: true,
+    bills: [{ key: 'base', label: proc.kind === 'imaging' ? 'Scan and reading' : proc.short, short: proc.short.toLowerCase(), allowed: p[0] }] }
+}
+
 function priceAt0(place, proc, sel) {
   const { payer, product, showHidden, patient = 'returning' } = sel
+  if (payer === 'medicare') return medicarePrice(place, proc, patient)
   const ok = (o) => o[PAYER] === payer && (product == null || (o[PRODS] || []).includes(product))
     && (o[BADGE] === 'c' || o[BADGE] === 'l' || (showHidden && o[BADGE] === 'h'))
   const offers = (place.o || []).filter(ok)

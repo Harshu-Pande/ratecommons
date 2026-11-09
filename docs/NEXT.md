@@ -1,5 +1,17 @@
 # Build plan from day 1
 
+## Patient data rebuild (started 2026-11-09; see DECISIONS 2026-11-09 evening)
+
+| Track | Done | Next |
+| --- | --- | --- |
+| Site registry (`sites.py`, sites.yml) | National registry and capability evidence; shop/v1 -> shop/v2 clean for every state | App reads shop/v2 (api/shopdata.js); random-sample audit of site precision per capability (web check of 100 sites each); add FDA MQSA mammography list and CLIA labs as sources |
+| Hospital price files (`hospitals.py`) | cms-hpt.txt crawl (4,242 locations / 3,516 files); JSON v2/v3 and tall-CSV normalizers; St. Louis pilot facility fees in src/ticdata/data/hospital_fees.json | Wide-CSV layout; attach files to sites by type_2_npi -> NPPES address (not names); national download/normalize on Actions into a `ratecommons/hospitals` dataset (needs the Trusted Publisher entry); triangulate with TiC (EIN + type-2 NPI) |
+| Facility fees from payer files | none | Category rates (UHC CSTM CAT/MRI per diems, Cigna per diems) via a crosswalk; % of charges x hospital gross charge |
+| Original Medicare | data located: PFS (have), OPPS Addendum B Oct 2026 (cms.gov/files/zip/October-2026-OPPS-Addendum-B.zip) | `medicare` payer in the app: hospital = OPPS (wage-adjusted) + PFS facility pro; office/IDTF = PFS non-facility; patient 20% after the $283 Part B deductible |
+| Medicare Advantage / Medicaid | hospital files carry MA (all) and Medicaid (Mercy) plans | MA: hospital-file rates + PBP copays + Plan Finder / FHIR directories; Medicaid: "who accepts it" from MCO directories, MO HealthNet fee schedule |
+| Ghost rates (professional) | sites + capability remove most | per TIN x site plausibility: out-of-state reading groups, Medicare billing of the code family by the TIN's clinicians at that site |
+
+
 Rule of the day: never wait on a running job. Start the long job first, then write
 code for another track until it reports to `datasets/ratecommons/ops`.
 

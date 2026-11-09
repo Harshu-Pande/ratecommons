@@ -329,6 +329,46 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
     return d
 
 
+ADDENDUM_B = "https://www.cms.gov/files/zip/October-2026-OPPS-Addendum-B.zip"
+
+
+def medicare_table(work: str) -> dict:
+    """Original Medicare 2026 amounts for the catalog's codes: OPPS national payment (hospital outpatient facility fee)
+    from Addendum B, and physician fee schedule amounts by state (global non-facility, 26 in a facility, TC)."""
+    import io
+    import zipfile
+
+    import duckdb
+    import requests
+
+    from .shop import _fetch
+    from .shopcatalog import catalog
+
+    codes = sorted({c for p in catalog() for k in ("codes", "alt", "addon") for c in p.get(k, [])})
+    opps = {}
+    z = zipfile.ZipFile(io.BytesIO(requests.get(ADDENDUM_B, timeout=300).content))
+    txt = [n for n in z.namelist() if n.endswith(".txt")][0]
+    for line in z.read(txt).decode("cp1252", errors="replace").splitlines():
+        f = line.split("\t")
+        if len(f) > 7 and f[0] in codes and f[5].startswith("$"):
+            opps[f[0]] = [float(f[5][1:].replace(",", "")), float(f[7][1:].replace(",", "")) if f[7].startswith("$") else None, f[2]]
+    pfs = _fetch(f"{CLOUD}/shared/medicare.parquet", f"{work}/pfs.parquet")
+    con = duckdb.connect()
+    by: dict = {}
+    for st, code, mod, nf, fa in con.execute(f"""SELECT state, hcpcs, coalesce(modifier, ''), nonfacility_amount, facility_amount
+                                               FROM '{pfs}' WHERE hcpcs IN ({", ".join(f"'{c}'" for c in codes)})""").fetchall():
+        r = by.setdefault(st, {}).setdefault(code, [None, None, None])
+        if mod == "":
+            r[0] = nf if nf else None
+            r[1] = r[1] if r[1] is not None else (fa or None)  # codes without a 26 split: the facility amount
+        elif mod == "26":
+            r[1] = fa or nf
+        elif mod == "TC":
+            r[2] = nf
+    return {"year": 2026, "part_b_deductible": 283, "opps": opps, "pfs": by,
+            "sources": ["CMS OPPS Addendum B, October 2026", "CMS Physician Fee Schedule 2026 (state = mean locality GPCI)"]}
+
+
 def _fetch_many_safe(pairs, threads=16) -> dict:
     from concurrent.futures import ThreadPoolExecutor
 
@@ -404,6 +444,10 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
         os.makedirs(f"{out}/meta", exist_ok=True)
         for f in ("zip3.json", "products.json"):
             _fetch(f"{base}/{src_prefix}/meta/{f}", f"{out}/meta/{f}")
+        pr = json.load(open(f"{out}/meta/products.json"))
+        pr["medicare"] = []  # Original Medicare: one national program, no networks to choose
+        json.dump(pr, open(f"{out}/meta/products.json", "w"))
+        json.dump(medicare_table(work), open(f"{out}/meta/medicare.json", "w"), separators=(",", ":"))
     res = {"stats": stats, "per_proc": per_proc, "seconds": round(time.time() - t0)}
     json.dump(res, open(f"{out}/clean-{'-'.join(sorted(want)) if want else 'all'}.json", "w"))
     if upload_to:
