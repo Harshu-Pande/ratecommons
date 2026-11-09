@@ -1,8 +1,11 @@
 """RateCommons cloud API: JSON tools (/api/tool/<name>), MCP over streamable HTTP (/mcp), and the web UI (/)."""
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
+import threading
+from collections import OrderedDict
 import os
 import re
 import sys
@@ -14,6 +17,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from fastapi import FastAPI, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import HTMLResponse, JSONResponse, Response  # noqa: E402
+from starlette.concurrency import run_in_threadpool  # noqa: E402
 
 import _rc as E  # noqa: E402
 from _tooldocs import DOCS  # noqa: E402
@@ -65,6 +69,39 @@ def _call(name: str, args: dict):
     return res
 
 
+# Identical questions are answered from memory: the data only changes when a pack is rebuilt (the server restarts
+# then). AI assistants and the website often repeat a call (retries, re-renders, two tools needing the same rows).
+_RCACHE: "OrderedDict[str, tuple[float, object]]" = OrderedDict()
+_RCACHE_N = int(os.environ.get("RC_RESULT_CACHE", "512"))
+_RCACHE_TTL = float(os.environ.get("RC_RESULT_TTL", "21600"))
+_rlock = threading.Lock()
+# Queries run in worker threads, at most RC_CONCURRENCY at a time; the rest wait their turn instead of all slowing
+# down together (a 2-vCPU server serves 3 at once better than 10).
+_SLOTS = threading.BoundedSemaphore(int(os.environ.get("RC_CONCURRENCY", "3")))
+
+
+def _cached_call(name: str, args: dict):
+    key = name + json.dumps(args or {}, sort_keys=True, default=str)
+    now = time.time()
+    with _rlock:
+        hit = _RCACHE.get(key)
+        if hit and now - hit[0] < _RCACHE_TTL:
+            _RCACHE.move_to_end(key)
+            return hit[1]
+    with _SLOTS:
+        res = _json(_call(name, args))
+    if len(json.dumps(res, default=str)) < 4_000_000:
+        with _rlock:
+            _RCACHE[key] = (now, res)
+            while len(_RCACHE) > _RCACHE_N:
+                _RCACHE.popitem(last=False)
+    return res
+
+
+async def _acall(name: str, args: dict):
+    return await run_in_threadpool(_cached_call, name, args)
+
+
 def _json(o):
     return json.loads(json.dumps(o, default=lambda x: x.hex() if isinstance(x, (bytes, bytearray)) else str(x)))
 
@@ -84,8 +121,8 @@ async def api_tool(name: str, request: Request):
         body = {}
     t = time.time()
     try:
-        res = _call(name, body)
-        out = {"ok": True, "rows": _json(res)} if isinstance(res, list) else {"ok": True, **_json(res)}
+        res = await _acall(name, body)
+        out = {"ok": True, "rows": res} if isinstance(res, list) else {"ok": True, **res}
         out["seconds"] = round(time.time() - t, 2)
         return JSONResponse(out)
     except Exception as e:
@@ -97,7 +134,21 @@ async def api_tool(name: str, request: Request):
 SERVER = {"name": "RateCommons", "version": "2.0"}
 
 
-def _rpc(msg: dict):
+async def _arpc(msg: dict):
+    """tools/call runs in a worker thread (cached, limited); everything else is instant."""
+    if msg.get("method") == "tools/call" and msg.get("id") is not None:
+        p = msg.get("params") or {}
+        if p.get("name") in TOOLS:
+            try:
+                res = await _acall(p.get("name"), p.get("arguments") or {})
+                return _rpc(msg, res)
+            except Exception as e:
+                return {"jsonrpc": "2.0", "id": msg.get("id"),
+                        "result": {"content": [{"type": "text", "text": f"Error: {e}"}], "isError": True}}
+    return _rpc(msg)
+
+
+def _rpc(msg: dict, done=None):
     mid, method = msg.get("id"), msg.get("method")
     if mid is None:  # notification
         return None
@@ -115,7 +166,7 @@ def _rpc(msg: dict):
         if name not in TOOLS:
             return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"unknown tool {name}"}}
         try:
-            res = _json(_call(name, p.get("arguments") or {}))
+            res = done if done is not None else _json(_call(name, p.get("arguments") or {}))
             text = json.dumps(res, separators=(",", ":"))
             if len(text) > 120_000:
                 text = text[:120_000] + " ...(truncated; narrow the query)"
@@ -135,9 +186,9 @@ async def mcp(request: Request):
     except Exception:
         return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}, 400)
     if isinstance(body, list):
-        out = [r for r in (_rpc(m) for m in body) if r is not None]
+        out = [r for r in await asyncio.gather(*(_arpc(m) for m in body)) if r is not None]
         return JSONResponse(out) if out else Response(status_code=202)
-    r = _rpc(body)
+    r = await _arpc(body)
     return JSONResponse(r) if r is not None else Response(status_code=202)
 
 
@@ -149,7 +200,19 @@ def mcp_get():
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "data": E.BASE}
+    return {"ok": True, "data": E.BASE, "warm": sorted(E._meta), "cached_answers": len(_RCACHE)}
+
+
+@app.get("/api/status")
+async def status():
+    """data_status for the website, cacheable by any CDN (it only changes when a pack is rebuilt)."""
+    res = await _acall("data_status", {})
+    return JSONResponse({"ok": True, **res}, headers={"Cache-Control": "public, max-age=300, s-maxage=3600, "
+                                                                     "stale-while-revalidate=86400"})
+
+
+if os.environ.get("RC_WARM") == "1":  # persistent server: load every payer's metadata at start, not on a user's time
+    threading.Thread(target=E.payers_loaded, daemon=True).start()
 
 
 @app.get("/", response_class=HTMLResponse)

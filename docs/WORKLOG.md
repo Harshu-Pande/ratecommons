@@ -3,6 +3,8 @@
 Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] what (files or runs)`.
 
 ## Claimed
+- 2026-11-09 15:10 CT [app] INCIDENT: Vercel Fluid Active CPU 4h28m/4h (ratecommons-cloud). Engine CPU cuts (cloud/api)
+  and a persistent query server on a Hugging Face Docker Space (cloud/server/); Vercel keeps static site + rewrites.
 - 2026-11-05 18:15 CT [app] Worker boards for helpers' forks (first: Seyun): an assignment file per helper that Harshu
   edits any time, read every 15 minutes by the helper's fork; compute runs on the fork's GitHub Actions with no AI,
   AI tasks run in the fork with a turn cap on the helper's Claude subscription. Files: workers/ (new),

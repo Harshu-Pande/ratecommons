@@ -20,10 +20,13 @@ import httpx
 
 BASE = os.environ.get("RC_DATA_URL", "https://huggingface.co/buckets/ratecommons/work/resolve/serve/v2").rstrip("/")
 CACHE = os.environ.get("RC_CACHE", "/tmp/rc-cache")
+SCRATCH = os.environ.get("RC_SCRATCH", "/tmp")  # DuckDB spill and run_sql work files
+TEMP_MAX = os.environ.get("RC_TEMP_MAX", "150MB")  # DuckDB spill per connection (a Vercel function has 500 MB of /tmp)
 CACHE_MAX = int(float(os.environ.get("RC_CACHE_GB", "0.33")) * 1e9)  # Vercel's /tmp holds 500 MB in all
 WIDE_ROWS_MAX = int(os.environ.get("RC_WIDE_ROWS_MAX", "40000000"))  # wide-list rows one question may load
 SLICE_ROWS = int(os.environ.get("RC_SLICE_ROWS", "600000"))  # price rows per slice of one query
 FILE_MAX = int(float(os.environ.get("RC_FILE_MB", "150")) * 1e6)  # one file larger than this is refused
+THREADS = int(os.environ.get("RC_THREADS", "4"))
 PAYERS = ["cigna", "aetna", "uhc", "bcbs", "anthem"]
 # BCBS of Tennessee network names by file prefix, from the descriptions in its index (Oct 2026)
 BCBST_NETWORKS = {"58A0": "Network S", "58B0": "Network P", "58M0": "Network E", "58Q0": "Network L",
@@ -128,10 +131,10 @@ def con() -> duckdb.DuckDBPyConnection:
             c = duckdb.connect()
             c.execute("SET enable_progress_bar = false")
             c.execute(f"SET memory_limit = '{os.environ.get('RC_MEMORY', '1700MB')}'")
-            c.execute("SET threads = 4")
+            c.execute(f"SET threads = {THREADS}")
             c.execute("SET preserve_insertion_order = false")
-            c.execute("SET temp_directory = '/tmp/rc-duck'")  # the function's working directory is read-only
-            c.execute("SET max_temp_directory_size = '150MB'")
+            c.execute(f"SET temp_directory = '{SCRATCH}/rc-duck'")  # the function's working directory is read-only
+            c.execute(f"SET max_temp_directory_size = '{TEMP_MAX}'")
             _con = c
         return _con.cursor()
 
@@ -305,6 +308,10 @@ def meta(p: str) -> dict | None:
             rn = fetch(f"{p}/networks.parquet")
             cur.execute(f"CREATE OR REPLACE TABLE realnet_{p} AS SELECT rnet, upper(network_id) AS network_id, product, "
                         f"file_names, plan_names FROM read_parquet('{rn}')")
+        # (network set, product) -> product number, computed once instead of in every query (Aetna: 4.8M rows,
+        # ~1.5 CPU-s of every Aetna question before 2026-11-09)
+        cur.execute(f"""CREATE OR REPLACE TABLE np_{p} AS SELECT ns, product, dense_rank() OVER (ORDER BY product)::INTEGER
+                        AS prid FROM (SELECT DISTINCT n.ns, l.product FROM ns_{p} n JOIN netlabel_{p} l USING (net))""")
         _meta[p] = m
     return _meta[p]
 
@@ -316,11 +323,10 @@ def payers_loaded() -> list[str]:
 
 
 def _payers(payer: str | None) -> list[str]:
-    have = payers_loaded()
     if not payer or payer.lower() in ("all", "any", ""):
-        return have
+        return payers_loaded()
     want = [x.strip().lower().replace("unitedhealthcare", "uhc").replace("united", "uhc") for x in payer.split(",")]
-    return [p for p in have if p in want]
+    return [p for p in PAYERS if p in want and meta(p)]  # load only the payers asked about
 
 
 def _st(state: str | None) -> str:
@@ -365,8 +371,13 @@ def _place_mask_sql(place: str, modifier: str = "") -> str:
 def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, city=None, zip_prefix=None,
           specialty=None, provider=None, billing_class=None, where: str = "true", select: str | None = None,
           group: str | None = None, limit: int | None = None, pg_where: str | None = None, copy_to: str | None = None,
-          by_product: bool = True):
-    """Rows (product, provider group, price) for codes in one state for one payer, optionally aggregated."""
+          by_product: bool = True, price_where: str | None = None):
+    """Rows (product, provider group, price) for codes in one state for one payer, optionally aggregated.
+
+    price_where: a filter on price columns only (negotiated_type, rate, billing_class, setting, modifiers, pos, ...),
+    applied to the price rows BEFORE they are expanded to provider groups. `where` is still applied at the end, so
+    price_where may be a superset filter; callers whose `where` is price-only pass it as both (2026-11-09: halves the
+    Aetna 99214 rows before the expensive set -> list -> group joins)."""
     if not meta(p):
         return None if copy_to else []
     cf = _code_files(p, codes, code_type)
@@ -440,12 +451,18 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
         nf = (f" AND (l.product ILIKE {w} OR l.label ILIKE {w} OR list_contains(list_transform(l.plan_names, z -> z ILIKE {w}), true)"
               f" OR list_contains(list_transform(l.file_names, z -> z ILIKE {w}), true))")
     bc = f" AND f.billing_class = {_lit(billing_class.lower())}" if billing_class else ""
+    if price_where and price_where.strip().lower() != "true":
+        bc += f" AND ({price_where})"
+    src = f"(SELECT * REPLACE (round(rate, 2) AS rate) FROM read_parquet({files!r}, union_by_name = true))"
     nets_sql = f"SELECT DISTINCT n.ns, l.product FROM ns_{p} n JOIN netlabel_{p} l USING (net) WHERE true {nf}"
     exact = _exact_networks(p, network) if network else None
+    plain_nets = not nf and not exact  # every network: use the precomputed product numbers
+    if plain_nets:
+        nets_sql = f"SELECT ns, product FROM np_{p}"
     if exact:  # an employer or plan name matched real networks: only the network sets holding them
         nets_sql = exact
     common = f"""
-    WITH f AS (SELECT * FROM read_parquet({files!r}, union_by_name = true) f WHERE true {bc}),
+    WITH f AS (SELECT * FROM {src} f WHERE true {bc}),
     nets AS ({nets_sql}),
     {"pv AS (" + pv + ")," if pv else ""}
     {"lq AS (" + locq + ")," if locq else ""}
@@ -462,7 +479,8 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
                   billing_class, setting, modifiers, pos, expiration FROM f),
     pr AS (SELECT DISTINCT ON (pid) pid, code, negotiated_type, rate, rate_raw, billing_class, setting, modifiers, pos,
                   expiration FROM fh),
-    np AS (SELECT ns, product, dense_rank() OVER (ORDER BY product)::INTEGER AS prid FROM nets),
+    np AS ({f"SELECT ns, product, prid FROM np_{p}" if plain_nets else
+            "SELECT ns, product, dense_rank() OVER (ORDER BY product)::INTEGER AS prid FROM nets"}),
 
 """
     def chunk(k: int, n: int) -> str:  # prices with pid % n = k: slices are disjoint, so their groups never overlap
@@ -478,7 +496,24 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
     nrows = con().execute(f"SELECT count(*) FROM read_parquet({files!r}, union_by_name = true)").fetchone()[0]
     n = max(1, min(64, nrows // SLICE_ROWS))
     bxsql = chunk(0, 1)
-    tmp = None
+    tmp = fht = None
+    if n > 1:
+        # Read, filter and hash the price rows ONCE into a table, keeping only provider sets present in this state;
+        # each slice then reads that table. (Before 2026-11-09 every slice re-read and re-hashed the whole national
+        # code file: Aetna 99214 in MO took 9 passes over 5.7M rows, 42 CPU-s; now one pass over the state's rows.)
+        fht = f"fh_{uuid.uuid4().hex[:12]}"
+        cur = con()
+        cur.execute(f"""CREATE TABLE {fht} AS SELECT ps, ns, hash(code, negotiated_type, round(rate, 2), rate_raw,
+                           billing_class, setting, modifiers, pos, expiration) AS pid, code, negotiated_type,
+                           round(rate, 2) AS rate, rate_raw, billing_class, setting, modifiers, pos, expiration
+                        FROM {src} f
+                        WHERE ps IN (SELECT DISTINCT ps FROM {S['pspli']}) {bc}""")
+        nrows = cur.execute(f"SELECT count(*) FROM {fht}").fetchone()[0]
+        n = max(1, min(64, nrows // SLICE_ROWS))
+        common = common.replace(
+            common[common.index("    fh AS ("):common.index("    pr AS (")],
+            f"    fh AS (SELECT * FROM {fht}),\n")
+        bxsql = chunk(0, 1)
     if n > 1:
         tmp = f"bx_{uuid.uuid4().hex[:12]}"
         cur = con()
@@ -500,8 +535,9 @@ def _rows(p: str, codes: list[str], state: str, code_type=None, network=None, ci
             return con().execute(f"COPY ({sql}) TO '{copy_to}' (FORMAT parquet, COMPRESSION zstd)").fetchone()[0]
         return _q(sql)
     finally:
-        if tmp:
-            con().execute(f"DROP TABLE IF EXISTS {tmp}")
+        for t in (tmp, fht):
+            if t:
+                con().execute(f"DROP TABLE IF EXISTS {t}")
 
 
 EXACT_MAX = 25  # real networks fetched for one exact-network question
@@ -630,7 +666,8 @@ def market_distribution(code, state, payer="all", network="", city="", zip_prefi
         where, sel = _per_pg_sql(place, modifier)
         return _for_payers(payer, lambda p: _rows(p, [code], state, None, network or None, city or None, zip_prefix or None,
                                                   specialty or None, None, billing_class or None, where=where, select=sel,
-                                                  group="payer, product, billing_class, setting, code, pg"))
+                                                  group="payer, product, billing_class, setting, code, pg",
+                                                  price_where=where))
     per = run(place)
     if not per and place == "office":  # surgeries are often priced only for facility places of service (Anthem 27447)
         per, place = run("any"), "any (no office-setting rate published)"
@@ -693,7 +730,7 @@ def rank_providers(codes, state="US", payer="cigna,uhc", specialty="", weights="
         if time.time() - t0 > 100:
             return [{"_skipped": f"{p}/{s}", "_state": s}]
         try:
-            return _rows(p, cs, s, where=where, pg_where=pg_where,
+            return _rows(p, cs, s, where=where, pg_where=pg_where, price_where=where,
                          select="payer, tin, any_value(provider) AS provider, any_value(specialty) AS specialty, code, "
                                 "median(rate) AS rate", group="payer, tin, code")
         except Exception as e:
@@ -777,7 +814,8 @@ def benchmark_provider(provider, codes, state, payer="all", specialty="", networ
         where, sel = _per_pg_sql(place, "")
         per = _for_payers(payer, lambda p: _rows(p, [c], state, None, network or None, None, None, specialty or None,
                                                  None, "professional", where=where, select=sel,
-                                                 group="payer, product, billing_class, setting, code, pg"))
+                                                 group="payer, product, billing_class, setting, code, pg",
+                                                 price_where=where))
         if not per:
             out.append({"code": c, "result": "no published rates in this state"})
             continue
@@ -1106,7 +1144,7 @@ def _rates_table(payers: str, states: str, codes: str, specialty: str = "", plac
         f = f"{out_dir}/{p}-{st}.parquet"
         try:
             cols = RATE_COLS.replace("payer, pg,", "payer, product, pg,") if by_product else RATE_COLS
-            n = _rows(p, cs, st, where=where, pg_where=pg_where, copy_to=f, select=f"'{st}' AS " + cols,
+            n = _rows(p, cs, st, where=where, pg_where=pg_where, copy_to=f, select=f"'{st}' AS " + cols, price_where=where,
                       network=network or None, by_product=by_product)
             if n:
                 total[0] += n
@@ -1146,15 +1184,15 @@ def run_sql(sql, max_rows=500):
     sb = duckdb.connect()
     sb.execute("SET enable_progress_bar = false")
     sb.execute(f"SET memory_limit = '{os.environ.get('RC_SQL_MEMORY', '1100MB')}'")
-    sb.execute("SET threads = 4")
-    os.makedirs("/tmp/rc-duck-sql", exist_ok=True)
-    sb.execute("SET temp_directory = '/tmp/rc-duck-sql'")
-    sb.execute("SET max_temp_directory_size = '120MB'")
+    sb.execute(f"SET threads = {THREADS}")
+    os.makedirs(f"{SCRATCH}/rc-duck-sql", exist_ok=True)
+    sb.execute(f"SET temp_directory = '{SCRATCH}/rc-duck-sql'")
+    sb.execute(f"SET max_temp_directory_size = '{os.environ.get('RC_SQL_TEMP_MAX', '120MB')}'")
     os.makedirs(CACHE, exist_ok=True)
     import shutil
     import uuid
 
-    work = os.path.realpath(f"/tmp/rc-sql/{uuid.uuid4().hex}")
+    work = os.path.realpath(f"{SCRATCH}/rc-sql/{uuid.uuid4().hex}")
     os.makedirs(work)
     sb.execute(f"SET allowed_directories = ['{os.path.realpath(CACHE)}/', '{work}/']")
     notes, built, pins = [], {}, []

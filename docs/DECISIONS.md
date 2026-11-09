@@ -3,6 +3,22 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-09: the query engine leaves Vercel functions; same queries cost 2-4x less CPU
+- Vercel Hobby paused-risk: Fluid Active CPU 4h 28m of 4h in the rolling 30 days, all on `ratecommons-cloud`; Nov 7
+  alone was 2h 24m from ~380 requests. A Hobby pause covers every project on the team, the window is rolling, and
+  Hobby gets one manual unblock. Nov 7 keeps the window over 4 h until ~Dec 7, so Vercel functions cannot carry queries.
+- Root causes, measured (local, CPU seconds): Aetna 99214 MO distribution 42 of the 45-49 CPU-s of an all-payer
+  question, because 2 GB memory forced 9 slices that each re-read and re-hashed all 5.7M national price rows; cold
+  instances loaded all five payers' metadata (3-5 CPU-s, 26 s on Vercel) and the website calls data_status on load;
+  run_sql with rc_rates(..., 'US') runs up to 255 joins.
+- Fixes (answers byte-identical on 99214 MO all, 70553 MO all, Aetna 99213 TX): price filters pushed below the
+  provider expansion (`price_where`), price rows hashed once into a table when slicing, (network set, product) numbering
+  precomputed per payer, payers loaded only when asked about. 99214 MO all: 49 -> 24 CPU-s at Vercel sizes, 11 CPU-s
+  unsliced; 70553: 17 -> 5; Aetna 99213 TX: 67 -> 19.
+- Serving: one persistent server (cloud/server/, Hugging Face Docker Space, PRO) with a 30 GB cache, 9 GB DuckDB
+  memory, queries in worker threads (3 at a time), a result cache, warm metadata at start, and GET /api/status
+  (CDN-cacheable). Vercel keeps the static site and plain rewrites, which cost no function CPU.
+
 ## 2026-11-05: helpers get work from a board file, not from messages
 - Harshu wants to change a helper's work daily (UHC files one day, Molina or the website the next) without asking the
   helper, and without spending the helper's Claude usage on coordination. So a helper's fork runs one scheduled
