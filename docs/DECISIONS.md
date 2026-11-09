@@ -18,6 +18,15 @@ Newest first. One entry per lesson: what we saw, what we changed.
 - Serving: one persistent server (cloud/server/, Hugging Face Docker Space, PRO) with a 30 GB cache, 9 GB DuckDB
   memory, queries in worker threads (3 at a time), a result cache, warm metadata at start, and GET /api/status
   (CDN-cacheable). Vercel keeps the static site and plain rewrites, which cost no function CPU.
+- Live 2026-11-09 15:15 CT: Space `Harshu-Pande/ratecommons-api` (https://harshu-pande-ratecommons-api.hf.space,
+  HF PRO, CPU Basic 2 vCPU / 16 GB / 50 GB). Docker Spaces need PRO, so it is under Harshu's account, not the org. It
+  builds this repo at the Space variable `RC_CODE_REF` (cloud/server/space.Dockerfile; to release: set the variable to
+  the commit, then Factory rebuild). It also serves the whole website, so ratecommons.org can point at it if Vercel
+  pauses the team.
+- Vercel project route "API and MCP to the query server" (first rule on `ratecommons-cloud`) rewrites /api/tool*,
+  /api/tools, /api/health, /api/status, /mcp and /gradio_api/mcp/ to the Space for every host: the cloud function gets
+  no requests. The website itself is still the carecompass deployment (its builds have failed since Nov 3; production
+  is e5b3dfb). Warm-cache timings on the Space: 99214/99215/70551 MO all payers 4-12 s; a repeat is 0.25 s.
 
 ## 2026-11-05: helpers get work from a board file, not from messages
 - Harshu wants to change a helper's work daily (UHC files one day, Molina or the website the next) without asking the
