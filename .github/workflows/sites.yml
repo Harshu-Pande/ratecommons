@@ -1,0 +1,87 @@
+name: sites
+# Care-site registry (src/ticdata/sites.py) and the patient offers rewritten onto it (shop/v1 -> shop/v2).
+# Trigger: edit ops/sites-request.txt; its last line is "build", "clean" (every state, plus meta) or
+# "clean TN,MO IL" (space-separated groups, one runner each), or "build clean" for both in order.
+on:
+  workflow_dispatch:
+    inputs:
+      request: { description: "build / clean [groups]", required: true, default: "build clean" }
+  push:
+    branches: [main]
+    paths: ["ops/sites-request.txt"]
+
+permissions:
+  contents: read
+  id-token: write
+
+run-name: "sites ${{ github.event.inputs.request || github.event.head_commit.message }}"
+
+jobs:
+  args:
+    if: github.repository == 'Harshu-Pande/ratecommons'
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.a.outputs.build }}
+      groups: ${{ steps.a.outputs.groups }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: a
+        run: |
+          line="${{ github.event.inputs.request }}"
+          [ -n "$line" ] || line="$(grep -v '^#' ops/sites-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
+          build=false; clean=false; g=""
+          for x in $line; do
+            case "$x" in
+              build) build=true;;
+              clean) clean=true;;
+              *) g="$g,\"$x\"";;
+            esac
+          done
+          if $clean && [ -z "$g" ]; then
+            for y in META CA TX FL NY PA IL OH GA NC MI NJ,CT VA,MD WA,OR MA,RI,NH,VT,ME AZ,NM,NV,UT TN,KY,WV IN,WI \
+                     MO,KS,NE,IA MN,ND,SD,MT,WY,ID CO,OK,AR LA,MS,AL SC,DE,DC AK,HI,PR; do g="$g,\"$y\""; done
+          fi
+          $clean || g=""
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "groups=[${g#,}]" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: args
+    if: needs.args.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env: { PYTHONUNBUFFERED: "1", RC_DUCK_MEMORY: "12GB" }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e . httpx
+      - run: |
+          mkdir -p reports; set -o pipefail
+          ticdata sites-build 2>&1 | tee reports/output.log
+      - if: always()
+        run: ticdata put-report reports/* --prefix "runs/$(date -u +%F)-sites-${GITHUB_RUN_ID}-build" || true
+
+  clean:
+    needs: [args, build]
+    if: always() && needs.args.outputs.groups != '[]' && needs.build.result != 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        states: ${{ fromJson(needs.args.outputs.groups) }}
+    env: { PYTHONUNBUFFERED: "1" }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e . httpx
+      - run: |
+          mkdir -p reports; set -o pipefail
+          ticdata shop-clean --states "${{ matrix.states }}" 2>&1 | tee reports/output.log
+      - if: always()
+        run: |
+          tail -c 200000 reports/output.log > reports/output.tail.log || true; rm -f reports/output.log
+          ticdata put-report reports/* --prefix "runs/$(date -u +%F)-sites-${GITHUB_RUN_ID}-$(echo '${{ matrix.states }}' | tr ',' '-')" || true

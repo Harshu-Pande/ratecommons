@@ -1,0 +1,2 @@
+# sites workflow: last line = "build", "clean [groups]" or "build clean"
+build clean

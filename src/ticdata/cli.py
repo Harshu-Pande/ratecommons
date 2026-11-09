@@ -165,6 +165,11 @@ def main(argv=None) -> int:
     p.add_argument("--prefix", default="shop/v1")
     p = sub.add_parser("shop-meta", help="CareCompass ZIP and plan lookups -> work bucket shop/v1/meta")
     p.add_argument("--prefix", default="shop/v1")
+    p = sub.add_parser("sites-build", help="care-site registry with service evidence -> work bucket shop/sites")
+    p = sub.add_parser("shop-clean", help="rewrite patient offers onto registry sites: shop/v1 -> shop/v2")
+    p.add_argument("--states", default="", help="comma-separated states; empty = all (and copies meta)")
+    p.add_argument("--src", default="shop/v1")
+    p.add_argument("--dst", default="shop/v2")
     p = sub.add_parser("cloud-pack", help="cloud pack (small files per code/state) of one payer -> work bucket serve/v1")
     p.add_argument("--payer", required=True)
     p.add_argument("--prefix", default="serve/v1")
@@ -430,6 +435,13 @@ def main(argv=None) -> int:
     elif a.cmd == "shop-meta":
         from . import shop
         _write(shop.meta(prefix=a.prefix), "reports/shop-meta.json")
+    elif a.cmd == "sites-build":
+        from . import sites
+        _write(sites.build(), "reports/sites-build.json")
+    elif a.cmd == "shop-clean":
+        from . import sites
+        st = [x.strip().upper() for x in a.states.split(",") if x.strip()] or None
+        _write(sites.clean(st, src_prefix=a.src, dst_prefix=a.dst), "reports/shop-clean.json")
     elif a.cmd == "cloud-pack":
         from . import cloudpack
         print(json.dumps(cloudpack.job(a.payer, prefix=a.prefix), default=str))
