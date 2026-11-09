@@ -99,9 +99,20 @@ function priceAt0(place, proc, sel) {
     const hosp = place.kind === 'hospital'
     // at a hospital the facility fee is the hospital's own (institutional) contract; a physician group's TC price is not it
     const complete = hosp ? null : P((o) => o[ROLE] === 'global' && !o[INST] && o[CODE] === code)
-    const facility = hosp
+    let facility = hosp
       ? P((o) => o[CODE] === code && o[INST] && (o[ROLE] === 'tc' || o[ROLE] === 'global'))
       : P((o) => o[CODE] === code && (o[ROLE] === 'tc' || (o[ROLE] === 'global' && o[INST])))
+    // the hospital's own price file (45 CFR 180), when the insurer's file has no dollar facility fee for this code:
+    // hf rows are [payer family, code, rate, how, claim count, lo, hi, plans]; a Blue plan uses the local Blue's rate
+    if (!facility && hosp && place.hf) {
+      const fam = payer === 'bcbs' ? 'anthem' : payer
+      const h = place.hf.find((x) => x[0] === fam && x[1] === code)
+      if (h) {
+        facility = { rate: h[2], lo: h[5], hi: h[6], badge: h[4] > 0 ? 'c' : 'l', groups: [`${place.n} (hospital price list)`],
+          tins: [], nq: 0, nev: 0, offers: [], fromHospitalFile: true }
+        notes.push(`The facility fee is from the hospital's own published price list${h[7] > 1 ? ` (middle of ${h[7]} plan rates for this insurer)` : ''}${h[4] > 0 ? `, which reports ${h[4]} paid claims` : ''}; the insurer's file has no dollar amount for it.`)
+      }
+    }
     let reading = P((o) => o[ROLE] === 'pro' && o[CODE] === code)
     // who reads here: groups with reading contracts at this address, plus groups whose radiologists Medicare
     // lists at this hospital

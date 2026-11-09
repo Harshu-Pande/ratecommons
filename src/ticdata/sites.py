@@ -275,7 +275,7 @@ def _proc_cap(p: dict) -> str | None:
     return None
 
 
-def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, stats: dict) -> dict:
+def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, stats: dict, hf: dict | None = None) -> dict:
     """One offers file: keep places that are sites (with evidence for equipment services), merge spellings of one
     address, take names and kinds from the registry, and read facility-setting 'global' professional rates as what
     they are (the professional fee)."""
@@ -315,6 +315,13 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
             if "t" in p and "t" not in e:
                 e["t"] = p["t"]
             stats["merged"] += 1
+    if hf:  # facility fees from hospitals' own price files, for the codes of this procedure
+        codes = set(proc["codes"]) | set(proc.get("alt", []))
+        for e in out.values():
+            rows = [r for r in hf.get(e.get("ccn") or "", []) if r[1] in codes]
+            if rows:
+                e["hf"] = rows
+                stats["hospital_file_fees"] = stats.get("hospital_file_fees", 0) + 1
     d = dict(d)
     d["places"] = list(out.values())
     used = {t for e in d["places"] for o in e["o"] for t in (o[9] or [])} | {t[5] for e in d["places"] for t in e.get("t", [])}
@@ -361,6 +368,11 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
     sites = {r[0]: dict(zip(cols, r)) for r in con.execute(f"SELECT {', '.join(cols)} FROM '{sd}/sites.parquet'").fetchall()}
     caps = {(a, b): c for a, b, c in con.execute(f"SELECT site_key, cap, level FROM '{sd}/site_cap.parquet'").fetchall()}
     idx = json.load(open(_fetch(f"{base}/{src_prefix}/meta/zip3.json", f"{work}/zip3.json")))
+    hf: dict = {}
+    hfp = os.path.join(os.path.dirname(__file__), "data", "hospital_fees.json")
+    if os.path.exists(hfp):  # [ccn, payer, code, rate, how, count, lo, hi, plans] from hospitals.facility_fees
+        for r in json.load(open(hfp)):
+            hf.setdefault(r["ccn"], []).append([r["payer"], r["code"], r["rate"], r["how"], r["count"], r["lo"], r["hi"], r["plans"]])
     want = {s.upper() for s in states} if states else None
     pairs = [(z3, st) for z3, v in idx.items() for st in v[3] if want is None or st in want]
     stats = {k: 0 for k in ("files", "kept", "merged", "dropped_not_site", "dropped_no_evidence", "global_to_pro")}
@@ -381,7 +393,7 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
                 continue
             if not d:
                 continue
-            d2 = clean_file(d, proc, place_site, sites, caps, stats)
+            d2 = clean_file(d, proc, place_site, sites, caps, stats, hf)
             stats["files"] += 1
             if d2["places"]:
                 json.dump(d2, open(f"{out}/offers/{proc['id']}/{os.path.basename(path)}", "w"), separators=(",", ":"))

@@ -3,6 +3,30 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-09 (evening): patient places must be real care sites; hospital price files supply facility fees
+- Audit (project doc `claude/ratecommons-patient-data-audit-2026-11-09.md`): 73-90% of imaging places in six metros had no
+  evidence of a scanner; 6-10 of the 10 cheapest head-CT/MRI results were teleradiologists' homes, dental, palliative-care
+  or hearing offices. Cause: places were NPPES addresses of a group's clinicians, and radiologists could bill "global".
+  Only 5-8% of Missouri TINs with a 70450 rate have any clinician who billed 70450 to Medicare.
+- `sites.py` builds a national registry (shop/sites/): a site needs an organizational source (POS hospital file, iQIES
+  ASC/FQHC/RHC/rehab, Medicare enrollment supplier types such as IDTF/ASC/lab/clinic, a patient-care organization NPI,
+  or a DAC group location with 2+ clinicians). Lone clinician addresses are never sites; places whose only
+  organizations are hospice, home health, dialysis, nursing homes, pharmacies, DME or transport are not sites; VA is out.
+  Spellings of one address merge on house number + first street word + ZIP.
+- Equipment services need evidence at the site: Medicare technical-component claims (non-facility, allowed > 1.5x the
+  26 amount) by an NPI working there, counted only at sites in the ZIP Medicare lists for that NPI (otherwise a
+  radiologist's other addresses inherit the scanner); POS hospital service flags; OPPS imaging APC volume; acute
+  hospitals are "likely" for CT/X-ray/US. Nationally: CT 8,665 sites, MRI 8,093, mammography 6,258.
+- `shop-clean` rewrites shop/v1 offers to shop/v2 onto sites (sites.yml). A "global" professional rate paid only in
+  facility settings is the physician's fee, so it becomes role "pro". St. Louis head CT: 165 places -> 21, all
+  hospitals or imaging centers.
+- Hospital files: cms-hpt.txt crawl seeded from DoltHub's 2023 list and Wikidata found 4,242 locations / 3,516 files
+  on 1,200 domains (about 70% of hospitals). BJC/SSM publish JSON v3, Mercy a 4 GB tall CSV in a zip. Files carry
+  Medicare Advantage and (Mercy) Medicaid plans and, since 2026, claim counts. A St. Louis pilot (src/ticdata/data/
+  hospital_fees.json) adds the hospital's facility fee when the insurer's file has no dollar amount; the app labels it.
+  Name matching of locations to CCNs is unreliable across states ("Texas Health" matched "Texas County"): attach by
+  the file's type_2_npi -> NPPES address -> site instead.
+
 ## 2026-11-09: the query engine leaves Vercel functions; same queries cost 2-4x less CPU
 - Vercel Hobby paused-risk: Fluid Active CPU 4h 28m of 4h in the rolling 30 days, all on `ratecommons-cloud`; Nov 7
   alone was 2h 24m from ~380 requests. A Hobby pause covers every project on the team, the window is rolling, and
