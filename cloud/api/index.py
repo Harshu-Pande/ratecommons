@@ -211,8 +211,24 @@ async def status():
                                                                      "stale-while-revalidate=86400"})
 
 
-if os.environ.get("RC_WARM") == "1":  # persistent server: load every payer's metadata at start, not on a user's time
-    threading.Thread(target=E.payers_loaded, daemon=True).start()
+def _keep_fresh():
+    """Persistent server: load every payer's metadata at start, then check every RC_REFRESH_SECONDS whether the
+    pipeline published new packs; if so drop the stale files and remembered answers and load the new metadata."""
+    E.payers_loaded()
+    E.refresh_if_changed()  # records the shared files' identity
+    while True:
+        time.sleep(float(os.environ.get("RC_REFRESH_SECONDS", "900")))
+        try:
+            if E.refresh_if_changed():
+                with _rlock:
+                    _RCACHE.clear()
+                E.payers_loaded()
+        except Exception:
+            traceback.print_exc()
+
+
+if os.environ.get("RC_WARM") == "1":
+    threading.Thread(target=_keep_fresh, daemon=True).start()
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import uuid
 import threading
 import time
@@ -314,6 +315,44 @@ def meta(p: str) -> dict | None:
                         AS prid FROM (SELECT DISTINCT n.ns, l.product FROM ns_{p} n JOIN netlabel_{p} l USING (net))""")
         _meta[p] = m
     return _meta[p]
+
+
+def refresh_if_changed() -> list[str]:
+    """For a long-running server: re-read each loaded payer's meta.json (and the shared files' identity) from the
+    bucket; when the pipeline has published a new pack, drop that payer's cached files, tables and metadata so the next
+    question loads the new data. Returns what changed. (A Vercel instance never lived long enough to need this.)"""
+    changed = []
+    for p in [x for x in list(_meta) if _meta.get(x)]:
+        try:
+            r = _http.get(f"{BASE}/{p}/meta.json")
+            if r.status_code != 200:
+                continue
+            old = _local(f"{p}/meta.json")
+            if os.path.exists(old) and open(old, "rb").read() == r.content:
+                continue
+        except httpx.HTTPError:
+            continue
+        with _lock:
+            _meta.pop(p, None)
+            _mains.pop(p, None)
+            shutil.rmtree(_local(p), ignore_errors=True)
+        changed.append(p)
+    try:
+        r = _http.head(f"{BASE}/shared/medicare.parquet")
+        tag = r.headers.get("etag") or r.headers.get("x-linked-etag") or r.headers.get("last-modified")
+        global _shared_tag, _mcr_ready
+        if tag and _shared_tag and tag != _shared_tag:
+            with _lock:
+                shutil.rmtree(_local("shared"), ignore_errors=True)
+                _mcr_ready = False
+            changed.append("shared")
+        _shared_tag = tag or _shared_tag
+    except httpx.HTTPError:
+        pass
+    return changed
+
+
+_shared_tag: str | None = None
 
 
 def payers_loaded() -> list[str]:
