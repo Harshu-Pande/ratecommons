@@ -58,7 +58,9 @@ export function PrivacyNote({ className = '', light = false }) {
 
 let statusPromise = null
 export function fetchStatus() {
-  statusPromise ||= fetch('/api/tool/data_status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+  // GET /api/status is cacheable by the CDN; the POST tool call is the fallback for an older API server
+  const post = () => fetch('/api/tool/data_status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+  statusPromise ||= fetch('/api/status').then((r) => (r.ok ? r : post()))
     .then((r) => r.json()).then((d) => (d && d.ok ? d : null)).catch(() => null)
   return statusPromise
 }
