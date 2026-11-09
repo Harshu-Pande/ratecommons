@@ -246,8 +246,10 @@ def normalize_csv_tall(path: str, out_path: str, codes: set[str] | None = None) 
     import duckdb
 
     con = duckdb.connect()
+    # null_padding needs the single-threaded reader on some files ("Parallel CSV Reader currently does not support")
     con.execute(f"""CREATE VIEW raw AS SELECT * FROM read_csv('{path}', skip = 2, header = true, all_varchar = true,
-                    quote = '"', escape = '"', strict_mode = false, null_padding = true, max_line_size = 20000000)""")
+                    quote = '"', escape = '"', strict_mode = false, null_padding = true, parallel = false,
+                    max_line_size = 20000000)""")
     cols = [c[0] for c in con.execute("DESCRIBE raw").fetchall()]
     if "payer_name" not in cols:
         return {"error": "not the tall layout", "columns": cols[:30]}
@@ -279,7 +281,7 @@ PAYER_FAMILY = [  # hospital payer/plan text -> our payer; Medicare Advantage an
     ("aetna", r"AETNA"),
     ("cigna", r"CIGNA"),
     ("uhc", r"UNITED|UHC|\bUMR\b|OPTUM"),
-    ("anthem", r"ANTHEM|BLUE CROSS|BLUECROSS|\bBCBS\b|HEALTHLINK|UNICARE"),
+    ("anthem", r"ANTHEM|BLUE CROSS|BLUECROSS|\bBCBS\b"),
 ]
 
 
@@ -318,7 +320,14 @@ def facility_fees(norm_paths: dict, codes: set[str]) -> list[dict]:
             if not fam:
                 continue
             amt, how = None, None
-            if dollar and dollar > 0:
+            n = None
+            try:
+                n = int(str(cnt).split()[0]) if cnt and str(cnt)[0].isdigit() else None
+            except Exception:
+                n = None
+            if n and med and med > 0:  # what was actually paid on this plan's claims, when the hospital reports it
+                amt, how = med, "median_allowed"
+            elif dollar and dollar > 0:
                 amt, how = dollar, "dollar"
             elif pct and gross:
                 amt, how = round(pct / 100.0 * gross, 2), "percent_of_charges"
@@ -326,15 +335,11 @@ def facility_fees(norm_paths: dict, codes: set[str]) -> list[dict]:
                 amt, how = med, "median_allowed"
             if amt is None:
                 continue
-            n = None
-            try:
-                n = int(str(cnt).split()[0]) if cnt and str(cnt)[0].isdigit() else None
-            except Exception:
-                n = None
             k = (fam, code)
             best.setdefault(k, []).append((amt, how, med, n, (plan or payer or "")[:60]))
         for (fam, code), xs in best.items():
-            xs.sort(key=lambda x: x[0])
+            paid = [x for x in xs if x[3]]  # plans with paid claims first: a rate nobody is billed under is a ghost
+            xs = sorted(paid or xs, key=lambda x: x[0])
             mid = xs[(len(xs) - 1) // 2]
             out.append({"ccn": ccn, "payer": fam, "code": code, "rate": mid[0], "how": mid[1], "median_allowed": mid[2],
                         "count": max((x[3] or 0) for x in xs), "lo": xs[0][0], "hi": xs[-1][0], "plans": len(xs),
