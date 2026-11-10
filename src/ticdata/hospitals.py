@@ -301,6 +301,18 @@ def payer_family(payer: str | None, plan: str | None) -> str | None:
     return None
 
 
+def _fee_rows(con, p: str, codes: set[str]) -> list:
+    have = {c[0] for c in con.execute(f"DESCRIBE SELECT * FROM '{p}'").fetchall()}
+    bcol = "billing_class" if "billing_class" in have else "NULL"
+    # every column cast explicitly: a file whose column is all NULL is typed INT by the parquet writer
+    return con.execute(f"""SELECT CAST(code AS VARCHAR), CAST(payer AS VARCHAR), CAST(plan AS VARCHAR),
+                                  CAST(methodology AS VARCHAR), TRY_CAST(dollar AS DOUBLE), TRY_CAST(percentage AS DOUBLE),
+                                  TRY_CAST(gross AS DOUBLE), TRY_CAST(cash AS DOUBLE), TRY_CAST(median_allowed AS DOUBLE),
+                                  CAST(count AS VARCHAR), coalesce(CAST({bcol} AS VARCHAR), 'facility') AS bc,
+                                  CAST(setting AS VARCHAR), CAST(modifiers AS VARCHAR)
+                           FROM '{p}' WHERE CAST(code AS VARCHAR) IN ({", ".join(f"'{c}'" for c in codes)})""").fetchall()
+
+
 def facility_fees(norm_paths: dict, codes: set[str]) -> list[dict]:
     """Per hospital (ccn) x payer family x code: the facility amount a patient's plan pays, chosen as the published
     dollar amount, else percentage x gross charge, else the median allowed amount; with the claim count when given.
@@ -310,11 +322,11 @@ def facility_fees(norm_paths: dict, codes: set[str]) -> list[dict]:
     con = duckdb.connect()
     out = []
     for ccn, p in norm_paths.items():
-        have = {c[0] for c in con.execute(f"DESCRIBE SELECT * FROM '{p}'").fetchall()}
-        bcol = "billing_class" if "billing_class" in have else "NULL"
-        rows = con.execute(f"""SELECT code, payer, plan, methodology, dollar, percentage, gross, cash, median_allowed, count,
-                                      coalesce({bcol}, 'facility') AS bc, setting, modifiers
-                               FROM '{p}' WHERE code IN ({", ".join(f"'{c}'" for c in codes)})""").fetchall()
+        try:
+            rows = _fee_rows(con, p, codes)
+        except Exception as e:  # one unreadable file must not stop the national table
+            _log(f"fees: skip {ccn} {p}: {e!r}"[:300])
+            continue
         best: dict = {}
         cash: dict = {}
         for code, payer, plan, meth, dollar, pct, gross, csh, med, cnt, bc, setting, mods in rows:
