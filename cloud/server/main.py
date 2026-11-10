@@ -24,8 +24,9 @@ from starlette.concurrency import run_in_threadpool  # noqa: E402
 from index import app  # noqa: E402
 
 SITE = os.environ.get("RC_SITE_DIR", "/app/site")
-SHOP = os.environ.get("RC_SHOP_URL", "https://huggingface.co/buckets/ratecommons/work/resolve/shop/v1").rstrip("/")
-SHOP_CACHE = os.path.join(os.environ.get("RC_CACHE", "/tmp/rc-cache"), "_shop")
+SHOP = os.environ.get("RC_SHOP_URL", "https://huggingface.co/buckets/ratecommons/work/resolve/shop/v2").rstrip("/")
+# one cache folder per data prefix, so switching RC_SHOP_URL (shop/v1 -> shop/v2) never serves the old files
+SHOP_CACHE = os.path.join(os.environ.get("RC_CACHE", "/tmp/rc-cache"), "_shop", SHOP.rsplit("/", 1)[-1])
 SAFE = re.compile(r"^(?:[a-z0-9_-]+/)*[a-zA-Z0-9_.-]+\.json$")
 CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; img-src 'self' data: blob: "
        "https://server.arcgisonline.com; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; "
