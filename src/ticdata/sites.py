@@ -60,6 +60,8 @@ FAMILIES = [
     ("lab", 80047, 89398),
 ]
 # catalog modality -> capability
+# military and federal clinics (not open to people with commercial insurance or Medicare as in-network care)
+FEDERAL = re.compile(r"\b(MEDGRP|MED GRP|MEDICAL GROUP-|AIR FORCE|\bAFB\b|ARMY|NAVAL|NAVY|TRICARE|VETERANS|VA MEDICAL|DEPARTMENT OF VETERANS|INDIAN HEALTH SERVICE)\b", re.I)
 MODALITY_CAP = {"CT": "ct", "MRI": "mri", "Ultrasound": "us", "Mammogram": "mammo", "X-ray": "xray", "PET": "pet"}
 PROC_CAP = {"dexa": "dexa", "echo": "echo", "sleep-study": "sleep", "us-carotid": "us"}
 
@@ -283,7 +285,7 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
     out: dict = {}
     for p in d["places"]:
         sk = place_site.get(p["k"])
-        if not sk:
+        if not sk or FEDERAL.search(f"{sites[sk]['name'] or ''} {p['n']} {sites[sk]['city'] or ''}"):
             stats["dropped_not_site"] += 1
             continue
         lvl = caps.get((sk, cap)) if cap else "c"
