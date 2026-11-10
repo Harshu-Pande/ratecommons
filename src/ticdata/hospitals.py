@@ -329,6 +329,7 @@ def facility_fees(norm_paths: dict, codes: set[str]) -> list[dict]:
             continue
         best: dict = {}
         cash: dict = {}
+        grossd: dict = {}
         for code, payer, plan, meth, dollar, pct, gross, csh, med, cnt, bc, setting, mods in rows:
             if (bc or "").lower() not in ("facility", "") or (mods or "").strip() not in ("", "None"):
                 continue
@@ -336,6 +337,8 @@ def facility_fees(norm_paths: dict, codes: set[str]) -> list[dict]:
                 continue
             if csh:
                 cash[code] = csh
+            if gross and gross > 0:
+                grossd.setdefault(code, []).append(gross)
             fam = payer_family(payer, plan)
             if not fam:
                 continue
@@ -363,7 +366,8 @@ def facility_fees(norm_paths: dict, codes: set[str]) -> list[dict]:
             mid = xs[(len(xs) - 1) // 2]
             out.append({"ccn": ccn, "payer": fam, "code": code, "rate": mid[0], "how": mid[1], "median_allowed": mid[2],
                         "count": max((x[3] or 0) for x in xs), "lo": xs[0][0], "hi": xs[-1][0], "plans": len(xs),
-                        "cash": cash.get(code)})
+                        "cash": cash.get(code),
+                        "gross": sorted(grossd[code])[len(grossd[code]) // 2] if grossd.get(code) else None})
     return out
 
 
@@ -578,6 +582,7 @@ def fees(work: str = "/tmp/hpt-fees", upload_to: str | None = "ratecommons/work"
                     JOIN '{sd}/place_site.parquet' p USING (place_key) JOIN '{sd}/sites.parquet' s USING (site_key)
                     WHERE s.ccn IS NOT NULL""")
     con.execute(f"CREATE TABLE ein AS SELECT DISTINCT npi, ein FROM '{clin}' WHERE entity_type = '2' AND ein IS NOT NULL AND ein <> ''")
+    con.execute(f"CREATE TABLE hospsite AS SELECT site_key, ccn FROM '{sd}/sites.parquet' WHERE ccn IS NOT NULL")
     import hashlib
 
     urls = {hashlib.md5(u.encode()).hexdigest()[:16]: (u, e) for u, e in
@@ -596,11 +601,17 @@ def fees(work: str = "/tmp/hpt-fees", upload_to: str | None = "ratecommons/work"
         if not ccns and ein:
             ccns = {r[0] for r in con.execute("SELECT DISTINCT s.ccn FROM npisite s JOIN ein e USING (npi) WHERE e.ein = ?",
                                               [ein]).fetchall()}
+        how = "npi" if ccns else None
+        if ccns and not npis:
+            how = "ein"
         if len(ccns) > 3:  # a system-wide NPI list: too ambiguous to give one file's prices to every hospital
-            ccns = set()
+            ccns, how = set(), None
+        if not ccns:  # the street addresses the file lists for its locations -> the hospital site at that address
+            ccns = {c for c in (_addr_ccn(con, a) for a in (m.get("header") or {}).get("hospital_address", [])[:3]) if c}
+            how = "address" if ccns else None
         for c in ccns:
             paths.setdefault(c, pq)
-        attach.append({"fid": fid, "ccns": sorted(ccns), "npis": len(npis), "ein": ein})
+        attach.append({"fid": fid, "ccns": sorted(ccns), "npis": len(npis), "ein": ein, "how": how})
     rows = facility_fees(paths, _catalog_codes())
     os.makedirs(f"{work}/out", exist_ok=True)
     json.dump(rows, open(f"{work}/out/hospital_fees.json", "w"), separators=(",", ":"))
@@ -613,6 +624,22 @@ def fees(work: str = "/tmp/hpt-fees", upload_to: str | None = "ratecommons/work"
 
         res["uploaded"] = upload(f"{work}/out", prefix + "/fees", upload_to)
     return res
+
+
+def _addr_ccn(con, address: str) -> str | None:
+    """'901 E Sunflower Rd, Cleveland, MS 38732' -> the CCN of the hospital site at that street address and ZIP."""
+    from .shop import place_key_sql
+    from .sites import site_key_sql
+
+    m = re.search(r"(\d{5})(?:-\d{4})?\s*$", address or "")
+    if not m:
+        return None
+    line = address.split(",")[0].strip()
+    r = con.execute(f"""WITH v AS (SELECT ?::VARCHAR AS line, ?::VARCHAR AS zip),
+                             k AS (SELECT {place_key_sql('line', 'zip')} AS pk FROM v)
+                        SELECT h.ccn FROM k JOIN hospsite h ON h.site_key = {site_key_sql('k.pk')} LIMIT 1""",
+                    [line, m.group(1)]).fetchone()
+    return r[0] if r else None
 
 
 def _pull_prefix(prefix: str, dest: str) -> str:

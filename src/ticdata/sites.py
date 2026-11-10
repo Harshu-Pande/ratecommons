@@ -368,6 +368,13 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
             rows = [r for r in hf.get(e.get("ccn") or "", []) if r[1] in codes]
             if rows:
                 e["hf"] = rows
+                # an insurer's percent-of-charges contract becomes dollars with the hospital's own gross charge
+                gross = {r[1]: r[8] for r in rows if len(r) > 8 and r[8]}
+                for o in e["o"]:
+                    if o[3] == "percentage" and o[5] and o[2] in gross and 1 <= o[4] <= 200:
+                        o[4], o[3], o[7] = round(o[4] / 100.0 * gross[o[2]], 2), "derived", "l"
+                        o[13] = o[14] = o[4]
+                        stats["pct_to_dollars"] = stats.get("pct_to_dollars", 0) + 1
                 stats["hospital_file_fees"] = stats.get("hospital_file_fees", 0) + 1
     # a clinic is named for the practice that bills here (most clinicians at the site), not for whichever
     # organization at the building sorted first (a dental or therapy office at the same address)
@@ -477,10 +484,11 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
         _log(f"hospital fees: {e!r}")
     if os.path.exists(hfp):  # [ccn, payer, code, rate, how, count, lo, hi, plans] from hospitals.facility_fees
         for r in json.load(open(hfp)):
-            hf.setdefault(r["ccn"], []).append([r["payer"], r["code"], r["rate"], r["how"], r["count"], r["lo"], r["hi"], r["plans"]])
+            hf.setdefault(r["ccn"], []).append([r["payer"], r["code"], r["rate"], r["how"], r["count"], r["lo"], r["hi"], r["plans"],
+                                                r.get("gross")])
     want = {s.upper() for s in states} if states else None
     pairs = [(z3, st) for z3, v in idx.items() for st in v[3] if want is None or st in want]
-    stats = {k: 0 for k in ("files", "kept", "merged", "dropped_not_site", "dropped_no_evidence", "global_to_pro", "hospital_file_fees", "dropped_no_billing", "hidden_vs_medicare")}
+    stats = {k: 0 for k in ("files", "kept", "merged", "dropped_not_site", "dropped_no_evidence", "global_to_pro", "hospital_file_fees", "dropped_no_billing", "hidden_vs_medicare", "pct_to_dollars")}
     per_proc = {}
     for proc in catalog():
         before = dict(stats)
