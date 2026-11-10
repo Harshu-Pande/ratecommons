@@ -38,6 +38,20 @@ Services file gives the site its CCN); else when an organization NPI with the EI
 the street address the file lists matches the hospital's. Names are never used. Files whose NPIs span more than
 three hospitals are not attached (system-wide files). November 2026: 2,465 of 3,227 parsed files, 2,242 hospitals.
 
+November 2026 release: 3,227 files normalized, 10.6 billion rows, 91 GB of Parquet (from 801 GB as published).
+
+## Using it
+
+```sql
+-- DuckDB: one hospital's MRI brain rates, every plan
+INSTALL httpfs; LOAD httpfs;
+SELECT payer, plan, setting, dollar, percentage, median_allowed, count
+FROM 'hf://datasets/ratecommons/hospitals/full/<fid>.parquet'
+WHERE code = '70553';
+```
+
+Find a hospital's `fid` in `index/cms_hpt_index.parquet` (by name or file URL) or in `fees/attach.json` (by CCN).
+
 ## Caveats
 
 - Values are as the hospital published them; we do not correct them. Percentages are of the hospital's charges.

@@ -2,7 +2,9 @@ name: hospitals
 # Hospital price transparency files (src/ticdata/hospitals.py): crawl cms-hpt.txt, download and normalize every file
 # in shards, then attach files to hospitals and compute facility fees (work bucket hospitals/).
 # Trigger: edit ops/hospitals-request.txt; last line is any of "discover", "shards", "fees" (e.g. "discover shards fees");
-# add "full" to shards for every code (public dataset, hospitals/full/) instead of the patient-tool codes.
+# add "full" to shards for every code (public dataset, hospitals/full/) instead of the patient-tool codes;
+# "publish" copies hospitals/full, index and fees from the bucket into the public dataset ratecommons/hospitals
+# (needs that repo to exist with this workflow as a trusted publisher).
 on:
   workflow_dispatch:
     inputs:
@@ -27,13 +29,14 @@ jobs:
       shards: ${{ steps.a.outputs.shards }}
       fees: ${{ steps.a.outputs.fees }}
       full: ${{ steps.a.outputs.full }}
+      publish: ${{ steps.a.outputs.publish }}
     steps:
       - uses: actions/checkout@v5
       - id: a
         run: |
           line="${{ github.event.inputs.request }}"
           [ -n "$line" ] || line="$(grep -v '^#' ops/hospitals-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
-          for k in discover shards fees full; do
+          for k in discover shards fees full publish; do
             case " $line " in *" $k "*) echo "$k=true" >> "$GITHUB_OUTPUT";; *) echo "$k=false" >> "$GITHUB_OUTPUT";; esac
           done
 
@@ -99,3 +102,27 @@ jobs:
         run: gh workflow run sites.yml --repo "${{ github.repository }}" -f request=clean
       - if: always()
         run: ticdata put-report reports/* --prefix "runs/$(date -u +%F)-hospitals-${GITHUB_RUN_ID}-fees" || true
+
+  publish:
+    needs: [args, shards]
+    if: always() && needs.args.outputs.publish == 'true' && needs.shards.result != 'failure' && needs.shards.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        n: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+    env: { PYTHONUNBUFFERED: "1" }
+    steps:
+      - name: free disk
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL; df -h /
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e . httpx ijson
+      - run: |
+          mkdir -p reports; set -o pipefail
+          ticdata hospitals-publish --n ${{ matrix.n }} --of 16 2>&1 | tee reports/output.log
+      - if: always()
+        run: ticdata put-report reports/* --prefix "runs/$(date -u +%F)-hospitals-${GITHUB_RUN_ID}-publish-${{ matrix.n }}" || true

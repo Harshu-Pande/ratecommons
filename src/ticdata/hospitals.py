@@ -674,3 +674,67 @@ def _pull_prefix(prefix: str, dest: str) -> str:
         download_bucket_files("ratecommons/work", files=[(p, os.path.join(dest, os.path.basename(p))) for p in files[k:k + 200]],
                               token=tok)
     return dest
+
+
+DATASET = "ratecommons/hospitals"
+
+
+def publish(n: int, of: int, repo: str = DATASET) -> dict:
+    """Copy hospitals/full (shard n of `of`), and on shard 0 also index/, fees/ and the card, from the work
+    bucket into the public dataset repo. Buckets cannot copy into repos server side, so files pass through
+    the runner in batches small enough for its disk."""
+    import hashlib
+    import shutil
+    from pathlib import Path
+
+    from huggingface_hub import CommitOperationAdd, HfApi, download_bucket_files, list_bucket_tree
+
+    from . import hfio
+
+    btok = hfio.token_for(hfio.bucket("ratecommons/work")) if hfio.oidc_available() else None
+    api = HfApi(token=hfio.token_for(hfio.dataset(repo)))
+
+    def ls(prefix):
+        return sorted(i.path for i in list_bucket_tree("ratecommons/work", prefix=prefix, recursive=True, token=btok)
+                      if getattr(i, "type", "file") != "directory")
+
+    have = {f for f in api.list_repo_files(repo, repo_type="dataset")}
+    files = [p for p in ls("hospitals/full") if int(hashlib.md5(p.encode()).hexdigest(), 16) % of == n]
+    if n == 0:
+        files += ls("hospitals/index") + [p for p in ls("hospitals/fees") if p.endswith(".json")]
+    todo = [p for p in files if p[len("hospitals/"):] not in have]
+    work = f"/tmp/hpub{n}"
+    stats = {"shard": n, "files": len(files), "already": len(files) - len(todo), "uploaded": 0, "bytes": 0}
+    batch, size = [], 0
+
+    def flush():
+        nonlocal batch, size
+        if not batch:
+            return
+        os.makedirs(work, exist_ok=True)
+        local = [(p, os.path.join(work, p.replace("/", "__"))) for p in batch]
+        download_bucket_files("ratecommons/work", files=local, token=btok)
+        ops = [CommitOperationAdd(path_in_repo=p[len("hospitals/"):], path_or_fileobj=lp) for p, lp in local]
+        hfio._retry(lambda: api.create_commit(repo, operations=ops, repo_type="dataset",
+                                              commit_message=f"hospital files: shard {n}, {len(ops)} files"))
+        stats["uploaded"] += len(ops)
+        stats["bytes"] += sum(os.path.getsize(lp) for _, lp in local)
+        _log(json.dumps({"shard": n, "uploaded": stats["uploaded"], "of": len(todo)}))
+        shutil.rmtree(work, ignore_errors=True)
+        batch, size = [], 0
+
+    sizes = {i.path: getattr(i, "size", 0) or 0
+             for i in list_bucket_tree("ratecommons/work", prefix="hospitals", recursive=True, token=btok)
+             if getattr(i, "type", "file") != "directory"}
+    for p in todo:
+        batch.append(p)
+        size += sizes.get(p, 0)
+        if size > 4e9 or len(batch) >= 150:
+            flush()
+    flush()
+    if n == 0:
+        card = Path(__file__).resolve().parents[2] / "docs" / "hospitals-dataset.md"
+        if card.is_file():
+            api.upload_file(path_or_fileobj=str(card), path_in_repo="README.md", repo_id=repo, repo_type="dataset",
+                            commit_message="dataset card")
+    return stats
