@@ -2,3 +2,4 @@
 discover shards fees
 fees
 fees
+shards full
