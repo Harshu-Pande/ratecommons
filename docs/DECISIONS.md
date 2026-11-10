@@ -3,6 +3,22 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-10 (night): hospital files nationally; they, not insurer files, carry most facility fees
+- hospitals.yml parsed 3,227 of 3,516 discovered files (JSON v2/v3, tall and wide CSV, zips; BOM and cp1252 handled;
+  191 URLs 404, 31 are HTML pages, ~80 parse errors). Files attach to hospitals by type_2_npi -> NPPES address -> site
+  CCN (2,273 files), else by EIN, else by the street addresses in the file header (+192 files): 2,242 hospitals,
+  459k facility-fee rows for the catalog codes. Files whose NPIs span more than three hospitals are not attached.
+- Triangulation, imaging codes (70450, 70553, 74177, 71046, 76700, 72148), hospital file (EIN in file name) vs the
+  insurer file's institutional rows for the same TIN and code:
+  - UHC: 205 of 6,604 hospital x code pairs (3%) have any institutional rate in UHC's file (UHC pays hospitals by
+    category, and only part 1 of UHC is loaded); of 199 dollar pairs, 37% agree within 3%, 58% within 15%.
+  - Aetna: 1,711 of 6,513 (26%) present, 1,462 of them percent of charges; of 834 dollar pairs, 11% within 3%, 24% within 15%.
+  - Cigna: 1,082 of 5,690 (19%) present; of 1,074 dollar pairs, 27% within 3%, 53% within 15%.
+  So insurer files give a usable facility fee for a small minority of hospital x code pairs, and where both exist
+  they often disagree (the hospital's figure is one plan's median; the insurer's is all products together). Rules:
+  hospital-file fees fill gaps; a claims-backed hospital figure (median allowed with a count) hides an insurer row
+  more than 25% off; insurer percent-of-charges rows become dollars with the hospital's own gross charge.
+
 ## 2026-11-09 (evening): patient places must be real care sites; hospital price files supply facility fees
 - Audit (project doc `claude/ratecommons-patient-data-audit-2026-11-09.md`): 73-90% of imaging places in six metros had no
   evidence of a scanner; 6-10 of the 10 cheapest head-CT/MRI results were teleradiologists' homes, dental, palliative-care
