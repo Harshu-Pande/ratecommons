@@ -4,11 +4,12 @@
 
 | Track | Done | Next |
 | --- | --- | --- |
-| Site registry (`sites.py`, sites.yml) | National registry and capability evidence; shop/v1 -> shop/v2 clean for every state | App reads shop/v2 (api/shopdata.js); random-sample audit of site precision per capability (web check of 100 sites each); add FDA MQSA mammography list and CLIA labs as sources |
+| Site registry (`sites.py`, sites.yml) | National registry and capability evidence; shop/v2 live on ratecommons.org (query server RC_SHOP_URL default, app data URLs versioned) | Bump DATA_VERSION in carecompass/src/lib/data.js on each data release; random-sample audit of site precision per capability (web check of 100 sites each); add FDA MQSA mammography list and CLIA labs as sources |
 | Hospital price files (`hospitals.py`) | cms-hpt.txt crawl (4,242 locations / 3,516 files); JSON v2/v3 and tall-CSV normalizers; St. Louis pilot facility fees in src/ticdata/data/hospital_fees.json | Wide-CSV layout; attach files to sites by type_2_npi -> NPPES address (not names); national download/normalize on Actions into a `ratecommons/hospitals` dataset (needs the Trusted Publisher entry); triangulate with TiC (EIN + type-2 NPI) |
 | Facility fees from payer files | none | Category rates (UHC CSTM CAT/MRI per diems, Cigna per diems) via a crosswalk; % of charges x hospital gross charge |
 | Original Medicare | data located: PFS (have), OPPS Addendum B Oct 2026 (cms.gov/files/zip/October-2026-OPPS-Addendum-B.zip) | `medicare` payer in the app: hospital = OPPS (wage-adjusted) + PFS facility pro; office/IDTF = PFS non-facility; patient 20% after the $283 Part B deductible |
 | Medicare Advantage / Medicaid | hospital files carry MA (all) and Medicaid (Mercy) plans | MA: hospital-file rates + PBP copays + Plan Finder / FHIR directories; Medicaid: "who accepts it" from MCO directories, MO HealthNet fee schedule |
+| Office visits (live check 2026-11-09) | billing-evidence rule; clinics named for the billing practice | St. Louis Aetna 99213 still lists hospice, home-care, rehab and state-agency groups at $35-37: restrict visit sites to clinic sources (FQHC/RHC/clinic/group/urgent/hospital), drop groups whose main taxonomy is hospice/home health/agency, and check Aetna's $35 fee-schedule rows |
 | Ghost rates (professional) | sites + capability remove most | per TIN x site plausibility: out-of-state reading groups, Medicare billing of the code family by the TIN's clinicians at that site |
 
 
