@@ -90,7 +90,12 @@ export default function Results() {
         if (!showHidden && priceAt(place, proc, { ...sel, showHidden: true })) hiddenCount++
         continue
       }
-      const est = price.total == null ? null : estimate(price.bills, profile, payerName)
+      // Medicaid: the patient usually owes $0 or a small copay, whatever the plan pays
+      const est = price.total == null ? null : payer === 'medicaid'
+        ? { patient: 0, personalized: true, total: price.total, insurer: price.total,
+            bills: price.bills.map((b) => ({ ...b, patient: 0 })),
+            steps: ['With Medicaid you usually pay $0 or a small fixed copay; the plan pays the rest.'] }
+        : estimate(price.bills, profile, payerName)
       rows.push({ id: place.k, place: { ...place, name: titleCase(place.n), city: titleCase(place.c) }, price, est, distance: d })
     }
     return { rows, hiddenCount }

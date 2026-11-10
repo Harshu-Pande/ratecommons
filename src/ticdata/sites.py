@@ -549,6 +549,7 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
         pr = json.load(open(f"{out}/meta/products.json"))
         pr["medicare"] = []  # Original Medicare: one national program, no networks to choose
         pr["medicare_advantage"] = []  # priced from hospital files (MA contracts) and Medicare rates
+        pr["medicaid"] = []  # hospitals that list Medicaid managed-care plans in their own files
         json.dump(pr, open(f"{out}/meta/products.json", "w"))
         json.dump(medicare_table(work), open(f"{out}/meta/medicare.json", "w"), separators=(",", ":"))
         # the app adds this id to every data URL, so CDN caches never mix releases (written last, by the META job)

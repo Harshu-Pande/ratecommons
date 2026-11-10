@@ -120,10 +120,23 @@ function medicarePrice(place, proc, patient, advantage = false) {
     bills: [{ key: 'base', label: proc.kind === 'imaging' ? 'Scan and reading' : proc.short, short: proc.short.toLowerCase(), allowed: p[0] }] }
 }
 
+// Medicaid managed care: only hospitals that list Medicaid plans in their own price file (so we know they take them)
+function medicaidPrice(place, proc) {
+  if (place.kind !== 'hospital') return null
+  const code = proc.codes[0]
+  const h = (place.hf || []).find((x) => x[0] === 'medicaid' && x[1] === code)
+  if (!h) return null
+  return { kind: 'single', total: h[2], lo: h[5], hi: h[6], badge: h[4] > 0 ? 'c' : 'l', medicare: true,
+    bills: [{ key: 'facility', label: 'What the Medicaid plan pays the hospital', short: 'facility', allowed: h[2], from: place.n }],
+    notes: [`${place.n} lists Medicaid managed-care plans in its own price file${h[7] > 1 ? ` (${h[7]} plans)` : ''}, so it takes at least some of them; call to confirm yours. With Medicaid you usually pay $0 or a small copay.`,
+      'The amount shown is what the plan pays the hospital, not what you pay. A separate doctor\'s bill may apply.'] }
+}
+
 function priceAt0(place, proc, sel) {
   const { payer, product, showHidden, patient = 'returning' } = sel
   if (payer === 'medicare') return medicarePrice(place, proc, patient)
   if (payer === 'medicare_advantage') return medicarePrice(place, proc, patient, true)
+  if (payer === 'medicaid') return medicaidPrice(place, proc)
   const ok = (o) => o[PAYER] === payer && (product == null || (o[PRODS] || []).includes(product))
     && (o[BADGE] === 'c' || o[BADGE] === 'l' || (showHidden && o[BADGE] === 'h'))
   const offers = (place.o || []).filter(ok)
