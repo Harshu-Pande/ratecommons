@@ -174,6 +174,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("hospitals-shard", help="download + normalize hospital price files (shard n of k) -> hospitals/norm")
     p.add_argument("--n", type=int, required=True)
     p.add_argument("--of", type=int, required=True)
+    p.add_argument("--full", action="store_true", help="every code (public dataset), to hospitals/full")
     p = sub.add_parser("hospitals-fees", help="attach normalized files to hospitals; facility fees -> hospitals/fees")
     p = sub.add_parser("cloud-pack", help="cloud pack (small files per code/state) of one payer -> work bucket serve/v1")
     p.add_argument("--payer", required=True)
@@ -452,7 +453,8 @@ def main(argv=None) -> int:
         _write(hospitals.discover(rounds=4), "reports/hospitals-discover.json")
     elif a.cmd == "hospitals-shard":
         from . import hospitals
-        _write(hospitals.shard(a.n, a.of), f"reports/hospitals-shard-{a.n}.json")
+        _write(hospitals.shard(a.n, a.of, full=a.full, prefix="hospitals/full" if a.full else "hospitals/norm"),
+               f"reports/hospitals-shard-{a.n}.json")
     elif a.cmd == "hospitals-fees":
         from . import hospitals
         _write(hospitals.fees(), "reports/hospitals-fees.json")

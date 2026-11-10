@@ -1,7 +1,8 @@
 name: hospitals
 # Hospital price transparency files (src/ticdata/hospitals.py): crawl cms-hpt.txt, download and normalize every file
 # in shards, then attach files to hospitals and compute facility fees (work bucket hospitals/).
-# Trigger: edit ops/hospitals-request.txt; last line is any of "discover", "shards", "fees" (e.g. "discover shards fees").
+# Trigger: edit ops/hospitals-request.txt; last line is any of "discover", "shards", "fees" (e.g. "discover shards fees");
+# add "full" to shards for every code (public dataset, hospitals/full/) instead of the patient-tool codes.
 on:
   workflow_dispatch:
     inputs:
@@ -25,13 +26,14 @@ jobs:
       discover: ${{ steps.a.outputs.discover }}
       shards: ${{ steps.a.outputs.shards }}
       fees: ${{ steps.a.outputs.fees }}
+      full: ${{ steps.a.outputs.full }}
     steps:
       - uses: actions/checkout@v5
       - id: a
         run: |
           line="${{ github.event.inputs.request }}"
           [ -n "$line" ] || line="$(grep -v '^#' ops/hospitals-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
-          for k in discover shards fees; do
+          for k in discover shards fees full; do
             case " $line " in *" $k "*) echo "$k=true" >> "$GITHUB_OUTPUT";; *) echo "$k=false" >> "$GITHUB_OUTPUT";; esac
           done
 
@@ -72,7 +74,7 @@ jobs:
       - run: pip install -q -e . httpx ijson
       - run: |
           mkdir -p reports; set -o pipefail
-          ticdata hospitals-shard --n ${{ matrix.n }} --of 48 2>&1 | tee reports/output.log
+          ticdata hospitals-shard --n ${{ matrix.n }} --of 48 ${{ needs.args.outputs.full == 'true' && '--full' || '' }} 2>&1 | tee reports/output.log
       - if: always()
         run: |
           tail -c 200000 reports/output.log > reports/output.tail.log || true; rm -f reports/output.log

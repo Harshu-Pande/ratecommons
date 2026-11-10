@@ -207,9 +207,22 @@ def normalize_json(path: str, out_path: str, codes: set[str] | None = None) -> d
                 head.setdefault(k.split(".")[0], []).append(v)
             elif k == "standard_charge_information":
                 break
-    cols = {c: [] for c in ("description", "code", "code_type", "setting", "gross", "cash", "payer", "plan", "methodology",
-                            "dollar", "percentage", "algorithm", "median_allowed", "p10", "p90", "count", "notes", "modifiers",
-                            "billing_class")}
+    names = ("description", "code", "code_type", "setting", "gross", "cash", "payer", "plan", "methodology", "dollar",
+             "percentage", "algorithm", "median_allowed", "p10", "p90", "count", "notes", "modifiers", "billing_class")
+    nums = ("gross", "cash", "dollar", "percentage", "median_allowed", "p10", "p90")
+    schema = pa.schema([(c, pa.float64() if c in nums else pa.string()) for c in names])
+    num = lambda x: float(x) if isinstance(x, (int, float)) or (isinstance(x, str) and re.fullmatch(r"[\d.]+", x)) else None
+    txt = lambda x: None if x is None else str(x)
+    cols = {c: [] for c in names}
+    writer = pq.ParquetWriter(out_path, schema, compression="zstd")
+
+    def flush():  # written in batches: an every-code file can hold tens of millions of rows
+        if cols["code"]:
+            writer.write_table(pa.table({c: [num(x) for x in cols[c]] if c in nums else [txt(x) for x in cols[c]]
+                                         for c in names}, schema=schema))
+            for c in names:
+                cols[c].clear()
+
     n = 0
     with _open_json(path) as f:
         for it in ijson.items(f, "standard_charge_information.item", use_float=True):
@@ -236,16 +249,15 @@ def normalize_json(path: str, out_path: str, codes: set[str] | None = None) -> d
                         cols["median_allowed"].append(p.get("median_amount", p.get("estimated_amount")))
                         cols["p10"].append(p.get("10th_percentile"))
                         cols["p90"].append(p.get("90th_percentile"))
-                        cols["count"].append(None if p.get("count") is None else str(p.get("count")))
+                        cols["count"].append(p.get("count"))
                         cols["notes"].append(p.get("additional_payer_notes"))
                         cols["modifiers"].append(",".join(sc.get("modifier_code") or it.get("modifier_code") or []) or None)
                         cols["billing_class"].append(sc.get("billing_class") or it.get("billing_class"))
                         n += 1
-    for k in ("gross", "cash", "dollar", "percentage", "median_allowed", "p10", "p90"):
-        cols[k] = [float(x) if isinstance(x, (int, float)) or (isinstance(x, str) and re.fullmatch(r"[\d.]+", x)) else None
-                   for x in cols[k]]
-    t = pa.table(cols)
-    pq.write_table(t, out_path, compression="zstd")
+            if len(cols["code"]) >= 500_000:
+                flush()
+    flush()
+    writer.close()
     return {"rows": n, **{k: (v if not isinstance(v, list) else v[:20]) for k, v in head.items()}}
 
 
@@ -525,7 +537,7 @@ def process_url(url: str, work: str, fid: str, codes: set[str], max_bytes: int =
 
 
 def shard(n: int, of: int, work: str = "/tmp/hpt", upload_to: str | None = "ratecommons/work",
-          prefix: str = "hospitals/norm", index: str | None = None) -> dict:
+          prefix: str = "hospitals/norm", index: str | None = None, full: bool = False) -> dict:
     """Process every n-th distinct file URL of the cms-hpt.txt index (of = number of shards)."""
     import duckdb
     import hashlib
@@ -536,7 +548,7 @@ def shard(n: int, of: int, work: str = "/tmp/hpt", upload_to: str | None = "rate
     idx = index or _fetch(f"{base}/hospitals/index/cms_hpt_index.parquet", f"{work}/index.parquet")
     urls = sorted({r[0] for r in duckdb.connect().execute(f"SELECT mrf_url FROM '{idx}' WHERE mrf_url IS NOT NULL").fetchall()})
     mine = [u for u in urls if int(hashlib.md5(u.encode()).hexdigest(), 16) % of == n]
-    codes = _catalog_codes()
+    codes = None if full else _catalog_codes()  # full: every code, for the public hospitals dataset
     out = {}
     os.makedirs(f"{work}/out", exist_ok=True)
     for i, u in enumerate(mine):
@@ -548,6 +560,12 @@ def shard(n: int, of: int, work: str = "/tmp/hpt", upload_to: str | None = "rate
         if os.path.exists(f"{work}/norm/{fid}.parquet"):
             os.replace(f"{work}/norm/{fid}.parquet", f"{work}/out/{fid}.parquet")
         json.dump(r, open(f"{work}/out/{fid}.json", "w"), default=str)
+        if full and upload_to and (i + 1) % 10 == 0:  # every-code files are large: upload as we go, keep the disk free
+            from .cloudpack import upload
+
+            upload(f"{work}/out", prefix, upload_to)
+            for x in os.listdir(f"{work}/out"):
+                os.remove(f"{work}/out/{x}")
     res = {"shard": n, "of": of, "files": len(mine), "ok": sum(1 for r in out.values() if not r.get("error")),
            "errors": sum(1 for r in out.values() if r.get("error"))}
     if upload_to:
