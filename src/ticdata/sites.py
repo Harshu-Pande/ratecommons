@@ -291,6 +291,16 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
             stats["dropped_no_evidence"] += 1
             continue
         s = sites[sk]
+        if cap and cap != "lab":
+            # equipment services: a group's rate at this site counts only if one of its clinicians here has billed
+            # the code or its family to Medicare (nev), or it is the hospital's own (institutional) contract;
+            # otherwise it is a network-wide fee schedule attached to a group that does not do this here
+            n0 = len(p["o"])
+            p = dict(p, o=[o for o in p["o"] if o[5] or (o[12] or 0) > 0 or o[7] == "x"])
+            stats["dropped_no_billing"] = stats.get("dropped_no_billing", 0) + n0 - len(p["o"])
+            if not p["o"] and not p.get("t"):
+                stats["dropped_no_evidence"] += 1
+                continue
         for o in p["o"]:
             if o[1] == "global" and not o[5] and not o[6]:
                 o[1] = "pro"  # a global code paid only in hospital settings is the physician's fee
@@ -415,7 +425,7 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
             hf.setdefault(r["ccn"], []).append([r["payer"], r["code"], r["rate"], r["how"], r["count"], r["lo"], r["hi"], r["plans"]])
     want = {s.upper() for s in states} if states else None
     pairs = [(z3, st) for z3, v in idx.items() for st in v[3] if want is None or st in want]
-    stats = {k: 0 for k in ("files", "kept", "merged", "dropped_not_site", "dropped_no_evidence", "global_to_pro", "hospital_file_fees")}
+    stats = {k: 0 for k in ("files", "kept", "merged", "dropped_not_site", "dropped_no_evidence", "global_to_pro", "hospital_file_fees", "dropped_no_billing")}
     per_proc = {}
     for proc in catalog():
         before = dict(stats)
