@@ -20,6 +20,13 @@ Newest first. One entry per lesson: what we saw, what we changed.
 - `shop-clean` rewrites shop/v1 offers to shop/v2 onto sites (sites.yml). A "global" professional rate paid only in
   facility settings is the physician's fee, so it becomes role "pro". St. Louis head CT: 165 places -> 21, all
   hospitals or imaging centers.
+- Second pass: an imaging rate at a site also needs Medicare billing of the code family by that group's clinicians
+  there (or be the hospital's own institutional contract). Without it St. Louis UHC head CT still listed Temple Faculty
+  Practice Plan (PA) and Pro Physicians Clinic (TX) fee schedules at SSM and West County addresses. Military, VA and IHS
+  clinics are dropped (Luke AFB's 56th Medical Group was in a random sample of CT sites).
+- Spot check, 12 random non-hospital CT sites nationally: 11 are real CT providers on the web (Focus MedCare Baytown,
+  JFK Advanced Medical Imaging Old Bridge, Northwest Imaging Shreveport, MercyOne Indianola Imaging, ...); the miss was
+  the military clinic. A larger, automated precision check is still to do.
 - Hospital files: cms-hpt.txt crawl seeded from DoltHub's 2023 list and Wikidata found 4,242 locations / 3,516 files
   on 1,200 domains (about 70% of hospitals). BJC/SSM publish JSON v3, Mercy a 4 GB tall CSV in a zip. Files carry
   Medicare Advantage and (Mercy) Medicaid plans and, since 2026, claim counts. A St. Louis pilot (src/ticdata/data/
