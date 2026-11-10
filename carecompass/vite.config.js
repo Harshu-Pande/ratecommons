@@ -10,7 +10,7 @@ const proxy = {
   '/mcp': { target: CLOUD, changeOrigin: true },
   '/data/shop': {
     target: 'https://huggingface.co', changeOrigin: true, followRedirects: true,
-    rewrite: (p) => p.replace(/^\/data\/shop/, '/buckets/ratecommons/work/resolve/shop/v1'),
+    rewrite: (p) => p.replace(/^\/data\/shop/, '/buckets/ratecommons/work/resolve/shop/v2'),
   },
 }
 

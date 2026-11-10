@@ -1,7 +1,7 @@
 // Serves the patient tool's price files from our own domain, so a visitor's browser never contacts the
 // storage host directly. Streams the file from the Hugging Face bucket (following its CDN redirect) and
 // lets Vercel's CDN cache it for a day.
-const ORIGIN = 'https://huggingface.co/buckets/ratecommons/work/resolve/shop/v1'
+const ORIGIN = 'https://huggingface.co/buckets/ratecommons/work/resolve/shop/v2'
 const SAFE = /^(?:[a-z0-9_-]+\/)*[a-zA-Z0-9_.-]+\.json$/
 
 export default {

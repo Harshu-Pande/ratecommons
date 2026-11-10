@@ -415,7 +415,7 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
             hf.setdefault(r["ccn"], []).append([r["payer"], r["code"], r["rate"], r["how"], r["count"], r["lo"], r["hi"], r["plans"]])
     want = {s.upper() for s in states} if states else None
     pairs = [(z3, st) for z3, v in idx.items() for st in v[3] if want is None or st in want]
-    stats = {k: 0 for k in ("files", "kept", "merged", "dropped_not_site", "dropped_no_evidence", "global_to_pro")}
+    stats = {k: 0 for k in ("files", "kept", "merged", "dropped_not_site", "dropped_no_evidence", "global_to_pro", "hospital_file_fees")}
     per_proc = {}
     for proc in catalog():
         before = dict(stats)
