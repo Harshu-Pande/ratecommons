@@ -311,6 +311,9 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
             if not p["o"] and not p.get("t") and s["kind"] != "hospital":
                 stats["dropped_no_evidence"] += 1
                 continue
+        elif proc["kind"] == "visit" and NOT_A_PRACTICE.search(s["name"] or ""):
+            stats["dropped_not_site"] += 1  # a hospice or home-care office is not where a patient books a visit
+            continue
         elif proc["kind"] == "visit":
             # visits at clinics: the billing group's clinicians here must bill visits to Medicare (nev), or the
             # contract is a flat per-visit amount; a building's dentist or chiropractor does not make it a clinic
