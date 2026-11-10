@@ -302,10 +302,13 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
             # equipment services: a group's rate at this site counts only if one of its clinicians here has billed
             # the code or its family to Medicare (nev), or it is the hospital's own (institutional) contract;
             # otherwise it is a network-wide fee schedule attached to a group that does not do this here
+            # (a group with 2+ clinicians at a site with confirmed equipment also counts: Westchase Imaging, Houston)
             n0 = len(p["o"])
-            p = dict(p, o=[o for o in p["o"] if o[5] or (o[12] or 0) > 0 or o[7] == "x"])
+            p = dict(p, o=[o for o in p["o"] if o[5] or (o[12] or 0) > 0 or o[7] == "x" or (lvl == "c" and (o[11] or 0) >= 2)])
             stats["dropped_no_billing"] = stats.get("dropped_no_billing", 0) + n0 - len(p["o"])
-            if not p["o"] and not p.get("t"):
+            # a hospital with the equipment stays listed even with no usable rate in the insurer files: its own price
+            # file (hf) or Original Medicare can still price it (Northside, Piedmont, UChicago were lost otherwise)
+            if not p["o"] and not p.get("t") and s["kind"] != "hospital":
                 stats["dropped_no_evidence"] += 1
                 continue
         elif proc["kind"] == "visit":
