@@ -67,6 +67,7 @@ NOT_A_PRACTICE = re.compile(r"HOSPICE|HOME CARE|HOMECARE|HOME HEALTH|IN-HOME|IN 
                             r"\bSTATE OF\b|\bCOUNTY OF\b|\bCITY OF\b|DEPT OF|DEPARTMENT OF|TRANSPORT|AMBULANCE|STAFFING|"
                             r"\bLOCUM|TELEHEALTH|TELEMED|VIRTUAL|PALLIATIVE", re.I)
 RESIDENTIAL = re.compile(r"\b(APT|APARTMENT|UNIT \d+[A-Z]? (?:BLDG|BUILDING))\b", re.I)  # a home is never a place to get care
+IMAGING_NAME = re.compile(r"IMAGING|RADIOLOG|\bMRI\b|DIAGNOSTIC|X-RAY|XRAY|SCAN|\bCT\b|MAMMO|BREAST CENTER", re.I)
 MODALITY_CAP = {"CT": "ct", "MRI": "mri", "Ultrasound": "us", "Mammogram": "mammo", "X-ray": "xray", "PET": "pet"}
 PROC_CAP = {"dexa": "dexa", "echo": "echo", "sleep-study": "sleep", "us-carotid": "us"}
 
@@ -403,7 +404,10 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
                 if o[1] in ("global", "tc") and (o[12] or 0) > 0 and nm and not nm.endswith("clinicians") \
                         and not FEDERAL.search(nm):
                     score[nm] = max(score.get(nm, 0), o[12] or 0)
-            if score:
+            # only when the practice's name says imaging and the site's does not (a surgery center or office name
+            # on an ARA building); a radiologist's own TIN or a reading group never renames a real imaging center
+            score = {k: v for k, v in score.items() if IMAGING_NAME.search(k)}
+            if score and not IMAGING_NAME.search(e["n"] or ""):
                 nm = max(score, key=score.get)
                 e["n"] = nm.title() if nm.isupper() else nm
             continue
