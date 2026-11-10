@@ -510,6 +510,7 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
         _fetch_many_safe([(f"{base}/{src_prefix}/meta/zip/{z3}.json", f"{out}/meta/zip/{z3}.json") for z3 in idx], 16)
         pr = json.load(open(f"{out}/meta/products.json"))
         pr["medicare"] = []  # Original Medicare: one national program, no networks to choose
+        pr["medicare_advantage"] = []  # priced from hospital files (MA contracts) and Medicare rates
         json.dump(pr, open(f"{out}/meta/products.json", "w"))
         json.dump(medicare_table(work), open(f"{out}/meta/medicare.json", "w"), separators=(",", ":"))
     res = {"stats": stats, "per_proc": per_proc, "seconds": round(time.time() - t0)}

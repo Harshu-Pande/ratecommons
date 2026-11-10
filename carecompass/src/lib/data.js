@@ -3,7 +3,7 @@ import { miles } from './geo'
 
 export const DATA = import.meta.env.VITE_DATA_URL || '/data/shop'
 // bump when the published data changes: CDN caches keep each file for a day, keyed by the full URL
-const DATA_VERSION = 'v2-20261109'
+const DATA_VERSION = 'v2-20261110'
 export const PROCS = procedures
 export const PROC_BY_ID = Object.fromEntries(procedures.map((p) => [p.id, p]))
 export const CATEGORIES = [...new Set(procedures.map((p) => p.cat))]
@@ -91,28 +91,36 @@ export function priceAt(place, proc, sel) {
   return r
 }
 
-function medicarePrice(place, proc, patient) {
+function medicarePrice(place, proc, patient, advantage = false) {
   if (!MCR) return null
   const pf = MCR.pfs[place.s] || MCR.pfs.US || {}
   const code = proc.kind === 'visit' && patient === 'new' && proc.codes.length > 1 ? proc.codes[1] : proc.codes[0]
   const p = pf[code]
   const o = MCR.opps[code]
-  const notes = [`Original Medicare's published ${MCR.year} rate. You usually pay 20% after the yearly Part B deductible ($${MCR.part_b_deductible}); many screenings are $0. A Medigap or retiree plan may pay that 20%.`]
+  const notes = advantage
+    ? ['Medicare Advantage plans usually pay close to Original Medicare\'s rates. What you pay is set by your plan, usually a fixed copay per visit or scan; check your plan\'s Summary of Benefits.']
+    : [`Original Medicare's published ${MCR.year} rate. You usually pay 20% after the yearly Part B deductible ($${MCR.part_b_deductible}); many screenings are $0. A Medigap or retiree plan may pay that 20%.`]
   const hosp = place.kind === 'hospital'
-  if (proc.kind === 'imaging' && hosp && o && !['A', 'B', 'E1', 'E2', 'M'].includes(o[2])) {
-    notes.push("The hospital's facility fee is Medicare's national outpatient rate; each hospital's is adjusted for local wages, usually within about 15%.")
-    const bills = [{ key: 'facility', label: 'Hospital bill (facility fee)', short: 'facility', allowed: o[0], from: place.n }]
+  // Medicare Advantage at a hospital: the hospital's own price list, when it publishes its MA contracts
+  const ma = advantage && hosp && (place.hf || []).find((x) => x[0] === 'medicare_advantage' && x[1] === code)
+  if (proc.kind === 'imaging' && hosp && (ma || (o && !['A', 'B', 'E1', 'E2', 'M'].includes(o[2])))) {
+    notes.push(ma
+      ? `The facility fee is from the hospital's own price list for Medicare Advantage plans${ma[4] > 0 ? ` (${ma[4]} paid claims)` : ''}.`
+      : "The hospital's facility fee is Medicare's national outpatient rate; each hospital's is adjusted for local wages, usually within about 15%.")
+    const bills = [{ key: 'facility', label: 'Hospital bill (facility fee)', short: 'facility', allowed: ma ? ma[2] : o[0], from: place.n }]
     if (p?.[1]) bills.push({ key: 'professional', label: 'Radiologist bill (reading fee)', short: 'radiologist', allowed: p[1], from: 'the radiology group' })
-    return { kind: 'split', total: bills.reduce((s, b) => s + b.allowed, 0), badge: 'c', bills, notes, medicare: true, partial: !p?.[1] }
+    return { kind: 'split', total: bills.reduce((s, b) => s + b.allowed, 0), badge: ma || !advantage ? 'c' : 'l', bills, notes,
+      medicare: true, partial: !p?.[1] }
   }
   if (!p?.[0]) return null
-  return { kind: 'single', total: p[0], badge: 'c', notes, medicare: true,
+  return { kind: 'single', total: p[0], badge: advantage ? 'l' : 'c', notes, medicare: true,
     bills: [{ key: 'base', label: proc.kind === 'imaging' ? 'Scan and reading' : proc.short, short: proc.short.toLowerCase(), allowed: p[0] }] }
 }
 
 function priceAt0(place, proc, sel) {
   const { payer, product, showHidden, patient = 'returning' } = sel
   if (payer === 'medicare') return medicarePrice(place, proc, patient)
+  if (payer === 'medicare_advantage') return medicarePrice(place, proc, patient, true)
   const ok = (o) => o[PAYER] === payer && (product == null || (o[PRODS] || []).includes(product))
     && (o[BADGE] === 'c' || o[BADGE] === 'l' || (showHidden && o[BADGE] === 'h'))
   const offers = (place.o || []).filter(ok)
