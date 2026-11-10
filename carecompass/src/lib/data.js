@@ -2,6 +2,8 @@ import procedures from '../data/procedures.json'
 import { miles } from './geo'
 
 export const DATA = import.meta.env.VITE_DATA_URL || '/data/shop'
+// bump when the published data changes: CDN caches keep each file for a day, keyed by the full URL
+const DATA_VERSION = 'v2-20261109'
 export const PROCS = procedures
 export const PROC_BY_ID = Object.fromEntries(procedures.map((p) => [p.id, p]))
 export const CATEGORIES = [...new Set(procedures.map((p) => p.cat))]
@@ -9,7 +11,7 @@ export const CATEGORIES = [...new Set(procedures.map((p) => p.cat))]
 const cache = new Map()
 async function getJSON(path) {
   if (cache.has(path)) return cache.get(path)
-  const pr = fetch(`${DATA}/${path}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+  const pr = fetch(`${DATA}/${path}?v=${DATA_VERSION}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
   cache.set(path, pr)
   return pr
 }
