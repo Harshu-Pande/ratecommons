@@ -1,5 +1,20 @@
 # Build plan from day 1
 
+## Overnight 2026-11-10 (see DECISIONS)
+
+Done: national hospital files (3,227 parsed, 2,242 hospitals, address fallback), percent-of-charges -> dollars with
+the hospital's gross charge, claims-backed hospital figures override insurer rows >25% off, triangulation numbers,
+apartment addresses excluded, imaging sites named for the scanning practice, every-code hospital normalization
+running into hospitals/full/ (public dataset next: create `ratecommons/hospitals` and its Trusted Publisher entry).
+
+Next:
+- Publish hospitals/full as a dataset with a card (schema, sources, how files attach to hospitals).
+- Unattached hospital files (~760): psychiatric/rehab hospitals are not sites (fine); for the rest match
+  location_name + city within the state as a last resort, with a manual review list.
+- Medicare Advantage copays from the CMS Plan Benefit Package files; MA networks from Plan Finder.
+- Medicaid: "who accepts it" from MCO provider directories (FHIR Plan-Net where available).
+- UHC: only part 1 is loaded; facility fees for UHC come almost entirely from hospital files until the rest merges.
+
 ## Patient data rebuild (started 2026-11-09; see DECISIONS 2026-11-09 evening)
 
 | Track | Done | Next |
