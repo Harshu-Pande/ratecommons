@@ -3,3 +3,4 @@ build clean
 clean META MO,KS,NE,IA
 clean META MO,KS,NE,IA
 clean META
+clean
