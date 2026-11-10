@@ -23,6 +23,7 @@ jobs:
     outputs:
       build: ${{ steps.a.outputs.build }}
       groups: ${{ steps.a.outputs.groups }}
+      meta: ${{ steps.a.outputs.meta }}
     steps:
       - uses: actions/checkout@v5
       - id: a
@@ -38,10 +39,14 @@ jobs:
             esac
           done
           if $clean && [ -z "$g" ]; then
-            for y in META CA TX FL NY PA IL OH GA NC MI NJ,CT VA,MD WA,OR MA,RI,NH,VT,ME AZ,NM,NV,UT TN,KY,WV IN,WI \
+            for y in CA TX FL NY PA IL OH GA NC MI NJ,CT VA,MD WA,OR MA,RI,NH,VT,ME AZ,NM,NV,UT TN,KY,WV IN,WI \
                      MO,KS,NE,IA MN,ND,SD,MT,WY,ID CO,OK,AR LA,MS,AL SC,DE,DC AK,HI,PR; do g="$g,\"$y\""; done
           fi
           $clean || g=""
+          # META runs after every state (it writes the release id the site keys its caches on)
+          meta=false; case ",$g," in *'"META"'*) meta=true;; esac; $clean && [ -z "$(echo "$line" | tr ' ' '\n' | grep -v -e build -e clean)" ] && meta=true
+          g="$(echo "$g" | sed 's/,"META"//; s/"META",//; s/^"META"$//')"
+          echo "meta=$meta" >> "$GITHUB_OUTPUT"
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "groups=[${g#,}]" >> "$GITHUB_OUTPUT"
 
@@ -85,3 +90,20 @@ jobs:
         run: |
           tail -c 200000 reports/output.log > reports/output.tail.log || true; rm -f reports/output.log
           ticdata put-report reports/* --prefix "runs/$(date -u +%F)-sites-${GITHUB_RUN_ID}-$(echo '${{ matrix.states }}' | tr ',' '-')" || true
+
+  meta:
+    needs: [args, clean]
+    if: always() && needs.args.outputs.meta == 'true' && needs.clean.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env: { PYTHONUNBUFFERED: "1" }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e . httpx
+      - run: |
+          mkdir -p reports; set -o pipefail
+          ticdata shop-clean --states META 2>&1 | tee reports/output.log
+      - if: always()
+        run: ticdata put-report reports/* --prefix "runs/$(date -u +%F)-sites-${GITHUB_RUN_ID}-META" || true
