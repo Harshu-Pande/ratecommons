@@ -15,10 +15,11 @@ BUCKET = "ratecommons/work"
 # payers whose map runs the orchestrator starts itself, one wave at a time (value: shards in the map plan).
 # Map output is ~1 GB per GB of gzip and the bucket has a few TB free, so UHC (93.8 TB) must flow
 # map -> reduce -> delete map output wave by wave.
-PIPELINE = {"uhc": 1024}
+PIPELINE = {"uhc": 1024, "bcbs": 48}  # bcbs: waves 5-8 (BSCA, BCBS AZ), shards 34-81 of the stored plan
 # map runs use these stored plans (ops dataset) instead of planning from the live index: on 2026-11-01 UHC posted
 # November files and a fresh plan mapped them mid-release (the October files are still served)
-MAP_PLANS = {"uhc": "runs/2026-10-30-map-uhc-41139836536/plan.json"}
+MAP_PLANS = {"uhc": "runs/2026-10-30-map-uhc-41139836536/plan.json",
+             "bcbs": "runs/2026-11-10-map-bcbs-42849421649/plan.json"}
 # map output of no release in waves.txt, deleted by clean(): November UHC files mapped by mistake on 2026-11-02
 STRAY_MAPS = [("uhc", "2026-11")]
 # map chunks Hugging Face cannot serve back (every download of their rate_fact parts fails with "CAS ... error decoding
