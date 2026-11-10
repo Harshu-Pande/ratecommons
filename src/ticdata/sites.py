@@ -61,11 +61,12 @@ FAMILIES = [
 ]
 # catalog modality -> capability
 # military and federal clinics (not open to people with commercial insurance or Medicare as in-network care)
-FEDERAL = re.compile(r"\b(MEDGRP|MED GRP|MEDICAL GROUP-|AIR FORCE|\bAFB\b|ARMY|NAVAL|NAVY|TRICARE|VETERANS|VA MEDICAL|DEPARTMENT OF VETERANS|INDIAN HEALTH SERVICE)\b", re.I)
+FEDERAL = re.compile(r"\b(MEDGRP|MED GRP|MEDICAL GROUP-|AIR FORCE|\bAFB\b|ARMY|NAVAL|NAVY|TRICARE|VETERANS|VA MEDICAL|VAMC|VAHCS|VA HEALTH|DEPARTMENT OF VETERANS|INDIAN HEALTH SERVICE)\b", re.I)
 # billing groups that are not where a patient books an office visit (home visits, hospice, agencies, government payers)
 NOT_A_PRACTICE = re.compile(r"HOSPICE|HOME CARE|HOMECARE|HOME HEALTH|IN-HOME|IN HOME|NURSING|SKILLED|ASSISTED LIVING|"
                             r"\bSTATE OF\b|\bCOUNTY OF\b|\bCITY OF\b|DEPT OF|DEPARTMENT OF|TRANSPORT|AMBULANCE|STAFFING|"
                             r"\bLOCUM|TELEHEALTH|TELEMED|VIRTUAL|PALLIATIVE", re.I)
+RESIDENTIAL = re.compile(r"\b(APT|APARTMENT|UNIT \d+[A-Z]? (?:BLDG|BUILDING))\b", re.I)  # a home is never a place to get care
 MODALITY_CAP = {"CT": "ct", "MRI": "mri", "Ultrasound": "us", "Mammogram": "mammo", "X-ray": "xray", "PET": "pet"}
 PROC_CAP = {"dexa": "dexa", "echo": "echo", "sleep-study": "sleep", "us-carotid": "us"}
 
@@ -290,7 +291,8 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
     out: dict = {}
     for p in d["places"]:
         sk = place_site.get(p["k"])
-        if not sk or FEDERAL.search(f"{sites[sk]['name'] or ''} {p['n']} {sites[sk]['city'] or ''}"):
+        if not sk or FEDERAL.search(f"{sites[sk]['name'] or ''} {p['n']} {sites[sk]['city'] or ''}") \
+                or RESIDENTIAL.search(sites[sk]["line1"] or ""):
             stats["dropped_not_site"] += 1
             continue
         lvl = caps.get((sk, cap)) if cap else "c"
@@ -390,6 +392,21 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
     # organization at the building sorted first (a dental or therapy office at the same address)
     g = d.get("g") or {}
     for e in out.values():
+        if proc["kind"] == "imaging" and e["kind"] != "hospital" and e["o"]:
+            # an imaging site is named for the practice that bills the scan itself (technical or global part)
+            # (the group with the most billing clinicians across the site's rows; never a VA or military group,
+            # whose clinicians also work at community sites)
+            score: dict = {}
+            for o in e["o"]:
+                t = (o[9] or [None])[0]
+                nm = g.get(t)
+                if o[1] in ("global", "tc") and (o[12] or 0) > 0 and nm and not nm.endswith("clinicians") \
+                        and not FEDERAL.search(nm):
+                    score[nm] = max(score.get(nm, 0), o[12] or 0)
+            if score:
+                nm = max(score, key=score.get)
+                e["n"] = nm.title() if nm.isupper() else nm
+            continue
         if e["kind"] in ("clinic", "lab") and e["o"]:
             best = max(e["o"], key=lambda o: (o[11] or 0, o[12] or 0))
             nm = g.get((best[9] or [None])[0])
