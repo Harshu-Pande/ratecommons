@@ -35,7 +35,7 @@ MAP_WAVES_PER_RUN = 2
 AUTO_PACK = ["bcbs", "anthem"]
 # payers whose reduced/ wave outputs are deleted once their merge is published (storage decision 2026-10-30;
 # not bcbs: more Blue companies are merged into it). A later merge of these needs the waves reduced again.
-DROP_REDUCED = {"aetna", "anthem"}
+DROP_REDUCED = {"aetna", "anthem", "uhc"}  # uhc: merged 2026-11-10 from 7 parts
 _REDUCED = {}  # (payer, release) -> reduced_state(), listed once per run
 
 

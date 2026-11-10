@@ -197,6 +197,16 @@ def plan(payer: str, shards: int, kind: str = "in_network", limit: int | None = 
         assign[i].append({k: e.get(k) for k in ("name", "url", "size", "kind")})
         load[i] += e["size"] or 0
         weight[i] += (e["size"] or 0) + file_bytes
+    # a file name without a date (UHC's "Oxford_eviCore_in-network-rates.json") took the month it was mapped in and
+    # left the release; it now takes the plan's most common month
+    import collections
+
+    months = collections.Counter(release_of(e["name"]) for e in uniq if re.match(r"\d{4}-\d{2}-\d{2}", e["name"]))
+    if months:
+        for a in assign:
+            for f in a:
+                if not re.match(r"\d{4}-\d{2}-\d{2}", f["name"].rsplit("/", 1)[-1]):
+                    f["release"] = months.most_common(1)[0][0]
     return {"payer": payer, "kind": kind, "files": len(uniq), "bytes": sum(load), "duplicates": duplicates,
             "shards": [{"shard": i, "bytes": 0, "files": []} for i in range(first_shard)] +
                       [{"shard": first_shard + i, "bytes": load[i], "files": a} for i, a in enumerate(assign)]}

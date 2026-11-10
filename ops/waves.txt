@@ -18,6 +18,12 @@ bcbs 2026-10 1 0-17
 bcbs 2026-10 2 20-23
 bcbs 2026-10 3 24-27
 bcbs 2026-10 4 28-33
+# storage decision (c), after the UHC merge: Blue Shield of California and BCBS Arizona (1,447 files, 2.74 TB),
+# 48 shards from one stored plan (MAP_PLANS), mapped and reduced wave by wave
+bcbs 2026-10 5 34-45
+bcbs 2026-10 6 46-57
+bcbs 2026-10 7 58-69
+bcbs 2026-10 8 70-81
 bcbs 2026-10 merge
 aetna 2026-10 11 152-167
 aetna 2026-10 12 168-183
@@ -125,5 +131,3 @@ uhc 2026-10 84 996-1002
 # shards 1003-1023 of the plan hold no files (waves 85-86 would be empty)
 uhc 2026-10 part=7 73-84
 uhc 2026-10 merge
-# next (storage decision c): Blue Shield of California (1.5 TB) and BCBS Arizona (1.2 TB) as bcbs waves, only after
-# the uhc merge, mapped and reduced wave by wave like UHC

@@ -3,6 +3,15 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-10: UHC 2026-10 merged; undated file names take the plan's month; BSCA and BCBS AZ start
+- `reduce uhc 2026-10 all merge` (30 min from 7 parts) published 6,159 files, 2.59B rate facts, 78 GB. Against the
+  plan: 6,763 files - 603 withdrawn (409) - 1 lost: `Oxford_eviCore_in-network-rates.json` has no date in its name,
+  so `release_of` filed it under the month it was mapped in (2026-11) and it left the release. `plan()` now gives
+  undated names the plan's most common month. UHC joins DROP_REDUCED: its parts go once the merge is published.
+- Storage decision (c) starts: Blue Shield of California and BCBS Arizona as bcbs waves 5-8 (48 shards, 34-81,
+  release=2026-10; their files are now dated November), first wave from a map request, the rest by the orchestrator
+  from the stored plan; then the bcbs re-merge. At ~2 waves per 4 h it should finish well inside November.
+
 ## 2026-11-10 (night): hospital files nationally; they, not insurer files, carry most facility fees
 - hospitals.yml parsed 3,227 of 3,516 discovered files (JSON v2/v3, tall and wide CSV, zips; BOM and cp1252 handled;
   191 URLs 404, 31 are HTML pages, ~80 parse errors). Files attach to hospitals by type_2_npi -> NPPES address -> site

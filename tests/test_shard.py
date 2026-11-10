@@ -403,6 +403,17 @@ def test_plan_spreads_many_small_files_with_a_per_file_cost(monkeypatch):
     assert max(len(sh["files"]) for sh in weighted["shards"]) < 100
 
 
+def test_an_undated_file_takes_the_plans_month(monkeypatch):
+    """UHC's Oxford_eviCore_in-network-rates.json has no date: it went to the month it was mapped in, not the release."""
+    from ticdata import pipeline
+
+    es = [{"kind": "in_network", "name": f"2026-10-01_p{i}.json.gz", "url": f"https://h/{i}", "size": 10} for i in range(3)]
+    es.append({"kind": "in_network", "name": "Oxford_eviCore_in-network-rates.json", "url": "https://h/o", "size": 5})
+    monkeypatch.setitem(pipeline.PAYERS, "zz", lambda s: ({}, es))
+    files = {f["name"]: f for sh in pipeline.plan("zz", 2)["shards"] for f in sh["files"]}
+    assert files["Oxford_eviCore_in-network-rates.json"]["release"] == "2026-10"
+    assert "release" not in files["2026-10-01_p0.json.gz"]  # dated names keep their own month
+
 def test_listed_unavailable_files_do_not_block_a_wave(tmp_path, monkeypatch):
     import sys
     from types import SimpleNamespace
@@ -514,6 +525,7 @@ class _FakeBucket:
             read_text=lambda p: self.files[p.split(f"buckets/{orchestrate.BUCKET}/", 1)[1]]))
         monkeypatch.setattr(hfio, "token_for", lambda *a: "t")
         monkeypatch.setattr(hfio, "bucket", lambda *a: "b")
+        monkeypatch.setattr(orchestrate, "DROP_REDUCED", {"aetna", "anthem"})  # these tests use uhc as a payer that keeps its waves
         orchestrate._REDUCED.clear()
 
 

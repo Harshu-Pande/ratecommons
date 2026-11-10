@@ -31,3 +31,5 @@ bcbs 6 0 28-33 match=by:bcbsnc,by:bcbsm,by:horizon,by:floridablue,by:bcbsmn,by:b
 bcbs 6 0 29,33 plan=runs/2026-10-29-map-bcbs-40943309473/plan.json
 # Blue batch 1: shard 29 again after streaming code redaction (BCBS Michigan bundle text took the runner down)
 bcbs 6 0 29 plan=runs/2026-10-29-map-bcbs-40943309473/plan.json
+# storage decision (c): Blue Shield of California and BCBS Arizona, 48 shards (34-81); this run maps wave 5 and stores the plan
+bcbs 48 0 34-45 match=by:bsca,by:bcbsaz base=34 release=2026-10

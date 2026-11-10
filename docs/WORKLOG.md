@@ -136,6 +136,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-10 10:00 CT [pipeline] UHC 2026-10 merged: 6,159 files, 2.59B facts (6,763 - 603 withdrawn - 1 undated file lost to the release bug, now fixed). App: UHC packs are yours (Request above). Started BSCA + BCBS AZ as bcbs waves 5-8; bcbs re-merge and AUTO_PACK follow.
 - 2026-11-10 04:00 CT [pipeline] UHC waves 79-83 reduced. UHC withdrew its remaining October files (409); 603 files listed unavailable, wave 84 = 996-1002 (184 files), waves 85-86 empty and dropped, part 7 = 73-84. Merge follows part 7.
 - 2026-11-09 15:20 CT [pipeline] UHC through the usage pause: waves 1-76 reduced, parts 1-6 merged and verified (864
   files each = plan); wave 77 reducing. Parts settle at ~19 GB (part-1 70, part-2 30, parts 3-6 ~19.4); all parts hold
