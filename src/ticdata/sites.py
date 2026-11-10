@@ -369,6 +369,16 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
             if rows:
                 e["hf"] = rows
                 # an insurer's percent-of-charges contract becomes dollars with the hospital's own gross charge
+                # where the hospital reports what was actually paid on claims (count > 0) and the insurer file's
+                # facility rate for the same code is more than 25% off, trust the claims: hide the insurer row
+                # (2026-11-10 check: hospital and insurer facility rates agree within 15% for only 24-58% of pairs)
+                paid = {(r[0], r[1]): r[2] for r in rows if r[4] and r[3] == "median_allowed"}
+                for o in e["o"]:
+                    fam = "anthem" if o[0] == "bcbs" else o[0]
+                    h = paid.get((fam, o[2]))
+                    if h and o[5] and o[7] in ("c", "l") and o[3] != "percentage" and abs(o[4] - h) > 0.25 * h:
+                        o[7] = "h"
+                        stats["hidden_vs_hospital_claims"] = stats.get("hidden_vs_hospital_claims", 0) + 1
                 gross = {r[1]: r[8] for r in rows if len(r) > 8 and r[8]}
                 for o in e["o"]:
                     if o[3] == "percentage" and o[5] and o[2] in gross and 1 <= o[4] <= 200:
@@ -488,7 +498,7 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
                                                 r.get("gross")])
     want = {s.upper() for s in states} if states else None
     pairs = [(z3, st) for z3, v in idx.items() for st in v[3] if want is None or st in want]
-    stats = {k: 0 for k in ("files", "kept", "merged", "dropped_not_site", "dropped_no_evidence", "global_to_pro", "hospital_file_fees", "dropped_no_billing", "hidden_vs_medicare", "pct_to_dollars")}
+    stats = {k: 0 for k in ("files", "kept", "merged", "dropped_not_site", "dropped_no_evidence", "global_to_pro", "hospital_file_fees", "dropped_no_billing", "hidden_vs_medicare", "pct_to_dollars", "hidden_vs_hospital_claims")}
     per_proc = {}
     for proc in catalog():
         before = dict(stats)
