@@ -444,6 +444,8 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
         os.makedirs(f"{out}/meta", exist_ok=True)
         for f in ("zip3.json", "products.json"):
             _fetch(f"{base}/{src_prefix}/meta/{f}", f"{out}/meta/{f}")
+        # ZIP -> point lookups the app needs before it can search (meta/zip/<zip3>.json)
+        _fetch_many_safe([(f"{base}/{src_prefix}/meta/zip/{z3}.json", f"{out}/meta/zip/{z3}.json") for z3 in idx], 16)
         pr = json.load(open(f"{out}/meta/products.json"))
         pr["medicare"] = []  # Original Medicare: one national program, no networks to choose
         json.dump(pr, open(f"{out}/meta/products.json", "w"))
