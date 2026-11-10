@@ -163,10 +163,13 @@ def mapped_shards(payer, release):
 
     fs, gone = HfFileSystem(), unavailable(payer)
     for shard, path in status.items():
-        failed = [n for n in json.loads(fs.read_text(f"buckets/{BUCKET}/{path}"))["failed"] if n not in gone]
+        doc = json.loads(fs.read_text(f"buckets/{BUCKET}/{path}"))
+        failed = [n for n in doc["failed"] if n not in gone]
         if failed and shard in done:
             print(f"{payer} shard {shard}: {len(failed)} failed file(s), e.g. {failed[0]}; not mapped until retried")
             done.discard(shard)
+        elif not failed and doc["failed"]:  # every file the shard lacks was withdrawn: finished, maybe with no chunk
+            done.add(shard)  # (UHC shards 999-1001: all their October files answered 409, 2026-11-10)
     if payer in STATUS_REQUIRED:  # a running shard has metas.json for each chunk uploaded so far
         done &= set(status)
     return done

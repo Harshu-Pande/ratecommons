@@ -661,3 +661,18 @@ def test_multi_subslices_give_the_same_wave(tmp_path, monkeypatch):
     assert _fact_sets(tmp_path / "one") == _fact_sets(tmp_path / "sub")
     ns = lambda d: sorted((r["ns_id"], tuple(r["network_ids"])) for r in pq.read_table(d / "network_set").to_pylist())  # noqa: E731
     assert ns(tmp_path / "one") == ns(tmp_path / "sub")
+
+
+def test_a_shard_whose_files_were_all_withdrawn_counts_as_mapped(tmp_path, monkeypatch):
+    o = _orchestrate()
+    from ticdata import pipeline
+
+    listing = tmp_path / "unavailable.txt"
+    listing.write_text("uhc a.json.gz  # 409\nuhc b.json.gz  # 409\n")
+    monkeypatch.setattr(pipeline, "UNAVAILABLE", listing)
+    pre = "map/2026-10/uhc/"
+    fb = _FakeBucket({f"{pre}shard-999-status.json": '{"shard": 999, "files": 2, "failed": ["a.json.gz", "b.json.gz"]}',
+                      f"{pre}shard-998-status.json": '{"shard": 998, "files": 2, "failed": ["a.json.gz", "c.json.gz"]}',
+                      f"{pre}shard-997-00/metas.json": "[]", f"{pre}shard-997-status.json": '{"failed": []}'})
+    fb.install(monkeypatch, o)
+    assert o.mapped_shards("uhc", "2026-10") == {997, 999}  # 998 still lacks c.json.gz, which was not withdrawn
