@@ -121,10 +121,9 @@ uhc 2026-10 80 948-959
 uhc 2026-10 81 960-971
 uhc 2026-10 82 972-983
 uhc 2026-10 83 984-995
-uhc 2026-10 84 996-1007
-uhc 2026-10 85 1008-1019
-uhc 2026-10 86 1020-1023
-uhc 2026-10 part=7 73-86
+uhc 2026-10 84 996-1002
+# shards 1003-1023 of the plan hold no files (waves 85-86 would be empty)
+uhc 2026-10 part=7 73-84
 uhc 2026-10 merge
 # next (storage decision c): Blue Shield of California (1.5 TB) and BCBS Arizona (1.2 TB) as bcbs waves, only after
 # the uhc merge, mapped and reduced wave by wave like UHC

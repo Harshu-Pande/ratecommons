@@ -138,6 +138,17 @@ Newest first. One entry per lesson: what we saw, what we changed.
 - The website's coverage table said "common services only" for payers whose main networks have every code; it now
   shows both (data_status `main_networks`, `common_codes`, `partial`).
 
+## 2026-11-10: UHC's October release closes without 603 files UHC withdrew (409 Conflict)
+- From 2026-11-10 ~07:40 UTC every download of the remaining October files (shards 996-1002, wave 84) answers
+  "409 Conflict" from mrfstorage.uhc.com within a second; November has replaced them. Map runs of those shards failed
+  fast and each run's next step dispatched them again, every ~15 min.
+- The 603 files (of 787 in those shards; 8.9% of the plan's 6,763) are listed in ops/unavailable.txt as withdrawn, so
+  the shards count as mapped; wave 84 reduces the 184 files that were fetched. Shards 1003-1023 of the plan hold no
+  files, so waves 85-86 are dropped and part 7 covers waves 73-84. The October release therefore has ~6,160 files;
+  the 603 are missing (no published rate), not guessed. They are November's to collect, in a November release.
+- Lesson: a monthly payer's release must be mapped within its month; at ~1.5 h per wave UHC needed ~6 days and
+  ran into the next month's rotation on the last wave.
+
 ## 2026-11-04: the multi-block step of a fact slice is cut by its fan-out (UHC wave 22 out of memory)
 - UHC wave 22's reduce lost 11 of 16 fact parts to DuckDB "Out of Memory" (6.5 GB) twice, on normal runners. Its facts
   repeat across blocks (part 3: 706M fact rows, 31M facts, 31.15M of them in several of 3,488 blocks over 72
