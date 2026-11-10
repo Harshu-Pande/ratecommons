@@ -465,6 +465,10 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
         mcr = None
     hf: dict = {}
     hfp = os.path.join(os.path.dirname(__file__), "data", "hospital_fees.json")
+    try:  # the national table from hospitals.yml, when it exists; else the packaged St. Louis pilot
+        hfp = _fetch(f"{base}/hospitals/fees/hospital_fees.json", f"{work}/hospital_fees.json") or hfp
+    except Exception as e:
+        _log(f"hospital fees: {e!r}")
     if os.path.exists(hfp):  # [ccn, payer, code, rate, how, count, lo, hi, plans] from hospitals.facility_fees
         for r in json.load(open(hfp)):
             hf.setdefault(r["ccn"], []).append([r["payer"], r["code"], r["rate"], r["how"], r["count"], r["lo"], r["hi"], r["plans"]])

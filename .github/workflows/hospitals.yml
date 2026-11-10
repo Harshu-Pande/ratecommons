@@ -1,0 +1,95 @@
+name: hospitals
+# Hospital price transparency files (src/ticdata/hospitals.py): crawl cms-hpt.txt, download and normalize every file
+# in shards, then attach files to hospitals and compute facility fees (work bucket hospitals/).
+# Trigger: edit ops/hospitals-request.txt; last line is any of "discover", "shards", "fees" (e.g. "discover shards fees").
+on:
+  workflow_dispatch:
+    inputs:
+      request: { description: "discover shards fees", required: true, default: "discover shards fees" }
+  push:
+    branches: [main]
+    paths: ["ops/hospitals-request.txt"]
+
+permissions:
+  contents: read
+  id-token: write
+
+run-name: "hospitals ${{ github.event.inputs.request || github.event.head_commit.message }}"
+
+jobs:
+  args:
+    if: github.repository == 'Harshu-Pande/ratecommons'
+    runs-on: ubuntu-latest
+    outputs:
+      discover: ${{ steps.a.outputs.discover }}
+      shards: ${{ steps.a.outputs.shards }}
+      fees: ${{ steps.a.outputs.fees }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: a
+        run: |
+          line="${{ github.event.inputs.request }}"
+          [ -n "$line" ] || line="$(grep -v '^#' ops/hospitals-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
+          for k in discover shards fees; do
+            case " $line " in *" $k "*) echo "$k=true" >> "$GITHUB_OUTPUT";; *) echo "$k=false" >> "$GITHUB_OUTPUT";; esac
+          done
+
+  discover:
+    needs: args
+    if: needs.args.outputs.discover == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env: { PYTHONUNBUFFERED: "1" }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e . httpx ijson
+      - run: |
+          mkdir -p reports; set -o pipefail
+          ticdata hospitals-discover 2>&1 | tee reports/output.log
+      - if: always()
+        run: ticdata put-report reports/* --prefix "runs/$(date -u +%F)-hospitals-${GITHUB_RUN_ID}-discover" || true
+
+  shards:
+    needs: [args, discover]
+    if: always() && needs.args.outputs.shards == 'true' && needs.discover.result != 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        n: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47]
+    env: { PYTHONUNBUFFERED: "1", RC_DUCK_MEMORY: "10GB" }
+    steps:
+      - name: free disk
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL; df -h /
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e . httpx ijson
+      - run: |
+          mkdir -p reports; set -o pipefail
+          ticdata hospitals-shard --n ${{ matrix.n }} --of 48 2>&1 | tee reports/output.log
+      - if: always()
+        run: |
+          tail -c 200000 reports/output.log > reports/output.tail.log || true; rm -f reports/output.log
+          ticdata put-report reports/* --prefix "runs/$(date -u +%F)-hospitals-${GITHUB_RUN_ID}-shard-${{ matrix.n }}" || true
+
+  fees:
+    needs: [args, shards]
+    if: always() && needs.args.outputs.fees == 'true' && needs.shards.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env: { PYTHONUNBUFFERED: "1", RC_DUCK_MEMORY: "12GB" }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e . httpx ijson
+      - run: |
+          mkdir -p reports; set -o pipefail
+          ticdata hospitals-fees 2>&1 | tee reports/output.log
+      - if: always()
+        run: ticdata put-report reports/* --prefix "runs/$(date -u +%F)-hospitals-${GITHUB_RUN_ID}-fees" || true

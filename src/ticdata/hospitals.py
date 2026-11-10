@@ -184,6 +184,14 @@ def _dump(rows, path):
 
 
 # ---- normalization --------------------------------------------------------------------------------------------------
+def _open_json(path: str):
+    """Open a JSON file for ijson, past a UTF-8 byte-order mark (Saint Luke's KC files start with one)."""
+    f = open(path, "rb")
+    if f.read(3) != b"\xef\xbb\xbf":
+        f.seek(0)
+    return f
+
+
 def normalize_json(path: str, out_path: str, codes: set[str] | None = None) -> dict:
     """Stream a CMS JSON file (schema v2/v3) into a parquet of priced rows. `codes` limits to some billing codes."""
     import ijson
@@ -191,7 +199,7 @@ def normalize_json(path: str, out_path: str, codes: set[str] | None = None) -> d
     import pyarrow.parquet as pq
 
     head = {}
-    with open(path, "rb") as f:
+    with _open_json(path) as f:
         for k, ev, v in ijson.parse(f):
             if k in ("hospital_name", "last_updated_on", "version") and ev in ("string", "number"):
                 head[k] = v
@@ -203,7 +211,7 @@ def normalize_json(path: str, out_path: str, codes: set[str] | None = None) -> d
                             "dollar", "percentage", "algorithm", "median_allowed", "p10", "p90", "count", "notes", "modifiers",
                             "billing_class")}
     n = 0
-    with open(path, "rb") as f:
+    with _open_json(path) as f:
         for it in ijson.items(f, "standard_charge_information.item", use_float=True):
             ci = it.get("code_information") or []
             mine = [c for c in ci if not codes or str(c.get("code")) in codes]
@@ -247,7 +255,7 @@ def normalize_csv_tall(path: str, out_path: str, codes: set[str] | None = None) 
 
     con = duckdb.connect()
     # null_padding needs the single-threaded reader on some files ("Parallel CSV Reader currently does not support")
-    con.execute(f"""CREATE VIEW raw AS SELECT * FROM read_csv('{path}', skip = 2, header = true, all_varchar = true,
+    con.execute(f"""CREATE VIEW raw AS SELECT * FROM read_csv('{path}', skip = 2, header = true, all_varchar = true, delim = ',',
                     quote = '"', escape = '"', strict_mode = false, null_padding = true, parallel = false,
                     max_line_size = 20000000)""")
     cols = [c[0] for c in con.execute("DESCRIBE raw").fetchall()]
@@ -345,3 +353,267 @@ def facility_fees(norm_paths: dict, codes: set[str]) -> list[dict]:
                         "count": max((x[3] or 0) for x in xs), "lo": xs[0][0], "hi": xs[-1][0], "plans": len(xs),
                         "cash": cash.get(code)})
     return out
+
+
+def normalize_csv_wide(path: str, out_path: str, codes: set[str] | None = None) -> dict:
+    """CMS CSV 'wide' layout: one row per item, payer/plan in the column names
+    (standard_charge|<payer>|<plan>|negotiated_dollar, ...|negotiated_percentage, median_amount|<payer>|<plan>, ...)."""
+    import duckdb
+
+    con = duckdb.connect()
+    con.execute(f"""CREATE VIEW raw AS SELECT * FROM read_csv('{path}', skip = 2, header = true, all_varchar = true, delim = ',',
+                    quote = '"', escape = '"', strict_mode = false, null_padding = true, parallel = false,
+                    max_line_size = 20000000)""")
+    cols = [c[0] for c in con.execute("DESCRIBE raw").fetchall()]
+    q = lambda c: f'"{c}"' if c in cols else "NULL"
+    plans: dict = {}
+    for c in cols:
+        parts = [x.strip() for x in c.split("|")]
+        if len(parts) == 4 and parts[0] in ("standard_charge", "estimated_amount", "median_amount", "10th_percentile",
+                                            "90th_percentile", "count", "additional_payer_notes"):
+            plans.setdefault((parts[1], parts[2]), {})[f"{parts[0]}|{parts[3]}"] = c
+        elif len(parts) == 3 and parts[0] in ("estimated_amount", "median_amount", "10th_percentile", "90th_percentile", "count",
+                                              "additional_payer_notes"):
+            plans.setdefault((parts[1], parts[2]), {})[parts[0]] = c
+    if not plans:
+        return {"error": "not the wide layout", "columns": cols[:30]}
+    code_slots = [i for i in range(1, 9) if f"code|{i}" in cols]
+    want = ", ".join(f"'{c}'" for c in sorted(codes)) if codes else None
+    cond = " OR ".join(f'"code|{i}" IN ({want})' for i in code_slots) if want else "true"
+    con.execute(f"CREATE TABLE w AS SELECT * FROM raw WHERE {cond}")
+    parts_sql = []
+    for (payer, plan), m in plans.items():
+        g = lambda k: f'"{m[k]}"' if k in m else "NULL"
+        esc = lambda x: x.replace("'", "''")
+        for i in code_slots:
+            parts_sql.append(f"""SELECT {q('description')} AS description, "code|{i}" AS code, {q(f'code|{i}|type')} AS code_type,
+                   {q('setting')} AS setting, TRY_CAST({q('standard_charge|gross')} AS DOUBLE) AS gross,
+                   TRY_CAST({q('standard_charge|discounted_cash')} AS DOUBLE) AS cash, '{esc(payer)}' AS payer, '{esc(plan)}' AS plan,
+                   {g('standard_charge|methodology')} AS methodology,
+                   TRY_CAST({g('standard_charge|negotiated_dollar')} AS DOUBLE) AS dollar,
+                   TRY_CAST({g('standard_charge|negotiated_percentage')} AS DOUBLE) AS percentage,
+                   left({g('standard_charge|negotiated_algorithm')}, 500) AS algorithm,
+                   TRY_CAST(coalesce({g('median_amount')}, {g('estimated_amount')}) AS DOUBLE) AS median_allowed,
+                   TRY_CAST({g('10th_percentile')} AS DOUBLE) AS p10, TRY_CAST({g('90th_percentile')} AS DOUBLE) AS p90,
+                   {g('count')} AS count, {g('additional_payer_notes')} AS notes, {q('modifiers')} AS modifiers,
+                   {q('billing_class')} AS billing_class
+            FROM w WHERE "code|{i}" IS NOT NULL {f'AND "code|{i}" IN ({want})' if want else ''}""")
+    con.execute(f"COPY ({' UNION ALL '.join(parts_sql)}) TO '{out_path}' (FORMAT parquet, COMPRESSION zstd)")
+    return {"rows": con.execute(f"SELECT count(*) FROM '{out_path}'").fetchone()[0], "plans": len(plans)}
+
+
+def csv_header(path: str) -> dict:
+    """The two header-block rows of a CMS CSV: hospital name, date, version, location names, addresses, license,
+    type_2_npi (pipe-separated)."""
+    import csv
+
+    with open(path, newline="", encoding="utf-8", errors="replace") as f:
+        r = csv.reader(f)
+        keys, vals = next(r), next(r)
+    out = {}
+    for k, v in zip(keys, vals):
+        k = k.strip().lower()
+        if k in ("hospital_name", "last_updated_on", "version"):
+            out[k] = v
+        elif k.startswith(("location_name", "hospital_address", "type_2_npi")):
+            out[k.split("|")[0]] = [x.strip() for x in v.split("|") if x.strip()]
+    return out
+
+
+def json_header(path: str) -> dict:
+    import ijson
+
+    head: dict = {}
+    with _open_json(path) as f:
+        for k, ev, v in ijson.parse(f):
+            if k in ("hospital_name", "last_updated_on", "version") and ev in ("string", "number"):
+                head[k] = v
+            elif k in ("type_2_npi.item", "location_name.item", "hospital_address.item") and ev == "string":
+                head.setdefault(k.split(".")[0], []).append(v)
+            elif k == "standard_charge_information":
+                break
+    return head
+
+
+def _catalog_codes() -> set[str]:
+    from .shopcatalog import catalog
+
+    return {c for p in catalog() for k in ("codes", "alt", "addon") for c in p.get(k, [])}
+
+
+def process_url(url: str, work: str, fid: str, codes: set[str], max_bytes: int = 30 << 30) -> dict:
+    """Download one hospital file (any of JSON, CSV, a zip of either), read its header and normalize the catalog
+    codes. Returns the header and row counts; writes <work>/norm/<fid>.parquet."""
+    import subprocess
+    import zipfile
+
+    os.makedirs(f"{work}/dl", exist_ok=True)
+    os.makedirs(f"{work}/norm", exist_ok=True)
+    f = f"{work}/dl/{fid}"
+    t0 = time.time()
+    r = subprocess.run(["curl", "-sSL", "--fail", "-m", "2400", "--max-filesize", str(max_bytes), "-A", "Mozilla/5.0 " + UA,
+                        "-o", f, url], capture_output=True, text=True)
+    if r.returncode or not os.path.exists(f):
+        return {"error": f"download {r.returncode}: {r.stderr[-200:]}"}
+    size = os.path.getsize(f)
+    try:
+        if zipfile.is_zipfile(f):
+            z = zipfile.ZipFile(f)
+            names = [n for n in z.namelist() if n.lower().endswith((".json", ".csv"))]
+            if not names:
+                return {"error": "zip without json/csv", "bytes": size}
+            name = max(names, key=lambda n: z.getinfo(n).file_size)
+            with z.open(name) as src, open(f + ".x", "wb") as dst:
+                while True:
+                    b = src.read(16 << 20)
+                    if not b:
+                        break
+                    dst.write(b)
+            os.remove(f)
+            f = f + ".x"
+        with open(f, "rb") as fh:
+            head = fh.read(4096).lstrip(b"\xef\xbb\xbf \r\n\t")
+        out = f"{work}/norm/{fid}.parquet"
+        if head[:1] in (b"{", b"["):
+            hdr = json_header(f)
+            res = normalize_json(f, out, codes)
+            fmt = "json"
+        elif head[:1] == b"<":
+            return {"error": "html page, not a file", "bytes": size}
+        else:
+            hdr = csv_header(f)
+
+            def both():
+                r = normalize_csv_tall(f, out, codes)
+                if r.get("error"):
+                    return normalize_csv_wide(f, out, codes), "csv_wide"
+                return r, "csv_tall"
+            try:
+                res, fmt = both()
+            except Exception as e:
+                if "unicode" not in str(e).lower():
+                    raise
+                with open(f, "rb") as a, open(f + ".u", "w", encoding="utf-8") as b:  # Windows-1252 text in a CSV
+                    for line in a:
+                        b.write(line.decode("cp1252", errors="replace"))
+                os.replace(f + ".u", f)
+                res, fmt = both()
+        res.update({"format": fmt, "bytes": size, "header": {k: v for k, v in hdr.items()}, "seconds": round(time.time() - t0)})
+        return res
+    except Exception as e:
+        return {"error": repr(e)[:300], "bytes": size}
+    finally:
+        for x in (f, f[:-2] if f.endswith(".x") else None):
+            if x and os.path.exists(x):
+                os.remove(x)
+
+
+def shard(n: int, of: int, work: str = "/tmp/hpt", upload_to: str | None = "ratecommons/work",
+          prefix: str = "hospitals/norm", index: str | None = None) -> dict:
+    """Process every n-th distinct file URL of the cms-hpt.txt index (of = number of shards)."""
+    import duckdb
+    import hashlib
+
+    from .shop import _fetch
+
+    base = "https://huggingface.co/buckets/ratecommons/work/resolve"
+    idx = index or _fetch(f"{base}/hospitals/index/cms_hpt_index.parquet", f"{work}/index.parquet")
+    urls = sorted({r[0] for r in duckdb.connect().execute(f"SELECT mrf_url FROM '{idx}' WHERE mrf_url IS NOT NULL").fetchall()})
+    mine = [u for u in urls if int(hashlib.md5(u.encode()).hexdigest(), 16) % of == n]
+    codes = _catalog_codes()
+    out = {}
+    os.makedirs(f"{work}/out", exist_ok=True)
+    for i, u in enumerate(mine):
+        fid = hashlib.md5(u.encode()).hexdigest()[:16]
+        r = process_url(u, work, fid, codes)
+        r["url"] = u
+        out[fid] = r
+        _log(json.dumps({"i": i, "of": len(mine), "fid": fid, **{k: r.get(k) for k in ("rows", "format", "bytes", "error", "seconds")}}))
+        if os.path.exists(f"{work}/norm/{fid}.parquet"):
+            os.replace(f"{work}/norm/{fid}.parquet", f"{work}/out/{fid}.parquet")
+        json.dump(r, open(f"{work}/out/{fid}.json", "w"), default=str)
+    res = {"shard": n, "of": of, "files": len(mine), "ok": sum(1 for r in out.values() if not r.get("error")),
+           "errors": sum(1 for r in out.values() if r.get("error"))}
+    if upload_to:
+        from .cloudpack import upload
+
+        res["uploaded"] = upload(f"{work}/out", prefix, upload_to)
+    return res
+
+
+def fees(work: str = "/tmp/hpt-fees", upload_to: str | None = "ratecommons/work", prefix: str = "hospitals",
+         local: dict | None = None) -> dict:
+    """Attach every normalized file to hospitals (CCN) and compute facility fees for the catalog codes.
+    A file belongs to a hospital site when one of its type_2_npi NPIs, or an organization NPI with the EIN in the
+    file name, has an NPPES address at that site (the CMS POS file gives the site its CCN). Names are not used."""
+    import duckdb
+    import glob
+
+    from .shop import SRC, _fetch, _fetch_many
+
+    local = local or {}
+    os.makedirs(work, exist_ok=True)
+    base = "https://huggingface.co/buckets/ratecommons/work/resolve"
+    normdir = local.get("norm") or _pull_prefix("hospitals/norm", f"{work}/norm")
+    idx = local.get("index") or _fetch(f"{base}/hospitals/index/cms_hpt_index.parquet", f"{work}/index.parquet")
+    sd = local.get("sites") or f"{work}/sites"
+    if not local.get("sites"):
+        _fetch_many([(f"{base}/shop/sites/{f}.parquet", f"{sd}/{f}.parquet") for f in ("sites", "place_site")], 2)
+    addr = local.get("addr") or _fetch(f"{SRC}/addr.parquet", f"{work}/addr.parquet")
+    clin = local.get("clin") or _fetch(f"{SRC}/clin.parquet", f"{work}/clin.parquet")
+    con = duckdb.connect()
+    con.execute(f"""CREATE TABLE npisite AS SELECT DISTINCT a.npi, s.site_key, s.ccn FROM '{addr}' a
+                    JOIN '{sd}/place_site.parquet' p USING (place_key) JOIN '{sd}/sites.parquet' s USING (site_key)
+                    WHERE s.ccn IS NOT NULL""")
+    con.execute(f"CREATE TABLE ein AS SELECT DISTINCT npi, ein FROM '{clin}' WHERE entity_type = '2' AND ein IS NOT NULL AND ein <> ''")
+    import hashlib
+
+    urls = {hashlib.md5(u.encode()).hexdigest()[:16]: (u, e) for u, e in
+            con.execute(f"SELECT DISTINCT mrf_url, ein_in_name FROM '{idx}'").fetchall()}
+    paths, attach = {}, []
+    for meta in glob.glob(f"{normdir}/*.json"):
+        fid = os.path.basename(meta)[:-5]
+        m = json.load(open(meta))
+        pq = f"{normdir}/{fid}.parquet"
+        if m.get("error") or not os.path.exists(pq):
+            continue
+        npis = [int(x) for x in (m.get("header") or {}).get("type_2_npi", []) if str(x).isdigit()]
+        ein = (urls.get(fid) or (None, None))[1]
+        q = "SELECT DISTINCT ccn FROM npisite WHERE npi IN (SELECT unnest(?))"
+        ccns = {r[0] for r in con.execute(q, [npis]).fetchall()} if npis else set()
+        if not ccns and ein:
+            ccns = {r[0] for r in con.execute("SELECT DISTINCT s.ccn FROM npisite s JOIN ein e USING (npi) WHERE e.ein = ?",
+                                              [ein]).fetchall()}
+        if len(ccns) > 3:  # a system-wide NPI list: too ambiguous to give one file's prices to every hospital
+            ccns = set()
+        for c in ccns:
+            paths.setdefault(c, pq)
+        attach.append({"fid": fid, "ccns": sorted(ccns), "npis": len(npis), "ein": ein})
+    rows = facility_fees(paths, _catalog_codes())
+    os.makedirs(f"{work}/out", exist_ok=True)
+    json.dump(rows, open(f"{work}/out/hospital_fees.json", "w"), separators=(",", ":"))
+    json.dump(attach, open(f"{work}/out/attach.json", "w"))
+    res = {"files": len(attach), "attached": sum(1 for a in attach if a["ccns"]), "hospitals": len(paths), "fees": len(rows)}
+    json.dump(res, open(f"{work}/out/fees.json", "w"))
+    _log(json.dumps(res))
+    if upload_to:
+        from .cloudpack import upload
+
+        res["uploaded"] = upload(f"{work}/out", prefix + "/fees", upload_to)
+    return res
+
+
+def _pull_prefix(prefix: str, dest: str) -> str:
+    """Download every file under a work-bucket prefix."""
+    from huggingface_hub import download_bucket_files, list_bucket_tree
+
+    from . import hfio
+
+    os.makedirs(dest, exist_ok=True)
+    tok = hfio.token_for(hfio.bucket("ratecommons/work")) if hfio.oidc_available() else None
+    files = [i.path for i in list_bucket_tree("ratecommons/work", prefix=prefix, recursive=True, token=tok)
+             if getattr(i, "type", "file") != "directory"]
+    for k in range(0, len(files), 200):
+        download_bucket_files("ratecommons/work", files=[(p, os.path.join(dest, os.path.basename(p))) for p in files[k:k + 200]],
+                              token=tok)
+    return dest

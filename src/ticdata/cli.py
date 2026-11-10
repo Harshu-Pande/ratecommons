@@ -170,6 +170,11 @@ def main(argv=None) -> int:
     p.add_argument("--states", default="", help="comma-separated states; empty = all (and copies meta)")
     p.add_argument("--src", default="shop/v1")
     p.add_argument("--dst", default="shop/v2")
+    p = sub.add_parser("hospitals-discover", help="crawl cms-hpt.txt files -> work bucket hospitals/index")
+    p = sub.add_parser("hospitals-shard", help="download + normalize hospital price files (shard n of k) -> hospitals/norm")
+    p.add_argument("--n", type=int, required=True)
+    p.add_argument("--of", type=int, required=True)
+    p = sub.add_parser("hospitals-fees", help="attach normalized files to hospitals; facility fees -> hospitals/fees")
     p = sub.add_parser("cloud-pack", help="cloud pack (small files per code/state) of one payer -> work bucket serve/v1")
     p.add_argument("--payer", required=True)
     p.add_argument("--prefix", default="serve/v1")
@@ -442,6 +447,15 @@ def main(argv=None) -> int:
         from . import sites
         st = [x.strip().upper() for x in a.states.split(",") if x.strip()] or None
         _write(sites.clean(st, src_prefix=a.src, dst_prefix=a.dst), "reports/shop-clean.json")
+    elif a.cmd == "hospitals-discover":
+        from . import hospitals
+        _write(hospitals.discover(rounds=4), "reports/hospitals-discover.json")
+    elif a.cmd == "hospitals-shard":
+        from . import hospitals
+        _write(hospitals.shard(a.n, a.of), f"reports/hospitals-shard-{a.n}.json")
+    elif a.cmd == "hospitals-fees":
+        from . import hospitals
+        _write(hospitals.fees(), "reports/hospitals-fees.json")
     elif a.cmd == "cloud-pack":
         from . import cloudpack
         print(json.dumps(cloudpack.job(a.payer, prefix=a.prefix), default=str))
