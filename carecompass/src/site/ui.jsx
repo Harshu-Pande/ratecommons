@@ -3,7 +3,7 @@ import { Check, Copy, Lock } from 'lucide-react'
 
 export const PAYER_LABEL = { aetna: 'Aetna', anthem: 'Anthem', bcbs: 'Blue Cross Blue Shield', cigna: 'Cigna', uhc: 'UnitedHealthcare' }
 export const PAYER_ORDER = ['aetna', 'anthem', 'bcbs', 'cigna', 'uhc']
-export const MCP_URL = 'https://ratecommons.org/mcp'
+export const MCP_URL = 'https://www.ratecommons.org/mcp'
 
 export function PageHero({ kicker, title, lead, children, tone = 'canvas' }) {
   return (

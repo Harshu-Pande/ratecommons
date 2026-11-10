@@ -120,7 +120,7 @@ const PAGES = {
       'Amounts are dollars with up to four decimal places, exactly as published.',
     ],
     paid: 'Commercial price-transparency APIs usually require a contract and charge per call or per seat.',
-    code: `curl -X POST https://ratecommons.org/api/tool/market_distribution \\
+    code: `curl -X POST https://www.ratecommons.org/api/tool/market_distribution \\
   -H 'content-type: application/json' \\
   -d '{"code":"99214","state":"MO","group_by":"payer"}'`,
   },

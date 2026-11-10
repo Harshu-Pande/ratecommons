@@ -261,7 +261,7 @@ export default function Explore() {
   const copy = async (what, text) => {
     try { await navigator.clipboard.writeText(text); setCopied(what); setTimeout(() => setCopied(''), 1800) } catch { /* */ }
   }
-  const curl = `curl -X POST https://ratecommons.org/api/tool/${name} \\\n  -H 'content-type: application/json' \\\n  -d '${JSON.stringify(clean(args)).replace(/'/g, "'\\''")}'`
+  const curl = `curl -X POST https://www.ratecommons.org/api/tool/${name} \\\n  -H 'content-type: application/json' \\\n  -d '${JSON.stringify(clean(args)).replace(/'/g, "'\\''")}'`
   const aiPrompt = `Using the RateCommons connector, run ${name} with ${JSON.stringify(clean(args))} and explain what the results show.`
   const download = () => {
     const a = document.createElement('a')

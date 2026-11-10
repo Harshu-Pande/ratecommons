@@ -9,7 +9,7 @@ pinned: false
 short_description: Query server behind ratecommons.org (API and MCP)
 ---
 
-The query server behind [ratecommons.org](https://ratecommons.org): negotiated healthcare prices published under the
+The query server behind [ratecommons.org](https://www.ratecommons.org): negotiated healthcare prices published under the
 Transparency in Coverage rule, answered from the public data in the `ratecommons` Hugging Face organization.
 
 - JSON tools: `POST /api/tool/<name>` (schemas at `GET /api/tools`)
