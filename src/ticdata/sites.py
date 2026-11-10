@@ -303,6 +303,15 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
             if not p["o"] and not p.get("t"):
                 stats["dropped_no_evidence"] += 1
                 continue
+        elif proc["kind"] == "visit" and s["kind"] not in ("hospital", "urgent"):
+            # visits at clinics: the billing group's clinicians here must bill visits to Medicare (nev), or the
+            # contract is a flat per-visit amount; a building's dentist or chiropractor does not make it a clinic
+            n0 = len(p["o"])
+            p = dict(p, o=[o for o in p["o"] if (o[12] or 0) > 0 or o[2] == "FLAT" or o[7] == "x"])
+            stats["dropped_no_billing"] = stats.get("dropped_no_billing", 0) + n0 - len(p["o"])
+            if not any(o[7] in "cl" for o in p["o"]):
+                stats["dropped_no_evidence"] += 1
+                continue
         for o in p["o"]:
             if o[1] == "global" and not o[5] and not o[6]:
                 o[1] = "pro"  # a global code paid only in hospital settings is the physician's fee
@@ -334,6 +343,15 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
             if rows:
                 e["hf"] = rows
                 stats["hospital_file_fees"] = stats.get("hospital_file_fees", 0) + 1
+    # a clinic is named for the practice that bills here (most clinicians at the site), not for whichever
+    # organization at the building sorted first (a dental or therapy office at the same address)
+    g = d.get("g") or {}
+    for e in out.values():
+        if e["kind"] in ("clinic", "lab") and e["o"]:
+            best = max(e["o"], key=lambda o: (o[11] or 0, o[12] or 0))
+            nm = g.get((best[9] or [None])[0])
+            if nm and not nm.endswith("clinicians") and (best[11] or 0) >= 2:
+                e["n"] = nm.title() if nm.isupper() else nm
     d = dict(d)
     d["places"] = list(out.values())
     used = {t for e in d["places"] for o in e["o"] for t in (o[9] or [])} | {t[5] for e in d["places"] for t in e.get("t", [])}
