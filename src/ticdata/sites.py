@@ -62,6 +62,10 @@ FAMILIES = [
 # catalog modality -> capability
 # military and federal clinics (not open to people with commercial insurance or Medicare as in-network care)
 FEDERAL = re.compile(r"\b(MEDGRP|MED GRP|MEDICAL GROUP-|AIR FORCE|\bAFB\b|ARMY|NAVAL|NAVY|TRICARE|VETERANS|VA MEDICAL|DEPARTMENT OF VETERANS|INDIAN HEALTH SERVICE)\b", re.I)
+# billing groups that are not where a patient books an office visit (home visits, hospice, agencies, government payers)
+NOT_A_PRACTICE = re.compile(r"HOSPICE|HOME CARE|HOMECARE|HOME HEALTH|IN-HOME|IN HOME|NURSING|SKILLED|ASSISTED LIVING|"
+                            r"\bSTATE OF\b|\bCOUNTY OF\b|\bCITY OF\b|DEPT OF|DEPARTMENT OF|TRANSPORT|AMBULANCE|STAFFING|"
+                            r"\bLOCUM|TELEHEALTH|TELEMED|VIRTUAL|PALLIATIVE", re.I)
 MODALITY_CAP = {"CT": "ct", "MRI": "mri", "Ultrasound": "us", "Mammogram": "mammo", "X-ray": "xray", "PET": "pet"}
 PROC_CAP = {"dexa": "dexa", "echo": "echo", "sleep-study": "sleep", "us-carotid": "us"}
 
@@ -277,7 +281,8 @@ def _proc_cap(p: dict) -> str | None:
     return None
 
 
-def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, stats: dict, hf: dict | None = None) -> dict:
+def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, stats: dict, hf: dict | None = None,
+               mcr: dict | None = None) -> dict:
     """One offers file: keep places that are sites (with evidence for equipment services), merge spellings of one
     address, take names and kinds from the registry, and read facility-setting 'global' professional rates as what
     they are (the professional fee)."""
@@ -303,15 +308,30 @@ def clean_file(d: dict, proc: dict, place_site: dict, sites: dict, caps: dict, s
             if not p["o"] and not p.get("t"):
                 stats["dropped_no_evidence"] += 1
                 continue
-        elif proc["kind"] == "visit" and s["kind"] not in ("hospital", "urgent"):
+        elif proc["kind"] == "visit":
             # visits at clinics: the billing group's clinicians here must bill visits to Medicare (nev), or the
             # contract is a flat per-visit amount; a building's dentist or chiropractor does not make it a clinic
             n0 = len(p["o"])
-            p = dict(p, o=[o for o in p["o"] if (o[12] or 0) > 0 or o[2] == "FLAT" or o[7] == "x"])
+            # only office-setting rates (a 99213 paid in a hospital setting is the doctor's lower facility fee, the
+            # $35 Aetna rows in St. Louis), from practices a patient can book with
+            g0 = d.get("g") or {}
+            clinic = s["kind"] not in ("hospital", "urgent")  # hospitals and urgent cares need no billing history
+            p = dict(p, o=[o for o in p["o"] if (not clinic or (o[12] or 0) > 0 or o[2] == "FLAT" or o[7] == "x")
+                           and (o[6] or o[2] == "FLAT")
+                           and not NOT_A_PRACTICE.search(g0.get((o[9] or [""])[0]) or "")])
             stats["dropped_no_billing"] = stats.get("dropped_no_billing", 0) + n0 - len(p["o"])
             if not any(o[7] in "cl" for o in p["o"]):
                 stats["dropped_no_evidence"] += 1
                 continue
+        if mcr and proc["kind"] != "imaging":
+            # plausibility against Original Medicare in this state: commercial plans rarely pay under half of
+            # Medicare's office amount or more than 6x it; such rows are kept but hidden (badge 'h')
+            pf = (mcr.get("pfs") or {}).get(d.get("state")) or {}
+            for o in p["o"]:
+                m = (pf.get(o[2]) or [None])[0]
+                if m and o[7] in ("c", "l") and o[3] != "percentage" and (o[4] < 0.5 * m or o[4] > 6 * m):
+                    o[7] = "h"
+                    stats["hidden_vs_medicare"] = stats.get("hidden_vs_medicare", 0) + 1
         for o in p["o"]:
             if o[1] == "global" and not o[5] and not o[6]:
                 o[1] = "pro"  # a global code paid only in hospital settings is the physician's fee
@@ -438,6 +458,11 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
     sites = {r[0]: dict(zip(cols, r)) for r in con.execute(f"SELECT {', '.join(cols)} FROM '{sd}/sites.parquet'").fetchall()}
     caps = {(a, b): c for a, b, c in con.execute(f"SELECT site_key, cap, level FROM '{sd}/site_cap.parquet'").fetchall()}
     idx = json.load(open(_fetch(f"{base}/{src_prefix}/meta/zip3.json", f"{work}/zip3.json")))
+    try:
+        mcr = medicare_table(work)
+    except Exception as e:  # the cleaning still runs without the Medicare check
+        _log(f"medicare table: {e!r}")
+        mcr = None
     hf: dict = {}
     hfp = os.path.join(os.path.dirname(__file__), "data", "hospital_fees.json")
     if os.path.exists(hfp):  # [ccn, payer, code, rate, how, count, lo, hi, plans] from hospitals.facility_fees
@@ -445,7 +470,7 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
             hf.setdefault(r["ccn"], []).append([r["payer"], r["code"], r["rate"], r["how"], r["count"], r["lo"], r["hi"], r["plans"]])
     want = {s.upper() for s in states} if states else None
     pairs = [(z3, st) for z3, v in idx.items() for st in v[3] if want is None or st in want]
-    stats = {k: 0 for k in ("files", "kept", "merged", "dropped_not_site", "dropped_no_evidence", "global_to_pro", "hospital_file_fees", "dropped_no_billing")}
+    stats = {k: 0 for k in ("files", "kept", "merged", "dropped_not_site", "dropped_no_evidence", "global_to_pro", "hospital_file_fees", "dropped_no_billing", "hidden_vs_medicare")}
     per_proc = {}
     for proc in catalog():
         before = dict(stats)
@@ -463,7 +488,7 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
                 continue
             if not d:
                 continue
-            d2 = clean_file(d, proc, place_site, sites, caps, stats, hf)
+            d2 = clean_file(d, proc, place_site, sites, caps, stats, hf, mcr)
             stats["files"] += 1
             if d2["places"]:
                 json.dump(d2, open(f"{out}/offers/{proc['id']}/{os.path.basename(path)}", "w"), separators=(",", ":"))
