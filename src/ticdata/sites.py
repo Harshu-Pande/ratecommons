@@ -513,6 +513,8 @@ def clean(states: list[str] | None = None, src_prefix: str = "shop/v1", dst_pref
         pr["medicare_advantage"] = []  # priced from hospital files (MA contracts) and Medicare rates
         json.dump(pr, open(f"{out}/meta/products.json", "w"))
         json.dump(medicare_table(work), open(f"{out}/meta/medicare.json", "w"), separators=(",", ":"))
+        # the app adds this id to every data URL, so CDN caches never mix releases (written last, by the META job)
+        json.dump({"id": time.strftime("%Y%m%d%H%M", time.gmtime()), "prefix": dst_prefix}, open(f"{out}/meta/version.json", "w"))
     res = {"stats": stats, "per_proc": per_proc, "seconds": round(time.time() - t0)}
     json.dump(res, open(f"{out}/clean-{'-'.join(sorted(want)) if want else 'all'}.json", "w"))
     if upload_to:

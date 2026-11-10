@@ -39,9 +39,11 @@ _http = httpx.Client(follow_redirects=True, timeout=httpx.Timeout(60.0, connect=
 _shop_lock = threading.Lock()
 
 
-def _shop_file(p: str) -> str | None:
-    dest = os.path.join(SHOP_CACHE, p)
-    if os.path.exists(dest):
+def _shop_file(p: str, v: str = "") -> str | None:
+    # cached per data release (the app sends the release id as ?v=); meta/version.json is always fetched fresh
+    fresh = p == "meta/version.json"
+    dest = os.path.join(SHOP_CACHE, re.sub(r"[^0-9A-Za-z_-]", "", v) or "_", p)
+    if os.path.exists(dest) and not fresh:
         return dest
     r = _http.get(f"{SHOP}/{p}")
     if r.status_code == 404:
@@ -59,17 +61,17 @@ if os.path.isdir(SITE):
     app.router.routes = [r for r in app.router.routes if getattr(r, "path", None) != "/"]  # "/" is the website here
 
     @app.get("/data/shop/{p:path}")
-    async def shop(p: str):
+    async def shop(p: str, v: str = ""):
         if not SAFE.match(p) or ".." in p:
             return Response("Not found", 404)
         try:
-            f = await run_in_threadpool(_shop_file, p)
+            f = await run_in_threadpool(_shop_file, p, v[:40])
         except Exception:
             return Response("Upstream unavailable", 502, headers={"Cache-Control": "no-store"})
         if not f:
             return Response("null", 404, media_type="application/json", headers={"Cache-Control": "public, max-age=3600"})
-        return FileResponse(f, media_type="application/json; charset=utf-8",
-                            headers={"Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800", **SEC})
+        cc = ("no-store" if p == "meta/version.json" else "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800")
+        return FileResponse(f, media_type="application/json; charset=utf-8", headers={"Cache-Control": cc, **SEC})
 
     @app.get("/{path:path}")
     async def site(path: str, request: Request):

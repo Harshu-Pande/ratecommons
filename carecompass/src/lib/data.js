@@ -2,8 +2,11 @@ import procedures from '../data/procedures.json'
 import { miles } from './geo'
 
 export const DATA = import.meta.env.VITE_DATA_URL || '/data/shop'
-// bump when the published data changes: CDN caches keep each file for a day, keyed by the full URL
-const DATA_VERSION = 'v2-20261110'
+// CDN caches keep each data file for a day, keyed by the full URL: every request carries the data release id from
+// meta/version.json (fetched uncached), so a new release is picked up at once without redeploying the site
+let VERSION = null
+const dataVersion = () => (VERSION ||= fetch(`${import.meta.env.VITE_DATA_URL || '/data/shop'}/meta/version.json?t=${Date.now()}`)
+  .then((r) => (r.ok ? r.json() : null)).then((v) => v?.id || 'v2').catch(() => 'v2'))
 export const PROCS = procedures
 export const PROC_BY_ID = Object.fromEntries(procedures.map((p) => [p.id, p]))
 export const CATEGORIES = [...new Set(procedures.map((p) => p.cat))]
@@ -11,7 +14,7 @@ export const CATEGORIES = [...new Set(procedures.map((p) => p.cat))]
 const cache = new Map()
 async function getJSON(path) {
   if (cache.has(path)) return cache.get(path)
-  const pr = fetch(`${DATA}/${path}?v=${DATA_VERSION}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+  const pr = dataVersion().then((v) => fetch(`${DATA}/${path}?v=${v}`)).then((r) => (r.ok ? r.json() : null)).catch(() => null)
   cache.set(path, pr)
   return pr
 }
