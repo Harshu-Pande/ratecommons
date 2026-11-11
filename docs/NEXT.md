@@ -4,8 +4,9 @@
 
 The site, data proxy and API/MCP are all served by the HF Space Harshu-Pande/ratecommons-api, which builds the
 commit in its RC_CODE_REF variable. www.ratecommons.org is the Space's custom domain (Namecheap CNAME www -> hf.space,
-HTTPS switch off). The apex ratecommons.org and care.ratecommons.org still point at Vercel; they need a redirect to
-www (Namecheap URL Redirect record) or Cloudflare. Site links (MCP URL, curl examples, og:url) use www.
+HTTPS switch off). DNS moved to Cloudflare (free; nameservers bradley/cheryl.ns.cloudflare.com, set at Namecheap 2026-11-10):
+www CNAME hf.space DNS-only (must stay grey so HF can renew its certificate); @ and care proxied, answered by
+two Single Redirects: ratecommons.org/* -> www, care.ratecommons.org/* -> www/care/*, 301, query kept. Site links (MCP URL, curl examples, og:url) use www.
 
 ## Overnight 2026-11-10 (see DECISIONS)
 
@@ -15,8 +16,8 @@ apartment addresses excluded, imaging sites named for the scanning practice, eve
 normalized into hospitals/full/ (3,227 files, 10.6 billion rows, 91 GB Parquet).
 
 Next:
-- Publish: Harshu creates the dataset `ratecommons/hospitals` and adds a Trusted Publisher for
-  Harshu-Pande/ratecommons hospitals.yml; then `publish` in ops/hospitals-request.txt copies the files and card.
+- Published 2026-11-10: huggingface.co/datasets/ratecommons/hospitals (3,232 Parquet files, 91 GB, index, fees, card).
+  Re-publish after a new full run: `shards full publish` in ops/hospitals-request.txt.
 - Unattached hospital files (~760): psychiatric/rehab hospitals are not sites (fine); for the rest match
   location_name + city within the state as a last resort, with a manual review list.
 - Medicare Advantage copays from the CMS Plan Benefit Package files; MA networks from Plan Finder.
