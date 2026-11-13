@@ -154,6 +154,10 @@ def _hosp_where(hospital: str = "", state: str = "", city: str = "", zip_prefix:
             for w in words[:6]:
                 lw = E._lit(f"%{w}%")
                 f.append(f"(h.name ILIKE {lw} OR h.cms_name ILIKE {lw} OR array_to_string(h.locations, ' ') ILIKE {lw})")
+            # "Mercy Hospital South" also matches Children's Mercy South: keep the hospitals that match best
+            base = " AND ".join(f)
+            f = [f"h.fid IN (SELECT fid FROM (SELECT h.fid, {_rank(hv)} AS sc, max({_rank(hv)}) OVER () AS top "
+                 f"FROM hosp h WHERE {base}) WHERE sc = top)"]
     return " AND ".join(f), f
 
 
@@ -227,7 +231,11 @@ def _rates_sql(cs: list[str], ct: str, hw: str, pw: str, sw: str) -> str | None:
     if not rf and not cf:
         return None
     cl = ", ".join(E._lit(c) for c in cs)
-    ctw = f" AND ct = {E._lit(ct)}" if ct else ""
+    if ct:
+        ctw = f" AND ct = {E._lit(ct)}"
+    else:  # a 3-digit code means an MS-DRG unless code_type says otherwise (APR-DRG 470 is a different grouper)
+        drg = [c for c in cs if re.fullmatch(r"\d{3}", c)]
+        ctw = (f" AND (code NOT IN ({', '.join(E._lit(c) for c in drg)}) OR ct = 'MS-DRG')" if drg else "")
     rates = (f"SELECT * FROM read_parquet({rf!r}, union_by_name = true) WHERE code IN ({cl}){ctw}" if rf else
              "SELECT NULL::VARCHAR AS fid, NULL::VARCHAR AS code, NULL::VARCHAR AS ct, NULL::VARCHAR AS setting WHERE false")
     charges = (f"SELECT * FROM read_parquet({cf!r}, union_by_name = true) WHERE code IN ({cl}){ctw}" if cf else
