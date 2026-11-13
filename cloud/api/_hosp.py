@@ -25,8 +25,9 @@ H = "hospital"
 _lock = threading.Lock()
 _state: dict = {}
 CARRIERS = ("aetna", "cigna", "uhc", "anthem", "bcbs", "humana", "kaiser", "centene", "molina", "oscar", "devoted",
-            "clover", "alignment", "caresource", "tricare", "medicare")
-PROGRAMS = ("commercial", "medicare_advantage", "medicaid", "medicare", "tricare", "va", "workers_comp")
+            "clover", "alignment", "caresource", "tricare", "medicare", "multiplan", "amerihealth", "medica",
+            "healthpartners", "upmc")
+PROGRAMS = ("commercial", "medicare_advantage", "medicaid", "medicare", "tricare", "va", "workers_comp", "self_pay")
 PLACEHOLDER = 9_999_999  # some hospitals publish 99,999,999 for "not applicable"
 
 

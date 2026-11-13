@@ -34,19 +34,25 @@ CODE_TYPES = ("CPT", "HCPCS", "MS-DRG", "APR-DRG", "APC")
 
 # carrier: the insurance company behind a hospital's payer/plan label (order matters: Anthem before Blue Cross)
 CARRIERS = [
-    ("aetna", r"AETNA|COVENTRY|MERITAIN"),
+    ("aetna", r"AETNA|COVENTRY|MERITAIN|FIRST HEALTH"),
     ("cigna", r"CIGNA|HEALTHSPRING|EVERNORTH"),
-    ("uhc", r"UNITED ?HEALTH|\bUHC\b|\bUMR\b|OPTUM|SURE ?ST\b|GOLDEN RULE|ALL SAVERS|\bAARP\b|SIERRA HEALTH|ROCKY MOUNTAIN HEALTH"),
-    ("anthem", r"ANTHEM|ELEVANCE|WELLPOINT|UNICARE|AMERIGROUP|EMPIRE|HEALTHKEEPERS|HEALTHY BLUE"),
+    ("uhc", r"UNITED ?HEALTH|^UNITED\b|\bUHC\b|\bUMR\b|OPTUM|SURE ?ST\b|GOLDEN RULE|ALL SAVERS|\bAARP\b|SIERRA HEALTH"
+            r"|ROCKY MOUNTAIN HEALTH|WELLMED|UNITED BEHAVIORAL|UNITED MEDICAL RESOURCES"),
+    ("anthem", r"ANTHEM|ELEVANCE|WELLPOINT|UNICARE|AMERIGROUP|EMPIRE|HEALTHKEEPERS|HEALTHY BLUE|HEALTHLINK|SIMPLY HEALTH"),
     ("bcbs", r"BLUE ?CROSS|BLUE ?SHIELD|\bBCBS|\bBC ?/? ?BS\b|HIGHMARK|REGENCE|PREMERA|CAREFIRST|FLORIDA BLUE|HORIZON|EXCELLUS"
              r"|INDEPENDENCE|\bIBX\b|WELLMARK|CAPITAL ?BLUE|\bHCSC\b|BLUECARE|BLUE CARE|BLUE ADVANTAGE|\bFEP\b|ARKANSAS BLUE"
              r"|BLUE KC|BLUE PLUS|BLUECHOICE|BLUE CHOICE|USABLE|LIFEWISE"),
     ("humana", r"HUMANA"),
     ("kaiser", r"KAISER"),
-    ("centene", r"CENTENE|AMBETTER|WELLCARE|HEALTH ?NET|MERIDIAN|SUNSHINE HEALTH|PEACH STATE|SUPERIOR HEALTH|HOME STATE"
+    ("centene", r"CENTENE|AMBETTER|WELLCARE|HEALTH ?NET|MERIDIAN|SUNSHINE (STATE )?HEALTH|PEACH STATE|SUPERIOR HEALTH|^SUPERIOR\b|HOME STATE"
                 r"|BUCKEYE|MAGNOLIA|NEBRASKA TOTAL|SILVERSUMMIT|ARIZONA COMPLETE|FIDELIS|CAROLINA COMPLETE|ILLINICARE"
                 r"|LOUISIANA HEALTHCARE CONNECTIONS|MANAGED HEALTH SERVICES|ABSOLUTE TOTAL|SUNFLOWER|WESTERN SKY|COORDINATED CARE"),
     ("molina", r"MOLINA"),
+    ("multiplan", r"MULTI ?PLAN|\bPHCS\b|BEECH STREET|PRIVATE HEALTHCARE SYSTEMS"),
+    ("amerihealth", r"AMERIHEALTH"),
+    ("medica", r"^MEDICA\b"),
+    ("healthpartners", r"HEALTH ?PARTNERS"),
+    ("upmc", r"\bUPMC\b"),
     ("oscar", r"OSCAR"),
     ("devoted", r"DEVOTED"),
     ("clover", r"CLOVER"),
@@ -77,6 +83,8 @@ def label(payer: str | None, plan: str | None) -> tuple[str | None, str | None]:
     carrier = next((c for c, rx in CARRIERS if re.search(rx, t)), None)
     if carrier == "tricare":
         return carrier, "tricare"
+    if re.search(r"SELF ?-?PAY|UNINSURED|\bCASH\b|PRIVATE PAY", t) and not carrier:
+        return None, "self_pay"
     if re.search(r"\bVA\b|VETERAN|\bVACCN\b|COMMUNITY CARE NETWORK|TRIWEST", t):
         return carrier, "va"
     if re.search(WORKERS, t):
