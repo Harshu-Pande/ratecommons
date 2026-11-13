@@ -28,7 +28,15 @@ CARRIERS = ("aetna", "cigna", "uhc", "anthem", "bcbs", "humana", "kaiser", "cent
             "clover", "alignment", "caresource", "tricare", "medicare", "multiplan", "amerihealth", "medica",
             "healthpartners", "upmc")
 PROGRAMS = ("commercial", "medicare_advantage", "medicaid", "medicare", "tricare", "va", "workers_comp", "self_pay")
-PLACEHOLDER = 9_999_999  # some hospitals publish 99,999,999 for "not applicable"
+PLACEHOLDER = 9_999_999
+# CPT descriptors (AMA copyright), revenue-code text and APR-DRG labels are not republished (src/ticdata/licensing.py);
+# the hospital's own description is shown for public code sets only (HCPCS Level II, MS-DRG, APC)
+WITHHELD = ("(regexp_matches({c}, '^[0-9]{{4}}[0-9FTU]$') OR {t} IN ('CPT', 'CDT', 'RC', 'APR-DRG', 'AP-DRG', 'EAPG') "
+            "OR ({t} = 'HCPCS' AND NOT regexp_matches({c}, '^[A-V][0-9]{{4}}$')))")
+
+
+def _descr(d: str, c: str, t: str) -> str:
+    return f"CASE WHEN {WITHHELD.format(c=c, t=t)} THEN NULL ELSE {d} END"  # some hospitals publish 99,999,999 for "not applicable"
 
 
 def _norm_code(c: str) -> str:
@@ -55,6 +63,23 @@ def meta() -> dict | None:
                                              ORDER BY fid) > 1 AS dup
                         FROM read_parquet('{hp}')""")
         cur.execute(f"CREATE OR REPLACE TABLE hcodes AS SELECT * FROM read_parquet('{cp}')")
+        # a file often names the health system ("DIGNITY HEALTH") rather than the hospital: then show CMS's name
+        generic = {"HOSPITAL", "HEALTH", "MEDICAL", "CENTER", "CENTRE", "INC", "LLC", "THE", "OF", "AND", "SYSTEM",
+                   "HEALTHCARE", "REGIONAL", "COMMUNITY", "SAINT", "ST", "CARE", "SERVICES", "CORPORATION", "CORP"}
+
+        def words(x):
+            return {w for w in re.split(r"[^A-Z0-9]+", (x or "").upper()) if len(w) > 1} - generic
+        disp = []
+        for fid, name, cms in cur.execute("SELECT fid, name, cms_name FROM hosp").fetchall():
+            d = name
+            if cms and (not name or not (words(name) & words(cms))):
+                d = " ".join(w.capitalize() if len(w) > 3 or w in ("ST", "OF") else w for w in cms.split())
+                d = re.sub(r"\bOf\b", "of", d)
+            disp.append((fid, d))
+        cur.execute("CREATE OR REPLACE TEMP TABLE hdisp (fid VARCHAR, display VARCHAR)")
+        cur.executemany("INSERT INTO hdisp VALUES (?, ?)", disp)
+        cur.execute("CREATE OR REPLACE TABLE hosp AS SELECT h.*, coalesce(d.display, h.name) AS display "
+                    "FROM hosp h LEFT JOIN hdisp d USING (fid)")
     with _lock:
         _state["meta"] = m
     return m
@@ -132,6 +157,15 @@ def _hosp_where(hospital: str = "", state: str = "", city: str = "", zip_prefix:
     return " AND ".join(f), f
 
 
+def _rank(hospital: str) -> str:
+    """ORDER BY expression: hospitals whose own name holds every word of the query first, then CMS's name."""
+    words = [w for w in re.split(r"[^A-Za-z0-9']+", hospital or "") if len(w) > 1]
+    if not words:
+        return "0"
+    pat = E._lit("%" + "%".join(words) + "%")
+    return f"(CASE WHEN h.display ILIKE {pat} THEN 3 WHEN h.cms_name ILIKE {pat} THEN 2 WHEN h.name ILIKE {pat} THEN 1 ELSE 0 END)"
+
+
 def _payer_where(payer: str, program: str) -> str:
     f = []
     p = (payer or "").strip().lower()
@@ -187,7 +221,7 @@ def _rates_sql(cs: list[str], ct: str, hw: str, pw: str, sw: str) -> str | None:
                "SELECT NULL::VARCHAR AS fid, NULL::VARCHAR AS code, NULL::VARCHAR AS ct, NULL::VARCHAR AS setting, "
                "NULL::VARCHAR AS descr, NULL::DOUBLE AS gross, NULL::DOUBLE AS cash WHERE false")
     return f"""WITH h AS (SELECT * FROM hosp h WHERE {hw}),
-      ch AS (SELECT c.* FROM ({charges}) c JOIN h USING (fid)),
+      ch AS (SELECT c.* REPLACE ({_descr('c.descr', 'c.code', 'c.ct')} AS descr) FROM ({charges}) c JOIN h USING (fid)),
       chc AS (SELECT fid, code, ct, any_value(descr) AS descr, median(gross) AS gross, min(cash) AS cash FROM ch GROUP BY ALL),
       r AS (SELECT r.* FROM ({rates}) r JOIN h USING (fid) WHERE {pw} AND {sw})"""
 
@@ -198,7 +232,7 @@ def _compact(rows: list[dict]) -> list[dict]:
 
 
 def _hosp_cols(prefix: str = "h") -> str:
-    return (f"{prefix}.name AS hospital, {prefix}.ccns[1] AS ccn, {prefix}.city, {prefix}.state, {prefix}.zip5, "
+    return (f"{prefix}.display AS hospital, {prefix}.ccns[1] AS ccn, {prefix}.city, {prefix}.state, {prefix}.zip5, "
             f"{prefix}.ein, {prefix}.fid")
 
 
@@ -210,10 +244,11 @@ def search_hospitals(name="", state="", city="", zip_prefix="", ccn="", ein="", 
     if not (hv or state or city or zip_prefix):
         raise ValueError("give a hospital name, state, city, ZIP prefix, CCN, EIN or NPI")
     hw, _ = _hosp_where(hv, state, city, zip_prefix)
-    return _compact(E._q(f"""SELECT h.name AS hospital, h.cms_name, h.ccns, h.ein, h.npis, h.address, h.city, h.state, h.zip5,
+    return _compact(E._q(f"""SELECT h.display AS hospital, h.name AS name_in_file, h.cms_name, h.ccns, h.ein, h.npis, h.address, h.city, h.state, h.zip5,
                            h.kind, h.last_updated, h.version AS schema_version, h.rates AS rate_rows, h.attached_by,
                            h.shared_file, h.url AS file_url, h.fid
-                    FROM hosp h WHERE {hw} ORDER BY h.state, h.name LIMIT {min(int(limit or 50), 500)}"""))
+                    FROM hosp h WHERE {hw} ORDER BY {_rank(name)} DESC, h.state, h.display
+                    LIMIT {min(int(limit or 50), 500)}"""))
 
 
 def hospital_prices(code, state="", hospital="", city="", zip_prefix="", payer="all", program="", setting="",
@@ -326,7 +361,7 @@ def hospital_vs_insurer(hospital, codes, payer="all", state=""):
     _need()
     cs, _ = _codes(codes)
     hw, _ = _hosp_where(hospital, state)
-    hs = E._q(f"SELECT * FROM hosp h WHERE {hw} ORDER BY rates DESC NULLS LAST LIMIT 3")
+    hs = E._q(f"SELECT * FROM hosp h WHERE {hw} ORDER BY {_rank(hospital)} DESC, rates DESC NULLS LAST LIMIT 3")
     hs = [x for i, x in enumerate(hs) if x["hid"] not in {y["hid"] for y in hs[:i]}]
     if not hs:
         raise ValueError(f"no hospital file matches {hospital!r}; try search_hospitals")
@@ -352,13 +387,21 @@ def hospital_vs_insurer(hospital, codes, payer="all", state=""):
         if got:
             trows = got
             break
+    gross = {}
+    if head:
+        for r in E._q(f"{head} SELECT code, median(gross) AS g FROM ch WHERE gross > 0 GROUP BY 1"):
+            gross[r["code"]] = r["g"]
     out = []
     for c in cs:
+        g = gross.get(c)
         for carrier in sorted({r["carrier"] for r in hrows if r["code"] == c and r["carrier"]} |
                               {r["payer"] for r in trows if r["code"] == c}):
             hv = sorted(r["amount"] for r in hrows if r["code"] == c and r["carrier"] == carrier and r["amount"])
-            tv = sorted(r["rate"] for r in trows if r["code"] == c and r["payer"] == carrier and r.get("rate")
-                        and r.get("negotiated_type") in E.DOLLAR_TYPES and 0.01 < r["rate"] < 99999)
+            mine = [r for r in trows if r["code"] == c and r["payer"] == carrier and r.get("rate") is not None]
+            dol = [r["rate"] for r in mine if r.get("negotiated_type") in E.DOLLAR_TYPES and 0.01 < r["rate"] < 99999]
+            pct = sorted({r["rate"] for r in mine if r.get("negotiated_type") == "percentage" and 0 < r["rate"] <= 500})
+            conv = [round(p / 100 * g, 2) for p in pct] if g else []
+            tv = sorted(dol + conv)
             hm = hv[len(hv) // 2] if hv else None
             tm = tv[len(tv) // 2] if tv else None
             out.append({"code": c, "payer": carrier,
@@ -366,16 +409,17 @@ def hospital_vs_insurer(hospital, codes, payer="all", state=""):
                                           "max": hv[-1] if hv else None,
                                           "plans": sorted({f"{r['payer']} / {r['plan']}" for r in hrows
                                                            if r["code"] == c and r["carrier"] == carrier})[:8]},
-                        "insurer_file": {"rows": len(tv), "min": tv[0] if tv else None, "median": tm,
-                                         "max": tv[-1] if tv else None,
-                                         "products": sorted({r.get("product") or "" for r in trows
-                                                             if r["code"] == c and r["payer"] == carrier})[:8]},
+                        "insurer_file": {"rows": len(mine), "dollar_rates": len(dol),
+                                         "percent_of_charges": pct[:6] or None,
+                                         "min": tv[0] if tv else None, "median": tm, "max": tv[-1] if tv else None,
+                                         "products": sorted({r.get("product") or "" for r in mine})[:8]},
                         "hospital_over_insurer": round(hm / tm, 2) if hm and tm else None})
-    return {"hospital": h["name"], "ccn": (h.get("ccns") or [None])[0], "state": st, "matched_by": ids[0],
-            "other_matches": [x["name"] for x in hs[1:]], "rows": out,
+    return {"hospital": h["display"], "ccn": (h.get("ccns") or [None])[0], "state": st, "matched_by": ids[0],
+            "other_matches": [x["display"] for x in hs[1:]], "gross_charge_used": gross or None, "rows": out,
             "notes": ["hospital_file: the hospital's commercial payer/plan rows (dollar, or percent of charges x gross "
                       "charge, or median allowed); insurer_file: institutional dollar rates the insurer publishes for "
-                      "the hospital's EIN/NPI in its Transparency in Coverage files. They often differ: different "
+                      "the hospital's EIN/NPI in its Transparency in Coverage files, with percent-of-charges rates converted to dollars "
+                      "with the hospital's own gross charge for the code (gross_charge_used). They often differ: different "
                       "contract terms (case rates vs fee schedules), plan coverage and file dates; a ratio near 1.0 "
                       "means the two sides agree."]}
 
@@ -386,7 +430,8 @@ def code_rows(code: str) -> list[dict]:
         return []
     c = _norm_code(code)
     return E._q(f"SELECT 'hospital files' AS payer, code_type AS billing_code_type, code AS billing_code, "
-                f"example_description AS name, hospitals, states, rows AS published_rows, hospitals_with_charges "
+                f"{_descr('example_description', 'code', 'code_type')} AS name, hospitals, states, rows AS published_rows, "
+                f"hospitals_with_charges "
                 f"FROM hcodes WHERE code = {E._lit(c)}")
 
 
@@ -407,7 +452,7 @@ def sql_views(fn: str, a: list[str], work: str, name: str, sb) -> bool:
     stl = ", ".join(E._lit(s) for s in sts)
     hf = f"{work}/{name}-h.parquet"
     stw = "true" if len(sts) == len(E.STATES) else f"state IN ({stl})"
-    E.con().execute(f"COPY (SELECT fid, name, cms_name, ccns, ein, npis, address, city, state, zip5, kind, last_updated, "
+    E.con().execute(f"COPY (SELECT fid, display AS name, name AS name_in_file, cms_name, ccns, ein, npis, address, city, state, zip5, kind, last_updated, "
                     f"url, rates FROM hosp WHERE NOT dup AND {stw}) TO '{hf}' (FORMAT parquet)")
     if fn == "hospitals":
         sb.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{hf}')")
@@ -418,7 +463,8 @@ def sql_views(fn: str, a: list[str], work: str, name: str, sb) -> bool:
     out = f"{work}/{name}.parquet"
     cl = ", ".join(E._lit(c) for c in cs)
     if fs:
-        E.con().execute(f"COPY (SELECT r.* EXCLUDE (state), h.state FROM read_parquet({fs!r}, union_by_name = true) r "
+        rep = f" REPLACE ({_descr('r.descr', 'r.code', 'r.ct')} AS descr)" if kind == "charges" else ""
+        E.con().execute(f"COPY (SELECT r.* EXCLUDE (state){rep}, h.state FROM read_parquet({fs!r}, union_by_name = true) r "
                         f"JOIN read_parquet('{hf}') h USING (fid) WHERE r.code IN ({cl})) TO '{out}' (FORMAT parquet)")
         sb.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{out}')")
     else:
