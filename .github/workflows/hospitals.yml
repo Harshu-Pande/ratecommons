@@ -131,9 +131,22 @@ jobs:
       - if: always()
         run: ticdata put-report reports/* --prefix "runs/$(date -u +%F)-hospitals-${GITHUB_RUN_ID}-publish-${{ matrix.n }}" || true
 
-  packmap:
+  packclean:
     needs: [args, shards]
     if: always() && needs.args.outputs.pack == 'true' && needs.shards.result != 'failure' && needs.shards.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env: { PYTHONUNBUFFERED: "1" }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.12" }
+      - run: pip install -q -e . httpx ijson
+      - run: ticdata hospitals-pack clean
+
+  packmap:
+    needs: [args, packclean]
+    if: always() && needs.args.outputs.pack == 'true' && needs.packclean.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 340
     strategy:

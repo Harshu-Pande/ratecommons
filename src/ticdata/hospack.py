@@ -297,6 +297,28 @@ def pack_map(n: int, of: int, work: str = "/tmp/hpack", upload_to: str | None = 
     return stats
 
 
+def pack_clean(upload_to: str = WORK_BUCKET) -> dict:
+    """Delete the previous run's map parts (a shard may write fewer files than last time; leftovers would double rows)."""
+    from huggingface_hub import batch_bucket_files, list_bucket_tree
+
+    from . import hfio
+
+    tok = hfio.token_for(hfio.bucket(upload_to))
+    files = [i.path for i in list_bucket_tree(upload_to, prefix=f"{PARTS}/", recursive=True, token=tok)
+             if getattr(i, "type", "file") != "directory"]
+    for k in range(0, len(files), 5000):
+        for attempt in range(5):
+            try:
+                batch_bucket_files(upload_to, delete=files[k:k + 5000], token=tok)
+                break
+            except Exception as e:
+                _log(f"delete retry {attempt}: {e!r}"[:300])
+                time.sleep(10 * (attempt + 1))
+                tok = hfio.token_for(hfio.bucket(upload_to))
+        _log(f"deleted {min(k + 5000, len(files))}/{len(files)}")
+    return {"deleted": len(files)}
+
+
 def pack_reduce(n: int, of: int, work: str = "/tmp/hpackr", upload_to: str | None = WORK_BUCKET) -> dict:
     """Coarse buckets n, n+of, ... (of 256): gather every shard's parts and write the 16 fine serving files each."""
     from huggingface_hub import download_bucket_files, list_bucket_tree

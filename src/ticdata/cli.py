@@ -179,7 +179,7 @@ def main(argv=None) -> int:
     p.add_argument("--n", type=int, required=True)
     p.add_argument("--of", type=int, required=True)
     p = sub.add_parser("hospitals-pack", help="hospital serving pack for the MCP/API: map | reduce | meta")
-    p.add_argument("step", choices=["map", "reduce", "meta"])
+    p.add_argument("step", choices=["clean", "map", "reduce", "meta"])
     p.add_argument("--n", type=int, default=0)
     p.add_argument("--of", type=int, default=1)
     p = sub.add_parser("hospitals-fees", help="attach normalized files to hospitals; facility fees -> hospitals/fees")
@@ -467,7 +467,7 @@ def main(argv=None) -> int:
         _write(hospitals.publish(a.n, a.of), f"reports/hospitals-publish-{a.n}.json")
     elif a.cmd == "hospitals-pack":
         from . import hospack
-        fn = {"map": lambda: hospack.pack_map(a.n, a.of), "reduce": lambda: hospack.pack_reduce(a.n, a.of),
+        fn = {"clean": hospack.pack_clean, "map": lambda: hospack.pack_map(a.n, a.of), "reduce": lambda: hospack.pack_reduce(a.n, a.of),
               "meta": hospack.pack_meta}[a.step]
         _write(fn(), f"reports/hospitals-pack-{a.step}-{a.n}.json")
     elif a.cmd == "hospitals-fees":
