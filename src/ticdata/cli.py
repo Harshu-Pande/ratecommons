@@ -178,6 +178,10 @@ def main(argv=None) -> int:
     p = sub.add_parser("hospitals-publish", help="copy hospitals/full (shard n of k) from the bucket to the public dataset")
     p.add_argument("--n", type=int, required=True)
     p.add_argument("--of", type=int, required=True)
+    p = sub.add_parser("hospitals-pack", help="hospital serving pack for the MCP/API: map | reduce | meta")
+    p.add_argument("step", choices=["map", "reduce", "meta"])
+    p.add_argument("--n", type=int, default=0)
+    p.add_argument("--of", type=int, default=1)
     p = sub.add_parser("hospitals-fees", help="attach normalized files to hospitals; facility fees -> hospitals/fees")
     p = sub.add_parser("cloud-pack", help="cloud pack (small files per code/state) of one payer -> work bucket serve/v1")
     p.add_argument("--payer", required=True)
@@ -461,6 +465,11 @@ def main(argv=None) -> int:
     elif a.cmd == "hospitals-publish":
         from . import hospitals
         _write(hospitals.publish(a.n, a.of), f"reports/hospitals-publish-{a.n}.json")
+    elif a.cmd == "hospitals-pack":
+        from . import hospack
+        fn = {"map": lambda: hospack.pack_map(a.n, a.of), "reduce": lambda: hospack.pack_reduce(a.n, a.of),
+              "meta": hospack.pack_meta}[a.step]
+        _write(fn(), f"reports/hospitals-pack-{a.step}-{a.n}.json")
     elif a.cmd == "hospitals-fees":
         from . import hospitals
         _write(hospitals.fees(), "reports/hospitals-fees.json")
