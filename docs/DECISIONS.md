@@ -3,6 +3,28 @@
 The design doc is the blueprint; this file records where reality changed it.
 Newest first. One entry per lesson: what we saw, what we changed.
 
+## 2026-11-13: hospital files in the MCP/API; ratecommons.org/mcp broke behind the www redirect
+- MCP clients saved with `https://ratecommons.org/mcp` failed after the move to Cloudflare: the apex answers 301 to
+  www, and a 301 turns the POST into a GET. Fix: a Cloudflare Worker on `ratecommons.org/*` proxies /mcp, /api/*,
+  /.well-known/* to www and 301s the rest (the apex redirect rule must go: redirect rules run before Workers).
+- Hospital serving pack (`hospack.py`, hospitals.yml `pack`): 3,219 files -> 895M payer/plan rate rows (CPT, HCPCS,
+  MS-DRG, APR-DRG, APC; duplicate items collapsed) in 4,096 files by md5(code)[:3] (12.8 GB, max 15 MB), plus
+  per-hospital gross/cash charges, hospitals.parquet (3,155 hospitals, 2,452 with a CCN) and codes.parquet (299k
+  codes). Map 30 min on 48 runners, reduce 20 min on 32. Payer text -> carrier + program (commercial, Medicare
+  Advantage, Medicaid, Medicare, Tricare, VA, workers' comp, self-pay) by regex; percent-of-charges rows get a dollar
+  estimate from the item's gross charge.
+- Lessons: `gh run cancel` on a queued run did not stop it; both runs wrote the same part names, so the reduce mixed
+  them. `pack` now starts by deleting the previous parts. CSV report jsons keep the header under `header` (626 files
+  had no name/state until read from there); free-text addresses need state+ZIP and state-name patterns.
+- Licensing: hospital descriptions are often CPT short descriptors. The serving pack and the server withhold text
+  for CPT-shaped codes, revenue codes and APR-DRG (same rule as licensing.py). The dataset ratecommons/hospitals
+  (published 2026-11-10) still carries the descriptions as published; re-publishing it redacted is open.
+- Tools: hospital_prices, hospital_market, search_hospitals, hospital_vs_insurer; hospital rows in code_info,
+  data_status and run_sql (rc_hospitals, rc_hospital_rates, rc_hospital_charges); MCP initialize returns routing
+  instructions (hospital files for facility/cash/MA/Medicaid prices, insurer files for professional rates).
+  hospital_vs_insurer prices the insurer's percent-of-charges rows with the hospital's own gross charge: Barnes-Jewish
+  70553, Aetna 61.4% x $4,629 = $2,842 vs the hospital file's $2,361 median (0.83).
+
 ## 2026-11-10: UHC 2026-10 merged; undated file names take the plan's month; BSCA and BCBS AZ start
 - `reduce uhc 2026-10 all merge` (30 min from 7 parts) published 6,159 files, 2.59B rate facts, 78 GB. Against the
   plan: 6,763 files - 603 withdrawn (409) - 1 lost: `Oxford_eviCore_in-network-rates.json` has no date in its name,
