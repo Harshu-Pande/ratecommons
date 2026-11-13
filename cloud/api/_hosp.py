@@ -190,6 +190,19 @@ def _payer_where(payer: str, program: str) -> str:
     return " AND ".join(f) or "true"
 
 
+def _class_where(billing_class: str) -> str:
+    """Hospital files list facility rows and, at many systems, their own physicians' (professional) rows too."""
+    b = (billing_class or "facility").strip().lower()
+    if b in ("any", "all"):
+        return "true"
+    if b == "professional":
+        return "(r.bc = 'professional' OR regexp_matches(coalesce(r.mods, ''), '(^|[^0-9A-Z])26([^0-9A-Z]|$)'))"
+    if b != "facility":
+        raise ValueError("billing_class is 'facility' (default), 'professional' or 'any'")
+    return ("(r.bc <> 'professional' AND NOT regexp_matches(coalesce(r.mods, ''), "
+            "'(^|[^0-9A-Z])(26|TC)([^0-9A-Z]|$)'))")
+
+
 def _setting_where(setting: str) -> str:
     s = (setting or "").strip().lower()
     if s in ("", "any", "all"):
@@ -252,7 +265,7 @@ def search_hospitals(name="", state="", city="", zip_prefix="", ccn="", ein="", 
 
 
 def hospital_prices(code, state="", hospital="", city="", zip_prefix="", payer="all", program="", setting="",
-                    code_type="", group_by="", sort="", limit=200):
+                    billing_class="facility", code_type="", group_by="", sort="", limit=200):
     _need()
     cs, ct = _codes(code, code_type)
     if not (hospital or state):
@@ -266,7 +279,7 @@ def hospital_prices(code, state="", hospital="", city="", zip_prefix="", payer="
         program = "commercial"
         notes.append("plan amounts are commercial plans only (program='commercial'); pass program='all' or "
                      "'medicare_advantage' / 'medicaid' for others")
-    pw = _payer_where(payer, program)
+    pw = _payer_where(payer, program) + " AND " + _class_where(billing_class)
     head = _rates_sql(cs, ct, hw, pw, sw)
     if not head:
         return {"rows": [], "notes": [f"no hospital file publishes {', '.join(cs)}"]}
@@ -318,11 +331,13 @@ def _quant(vals) -> dict:
     return {"hospitals": len(v), **E._quantiles(v)}
 
 
-def hospital_market(code, state, payer="all", program="commercial", setting="", code_type="", city="", zip_prefix=""):
+def hospital_market(code, state, payer="all", program="commercial", setting="", billing_class="facility", code_type="",
+                    city="", zip_prefix=""):
     _need()
     cs, ct = _codes(code, code_type)
     hw, _ = _hosp_where("", state, city, zip_prefix)
-    head = _rates_sql(cs, ct, hw, _payer_where(payer, program), _setting_where(setting))
+    head = _rates_sql(cs, ct, hw, _payer_where(payer, program) + " AND " + _class_where(billing_class),
+                      _setting_where(setting))
     if not head:
         return {"codes": [], "notes": [f"no hospital file publishes {', '.join(cs)}"]}
     per = E._q(f"""{head},
@@ -370,7 +385,7 @@ def hospital_vs_insurer(hospital, codes, payer="all", state=""):
     ids = ([h["ein"]] if h.get("ein") else []) + list(h.get("npis") or [])[:3]
     if not ids:
         raise ValueError("this hospital's file names no EIN or type-2 NPI, so its insurer rates cannot be matched")
-    pw = _payer_where(payer, "commercial")
+    pw = _payer_where(payer, "commercial") + " AND " + _class_where("facility")
     head = _rates_sql(cs, "", f"h.fid = {E._lit(h['fid'])}", pw, "true")
     hrows = E._q(f"""{head} SELECT r.code, r.carrier, r.payer, r.plan, r.setting, r.bc, round({AMOUNT}, 2) AS amount,
                                {BASIS} AS basis, r.med, r.claims FROM r""") if head else []
@@ -493,6 +508,8 @@ Args:
     program: "commercial", "medicare_advantage", "medicaid", "medicare", "tricare", "va", "workers_comp", a comma
       list, or "all" (default)
     setting: "outpatient", "inpatient" or "any" (default)
+    billing_class: "facility" (default: the hospital's own fee, without professional rows or 26/TC component
+      rows), "professional" (the fees some hospital files list for their employed physicians, modifier 26) or "any"
     code_type: optional CPT, HCPCS, MS-DRG, APR-DRG or APC (3-digit codes match both DRG types otherwise)
     group_by: "hospital" (default without a hospital: one row per hospital and code with the cash price, gross
       charge and min/median/max plan amount) or "row" (default with a hospital: every payer/plan row)
@@ -513,6 +530,7 @@ Args:
     payer: "all" (default), a carrier (aetna, cigna, uhc, anthem, bcbs, humana, ...) or a comma list
     program: "commercial" (default), "medicare_advantage", "medicaid", ... or "all"
     setting: "outpatient", "inpatient" or "any" (default)
+    billing_class: "facility" (default), "professional" or "any"
     code_type: optional CPT, HCPCS, MS-DRG, APR-DRG or APC
     city: optional hospital city
     zip_prefix: optional ZIP prefix
