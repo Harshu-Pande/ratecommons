@@ -23,6 +23,18 @@ export const TOOLS = [
   { group: 'Compare and benchmark', name: 'rank_providers', title: 'Rank provider groups',
     blurb: 'Rank provider groups by their rates across a basket of codes, in one state or the whole country.',
     ex: { codes: '70450,71250,74177,72148', state: 'MO', specialty: 'Radiology' } },
+  { group: 'Hospital prices', name: 'hospital_prices', title: 'Hospital prices',
+    blurb: "What hospitals list in their own price files for a service: the cash price, the full charge and what each insurance plan pays, including Medicare Advantage and Medicaid plans.",
+    ex: { code: '70553', state: 'MO', city: 'St. Louis' } },
+  { group: 'Hospital prices', name: 'hospital_market', title: 'Hospital market spread',
+    blurb: 'The range of hospital prices for a service across a state: plan amounts, cash prices and full charges, by insurer.',
+    ex: { code: '74177', state: 'MO' } },
+  { group: 'Hospital prices', name: 'search_hospitals', title: 'Find hospitals',
+    blurb: 'Hospitals that publish a price file, with their CMS number, tax ID and the file itself.',
+    ex: { state: 'MO', city: 'St. Louis' } },
+  { group: 'Hospital prices', name: 'hospital_vs_insurer', title: 'Hospital vs insurer files',
+    blurb: "One hospital's prices from both sides: its own price file next to what insurers publish for it.",
+    ex: { hospital: 'Barnes Jewish', codes: '70553,74177', state: 'MO' } },
   { group: 'Networks and plans', name: 'find_plans', title: "Find an employer's plan",
     blurb: 'Search employer and plan names to find which insurer networks they use.',
     ex: { query: 'Boeing' } },
@@ -67,7 +79,7 @@ const GROUP_BY = { market_distribution: [['payer', 'Insurer'], ['product', 'Prod
 const SLOW = new Set(['provider_rates', 'compare_providers', 'benchmark_provider'])
 const ADVANCED = new Set(['limit', 'max_rows', 'weights', 'min_codes', 'billing_class', 'modifier', 'zip_prefix', 'network'])
 
-const PREFER = ['median', 'median_rate', 'rate', 'p50', 'score', 'allowed', 'nonfacility_amount', 'providers', 'provider_groups', 'groups', 'n']
+const PREFER = ['median', 'median_rate', 'median_amount', 'amount', 'cash_price', 'rate', 'p50', 'score', 'allowed', 'nonfacility_amount', 'providers', 'provider_groups', 'groups', 'n']
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v)
 const nice = (k) => k.replace(/_/g, ' ')
 
