@@ -5,3 +5,4 @@ fees
 shards full
 publish
 pack
+pack
