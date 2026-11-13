@@ -6,3 +6,4 @@ shards full
 publish
 pack
 pack
+packmeta
