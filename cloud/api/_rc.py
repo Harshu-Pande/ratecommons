@@ -1029,6 +1029,12 @@ def code_info(code):
     for p in payers_loaded():
         out += _q(f"SELECT '{p}' payer, billing_code_type, billing_code, any_value(name) AS name, sum(n) AS published_rows "
                   f"FROM codes_{p} WHERE billing_code = {_lit(c)} GROUP BY ALL")
+    try:
+        import _hosp
+
+        out += _hosp.code_rows(c)
+    except Exception:
+        pass
     m = _mcr([c], "US")
     for (code_, mod), (nf, fa) in sorted(m.items()):
         out.append({"payer": "medicare (PFS, national)", "billing_code": code_, "modifier": mod or None,
@@ -1066,6 +1072,15 @@ def data_status():
                                   "rest are still being processed")
             elif p in PARTIAL and not src:
                 row["partial"] = PARTIAL[p]
+    try:
+        import _hosp
+
+        hs = _hosp.status()
+        if hs:
+            out["hospital_files"] = {**hs, "about": "hospitals' own price files (45 CFR 180), every code; tools "
+                                                    "hospital_prices, hospital_market, search_hospitals, hospital_vs_insurer"}
+    except Exception:
+        pass
     return out
 
 
@@ -1299,6 +1314,10 @@ def run_sql(sql, max_rows=500):
                     fs.append(f"{work}/{name}-{p}.parquet")
                     con().execute(f"COPY ({q}) TO '{fs[-1]}' (FORMAT parquet)")
                 sb.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet({fs!r}, union_by_name = true)")
+            elif fn in ("hospitals", "hospital_rates", "hospital_charges"):
+                import _hosp
+
+                _hosp.sql_views(fn, a, work, name, sb)
             elif fn == "code_file":
                 p = _payers(a[0])[0]
                 cf = _code_files(p, [_code(a[1])], None)

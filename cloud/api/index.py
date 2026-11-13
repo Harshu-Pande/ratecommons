@@ -19,12 +19,27 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import HTMLResponse, JSONResponse, Response  # noqa: E402
 from starlette.concurrency import run_in_threadpool  # noqa: E402
 
+import _hosp as H  # noqa: E402
 import _rc as E  # noqa: E402
-from _tooldocs import DOCS  # noqa: E402
+from _tooldocs import DOCS as _DOCS  # noqa: E402
+
+DOCS = {**_DOCS, **H.DOCS}
+if "run_sql" in DOCS and H.SQL_DOC not in DOCS["run_sql"]:  # the hospital table functions, listed with the others
+    _i = DOCS["run_sql"].find("\n\nExample")
+    DOCS["run_sql"] = (DOCS["run_sql"][:_i] + H.SQL_DOC + DOCS["run_sql"][_i:]) if _i > 0 else DOCS["run_sql"] + H.SQL_DOC
+for _k, _extra in (("lookup_rates", "Insurer files only; for a hospital's own prices (facility fee, cash price, "
+                                    "chargemaster, MA/Medicaid plan rates at a hospital) use hospital_prices."),
+                   ("market_distribution", "Insurer files; for hospitals' facility prices use hospital_market.")):
+    if _k in DOCS and _extra not in DOCS[_k]:
+        _head, _sep, _rest = DOCS[_k].partition("\n\nArgs:")
+        DOCS[_k] = f"{_head}\n{_extra}{_sep}{_rest}"
 
 TOOLS = {f.__name__: f for f in (E.provider_rates, E.rank_providers, E.lookup_rates, E.market_distribution, E.compare_providers,
                                   E.benchmark_provider, E.network_breadth, E.provider_networks, E.find_plans,
-                                  E.list_products, E.search_providers, E.code_info, E.medicare_rate, E.data_status, E.run_sql)}
+                                  E.list_products, E.search_providers, H.hospital_prices, H.hospital_market,
+                                  H.search_hospitals, H.hospital_vs_insurer, E.code_info, E.medicare_rate, E.data_status,
+                                  E.run_sql)}
+HOSPITAL_TOOLS = {"hospital_prices", "hospital_market", "search_hospitals", "hospital_vs_insurer"}
 INT_ARGS = {"limit", "min_codes", "max_rows"}
 
 app = FastAPI(title="RateCommons")
@@ -60,7 +75,7 @@ def _call(name: str, args: dict):
     sig = inspect.signature(fn)
     kw = {k: (int(v) if k in INT_ARGS and v not in (None, "") else v) for k, v in (args or {}).items() if k in sig.parameters}
     res = fn(**kw)
-    notes = E.coverage_notes(kw) if name not in ("data_status", "medicare_rate", "code_info") else []
+    notes = E.coverage_notes(kw) if name not in ("data_status", "medicare_rate", "code_info", *HOSPITAL_TOOLS) else []
     if notes:  # common-services packs: never let a missing code read as "no published rate"
         if isinstance(res, list):
             res = {"rows": res, "notes": notes}
@@ -131,7 +146,7 @@ async def api_tool(name: str, request: Request):
 
 # ---------------------------------------------------------------- MCP (streamable HTTP, stateless, JSON responses)
 
-SERVER = {"name": "RateCommons", "version": "2.0"}
+SERVER = {"name": "RateCommons", "version": "2.1"}
 
 
 async def _arpc(msg: dict):
@@ -155,7 +170,8 @@ def _rpc(msg: dict, done=None):
     if method == "initialize":
         ver = (msg.get("params") or {}).get("protocolVersion") or "2025-06-18"
         return {"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": ver, "serverInfo": SERVER,
-                                                         "capabilities": {"tools": {"listChanged": False}}}}
+                                                         "capabilities": {"tools": {"listChanged": False}},
+                                                         "instructions": H.INSTRUCTIONS}}
     if method == "ping":
         return {"jsonrpc": "2.0", "id": mid, "result": {}}
     if method == "tools/list":
@@ -216,13 +232,21 @@ def _keep_fresh():
     pipeline published new packs; if so drop the stale files and remembered answers and load the new metadata."""
     E.payers_loaded()
     E.refresh_if_changed()  # records the shared files' identity
+    try:
+        H.meta()
+    except Exception:
+        traceback.print_exc()
     while True:
         time.sleep(float(os.environ.get("RC_REFRESH_SECONDS", "900")))
         try:
-            if E.refresh_if_changed():
+            changed = E.refresh_if_changed()
+            if H.refresh_if_changed():
+                changed = list(changed) + ["hospital"]
+            if changed:
                 with _rlock:
                     _RCACHE.clear()
                 E.payers_loaded()
+                H.meta()
         except Exception:
             traceback.print_exc()
 

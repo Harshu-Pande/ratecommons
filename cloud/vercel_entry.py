@@ -10,7 +10,7 @@ REF = os.environ.get("RC_CODE_REF", "main")
 D = f"/tmp/rc-code/{REF}"
 if not os.path.exists(f"{D}/.ok"):
     os.makedirs(D, exist_ok=True)
-    for f in ("index.py", "_rc.py", "_tooldocs.py", "_ui.py"):
+    for f in ("index.py", "_rc.py", "_hosp.py", "_tooldocs.py", "_ui.py"):
         r = httpx.get(f"https://raw.githubusercontent.com/Harshu-Pande/ratecommons/{REF}/cloud/api/{f}", timeout=30)
         r.raise_for_status()
         open(f"{D}/{f}", "wb").write(r.content)
