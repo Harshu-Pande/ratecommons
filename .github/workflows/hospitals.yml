@@ -5,7 +5,8 @@ name: hospitals
 # add "full" to shards for every code (public dataset, hospitals/full/) instead of the patient-tool codes;
 # "publish" copies hospitals/full, index and fees from the bucket into the public dataset ratecommons/hospitals
 # (needs that repo to exist with this workflow as a trusted publisher); "pack" builds the hospital serving pack
-# for the MCP/API (serve/v2/hospital/, src/ticdata/hospack.py) from hospitals/full.
+# for the MCP/API (serve/v2/hospital/, src/ticdata/hospack.py) from hospitals/full; "packmeta" redoes only its
+# hospitals.parquet / codes.parquet / meta.json.
 on:
   workflow_dispatch:
     inputs:
@@ -32,13 +33,14 @@ jobs:
       full: ${{ steps.a.outputs.full }}
       publish: ${{ steps.a.outputs.publish }}
       pack: ${{ steps.a.outputs.pack }}
+      packmeta: ${{ steps.a.outputs.packmeta }}
     steps:
       - uses: actions/checkout@v5
       - id: a
         run: |
           line="${{ github.event.inputs.request }}"
           [ -n "$line" ] || line="$(grep -v '^#' ops/hospitals-request.txt | grep -v '^[[:space:]]*$' | tail -1)"
-          for k in discover shards fees full publish pack; do
+          for k in discover shards fees full publish pack packmeta; do
             case " $line " in *" $k "*) echo "$k=true" >> "$GITHUB_OUTPUT";; *) echo "$k=false" >> "$GITHUB_OUTPUT";; esac
           done
 
@@ -181,7 +183,7 @@ jobs:
 
   packmeta:
     needs: [args, packreduce]
-    if: always() && needs.args.outputs.pack == 'true' && needs.packreduce.result == 'success'
+    if: always() && ((needs.args.outputs.pack == 'true' && needs.packreduce.result == 'success') || needs.args.outputs.packmeta == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env: { PYTHONUNBUFFERED: "1" }

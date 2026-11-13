@@ -142,6 +142,16 @@ def _addr_parts(a: str | None) -> tuple[str | None, str | None, str | None]:
     return (m.group(1).strip().title(), m.group(2), m.group(3)) if m else (None, None, None)
 
 
+def _header(j: dict) -> dict:
+    """The hospital header of a file's report json: top level for JSON files, under "header" for CSV files."""
+    h = dict(j.get("header") or {})
+    for k in ("hospital_name", "last_updated_on", "version", "location_name", "hospital_address", "type_2_npi"):
+        if not h.get(k) and j.get(k):
+            h[k] = j[k]
+    h["url"] = j.get("url")
+    return h
+
+
 def _list_full(tok) -> dict[str, int]:
     from huggingface_hub import list_bucket_tree
 
@@ -182,7 +192,7 @@ def pack_map(n: int, of: int, work: str = "/tmp/hpack", upload_to: str | None = 
             else:
                 download_bucket_files(WORK_BUCKET, files=[(f"hospitals/full/{fid}.parquet", p),
                                                           (f"hospitals/full/{fid}.json", h)], token=tok)
-            head = json.load(open(h)) if os.path.exists(h) else {}
+            head = _header(json.load(open(h)) if os.path.exists(h) else {})
             a = att[fid]
             addrs = head.get("hospital_address") or []
             city, st, zip5 = _addr_parts(addrs[0] if addrs else None)
@@ -338,6 +348,32 @@ def pack_meta(work: str = "/tmp/hpackm", upload_to: str | None = WORK_BUCKET, do
             download_bucket_files(WORK_BUCKET, files=[(f, f"{work}/{dest}/{os.path.basename(f)}") for f in files[k:k + 200]],
                                   token=tok)
     hosp = [h for f in sorted(glob.glob(f"{work}/hosp/*.json")) for h in json.load(open(f))]
+    if download:  # header fields from each file's report json (the first pack run missed CSV headers)
+        os.makedirs(f"{work}/heads", exist_ok=True)
+        fids = [h["fid"] for h in hosp]
+        for k in range(0, len(fids), 500):
+            try:
+                download_bucket_files(WORK_BUCKET, files=[(f"hospitals/full/{f}.json", f"{work}/heads/{f}.json")
+                                                          for f in fids[k:k + 500]], token=tok)
+            except Exception as e:
+                _log(f"headers: {e!r}"[:300])
+        states = _site_states(work)
+        for h in hosp:
+            p = f"{work}/heads/{h['fid']}.json"
+            if not os.path.exists(p):
+                continue
+            hd = _header(json.load(open(p)))
+            addrs = hd.get("hospital_address") or []
+            city, st, zip5 = _addr_parts(addrs[0] if addrs else None)
+            h["name"] = h.get("name") or hd.get("hospital_name")
+            h["locations"] = h.get("locations") or hd.get("location_name") or []
+            h["address"] = h.get("address") or (addrs[0] if addrs else None)
+            h["city"], h["zip5"] = h.get("city") or city, h.get("zip5") or zip5
+            h["state"] = h.get("state") or next((states[c] for c in h.get("ccns") or [] if c in states), None) or st
+            h["npis"] = h.get("npis") or hd.get("type_2_npi") or []
+            h["last_updated"] = h.get("last_updated") or hd.get("last_updated_on")
+            h["version"] = h.get("version") or hd.get("version")
+            h["url"] = h.get("url") or hd.get("url")
     sites = _fetch(f"{BASE}/shop/sites/sites.parquet", f"{work}/sites.parquet")
     con = duckdb.connect()
     con.execute("CREATE TABLE h (fid VARCHAR, ccns VARCHAR[], ein VARCHAR, how VARCHAR, name VARCHAR, locations VARCHAR[],"
