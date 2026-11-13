@@ -65,6 +65,10 @@ MA = MA_WORDS + "|MEDICARE"
 WORKERS = r"WORKER|WORK ?COMP|\bW/?C\b|WORKMAN|INDUSTRIAL"
 
 
+WITHHELD = ("(regexp_matches(code, '^[0-9]{4}[0-9FTU]$') OR ct IN ('CPT', 'CDT', 'RC', 'APR-DRG', 'AP-DRG', 'EAPG') "
+            "OR (ct = 'HCPCS' AND NOT regexp_matches(code, '^[A-V][0-9]{4}$')))")  # mirrors licensing.text_withheld
+
+
 def label(payer: str | None, plan: str | None) -> tuple[str | None, str | None]:
     """(carrier, program) for one payer/plan label as a hospital published it."""
     t = re.sub(r"\s+", " ", f"{payer or ''} {plan or ''}".upper()).strip()
@@ -193,7 +197,9 @@ def pack_map(n: int, of: int, work: str = "/tmp/hpack", upload_to: str | None = 
             db.execute("CREATE OR REPLACE TEMP TABLE lab (payer VARCHAR, plan VARCHAR, carrier VARCHAR, program VARCHAR)")
             if pairs:
                 db.executemany("INSERT INTO lab VALUES (?, ?, ?, ?)", [(py, pl, *label(py, pl)) for py, pl in pairs])
-            db.execute(f"CREATE OR REPLACE TEMP TABLE ch AS SELECT code, ct, setting, any_value(descr) AS descr,"
+            # CPT descriptors (AMA), revenue-code text and APR-DRG labels are not ours to republish (licensing.py):
+            # the hospital's description is kept only for public code sets (HCPCS Level II, MS-DRG, APC)
+            db.execute(f"CREATE OR REPLACE TEMP TABLE ch AS SELECT code, ct, setting, any_value(descr) FILTER (WHERE NOT ({WITHHELD})) AS descr,"
                        f" median(gross) FILTER (WHERE gross > 0) AS gross, min(gross) FILTER (WHERE gross > 0) AS gross_min,"
                        f" max(gross) FILTER (WHERE gross > 0) AS gross_max, min(cash) FILTER (WHERE cash > 0) AS cash,"
                        f" max(cash) FILTER (WHERE cash > 0) AS cash_max FROM ({src}) GROUP BY ALL")
