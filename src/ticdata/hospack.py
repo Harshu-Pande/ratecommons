@@ -137,9 +137,35 @@ def _site_states(work: str) -> dict:
 ADDR = re.compile(r",\s*([A-Za-z .'-]+?)\s*,?\s+([A-Z]{2})\s+(\d{5})(?:-\d{4})?\s*$")
 
 
+US = {"AL": "ALABAMA", "AK": "ALASKA", "AZ": "ARIZONA", "AR": "ARKANSAS", "CA": "CALIFORNIA", "CO": "COLORADO",
+      "CT": "CONNECTICUT", "DE": "DELAWARE", "DC": "DISTRICT OF COLUMBIA", "FL": "FLORIDA", "GA": "GEORGIA",
+      "HI": "HAWAII", "ID": "IDAHO", "IL": "ILLINOIS", "IN": "INDIANA", "IA": "IOWA", "KS": "KANSAS", "KY": "KENTUCKY",
+      "LA": "LOUISIANA", "ME": "MAINE", "MD": "MARYLAND", "MA": "MASSACHUSETTS", "MI": "MICHIGAN", "MN": "MINNESOTA",
+      "MS": "MISSISSIPPI", "MO": "MISSOURI", "MT": "MONTANA", "NE": "NEBRASKA", "NV": "NEVADA", "NH": "NEW HAMPSHIRE",
+      "NJ": "NEW JERSEY", "NM": "NEW MEXICO", "NY": "NEW YORK", "NC": "NORTH CAROLINA", "ND": "NORTH DAKOTA",
+      "OH": "OHIO", "OK": "OKLAHOMA", "OR": "OREGON", "PA": "PENNSYLVANIA", "RI": "RHODE ISLAND",
+      "SC": "SOUTH CAROLINA", "SD": "SOUTH DAKOTA", "TN": "TENNESSEE", "TX": "TEXAS", "UT": "UTAH", "VT": "VERMONT",
+      "VA": "VIRGINIA", "WA": "WASHINGTON", "WV": "WEST VIRGINIA", "WI": "WISCONSIN", "WY": "WYOMING", "PR": "PUERTO RICO"}
+_NAME_ST = {v: k for k, v in US.items()}
+_ST_ZIP = re.compile(r"\b(" + "|".join(US) + r")\.?[,\s]+(\d{5})(?:-\d{4})?\b")
+_NAME_ZIP = re.compile(r"\b(" + "|".join(sorted(_NAME_ST, key=len, reverse=True)) + r")[,\s]+(\d{5})(?:-\d{4})?\b", re.I)
+_ST_END = re.compile(r"[,\s](" + "|".join(US) + r")\.?\s*$")
+
+
 def _addr_parts(a: str | None) -> tuple[str | None, str | None, str | None]:
-    m = ADDR.search((a or "").strip())
-    return (m.group(1).strip().title(), m.group(2), m.group(3)) if m else (None, None, None)
+    """(city, state, zip5) from a free-text US address; city only when the address has the usual commas."""
+    t = (a or "").strip()
+    m = ADDR.search(t)
+    if m and m.group(2) in US:
+        return m.group(1).strip().title(), m.group(2), m.group(3)
+    m = _ST_ZIP.search(t)
+    if m:
+        return None, m.group(1), m.group(2)
+    m = _NAME_ZIP.search(t)
+    if m:
+        return None, _NAME_ST[m.group(1).upper()], m.group(2)
+    m = _ST_END.search(t)
+    return (None, m.group(1), None) if m else (None, None, None)
 
 
 def _header(j: dict) -> dict:
@@ -364,11 +390,16 @@ def pack_meta(work: str = "/tmp/hpackm", upload_to: str | None = WORK_BUCKET, do
                 continue
             hd = _header(json.load(open(p)))
             addrs = hd.get("hospital_address") or []
-            city, st, zip5 = _addr_parts(addrs[0] if addrs else None)
+            city, st, zip5 = None, None, None
+            for t in [*addrs, *(hd.get("location_name") or []), hd.get("hospital_name"), h.get("address"), h.get("name")]:
+                city, st, zip5 = _addr_parts(t if isinstance(t, str) else None)
+                if st:
+                    break
             h["name"] = h.get("name") or hd.get("hospital_name")
             h["locations"] = h.get("locations") or hd.get("location_name") or []
             h["address"] = h.get("address") or (addrs[0] if addrs else None)
             h["city"], h["zip5"] = h.get("city") or city, h.get("zip5") or zip5
+            h["name"] = (h["name"] or "").strip() or None
             h["state"] = h.get("state") or next((states[c] for c in h.get("ccns") or [] if c in states), None) or st
             h["npis"] = h.get("npis") or hd.get("type_2_npi") or []
             h["last_updated"] = h.get("last_updated") or hd.get("last_updated_on")

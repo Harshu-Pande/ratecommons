@@ -48,7 +48,11 @@ def meta() -> dict | None:
     if m:
         hp, cp = E.fetch(f"{H}/hospitals.parquet"), E.fetch(f"{H}/codes.parquet")
         cur = E.con()
-        cur.execute(f"CREATE OR REPLACE TABLE hosp AS SELECT *, coalesce(ccns[1], fid) AS hid FROM read_parquet('{hp}')")
+        # a hospital often posts the same file at two URLs: keep one copy (identical counts and date)
+        cur.execute(f"""CREATE OR REPLACE TABLE hosp AS SELECT *, coalesce(ccns[1], fid) AS hid,
+                          row_number() OVER (PARTITION BY coalesce(ccns[1], fid), rates, charges, last_updated
+                                             ORDER BY fid) > 1 AS dup
+                        FROM read_parquet('{hp}')""")
         cur.execute(f"CREATE OR REPLACE TABLE hcodes AS SELECT * FROM read_parquet('{cp}')")
     with _lock:
         _state["meta"] = m
@@ -99,7 +103,8 @@ def _files(kind: str, codes: list[str]) -> list[str]:
 
 def _hosp_where(hospital: str = "", state: str = "", city: str = "", zip_prefix: str = "") -> tuple[str, list[str]]:
     """SQL filter on table hosp (alias h), and a description of what was matched."""
-    f = ["true"]
+    hv = (hospital or "").strip()
+    f = ["true" if re.fullmatch(r"[0-9a-f]{16}", hv) else "NOT h.dup"]
     if state and state.strip().upper() not in ("US", "ALL"):
         f.append(f"h.state = {E._lit(E._st(state))}")
     if city:  # "St. Louis" = "SAINT LOUIS" = "ST LOUIS"
@@ -109,7 +114,6 @@ def _hosp_where(hospital: str = "", state: str = "", city: str = "", zip_prefix:
         z = re.sub(r"\D", "", zip_prefix)[:5]
         if z:
             f.append(f"h.zip5 LIKE {E._lit(z + '%')}")
-    hv = (hospital or "").strip()
     if hv:
         if re.fullmatch(r"[0-9]{2}[0-9A-Z][0-9]{3}", hv.upper()):  # CMS Certification Number
             f.append(f"list_contains(h.ccns, {E._lit(hv.upper())})")
@@ -322,6 +326,7 @@ def hospital_vs_insurer(hospital, codes, payer="all", state=""):
     cs, _ = _codes(codes)
     hw, _ = _hosp_where(hospital, state)
     hs = E._q(f"SELECT * FROM hosp h WHERE {hw} ORDER BY rates DESC NULLS LAST LIMIT 3")
+    hs = [x for i, x in enumerate(hs) if x["hid"] not in {y["hid"] for y in hs[:i]}]
     if not hs:
         raise ValueError(f"no hospital file matches {hospital!r}; try search_hospitals")
     h = hs[0]
@@ -400,8 +405,9 @@ def sql_views(fn: str, a: list[str], work: str, name: str, sb) -> bool:
     sts = E._states_arg(a[0])
     stl = ", ".join(E._lit(s) for s in sts)
     hf = f"{work}/{name}-h.parquet"
+    stw = "true" if len(sts) == len(E.STATES) else f"state IN ({stl})"
     E.con().execute(f"COPY (SELECT fid, name, cms_name, ccns, ein, npis, address, city, state, zip5, kind, last_updated, "
-                    f"url, rates FROM hosp WHERE state IN ({stl})) TO '{hf}' (FORMAT parquet)")
+                    f"url, rates FROM hosp WHERE NOT dup AND {stw}) TO '{hf}' (FORMAT parquet)")
     if fn == "hospitals":
         sb.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{hf}')")
         return True
@@ -411,8 +417,8 @@ def sql_views(fn: str, a: list[str], work: str, name: str, sb) -> bool:
     out = f"{work}/{name}.parquet"
     cl = ", ".join(E._lit(c) for c in cs)
     if fs:
-        E.con().execute(f"COPY (SELECT r.* FROM read_parquet({fs!r}, union_by_name = true) r WHERE r.code IN ({cl}) "
-                        f"AND r.state IN ({stl})) TO '{out}' (FORMAT parquet)")
+        E.con().execute(f"COPY (SELECT r.* EXCLUDE (state), h.state FROM read_parquet({fs!r}, union_by_name = true) r "
+                        f"JOIN read_parquet('{hf}') h USING (fid) WHERE r.code IN ({cl})) TO '{out}' (FORMAT parquet)")
         sb.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{out}')")
     else:
         sb.execute(f"CREATE VIEW {name} AS SELECT NULL::VARCHAR AS fid, NULL::VARCHAR AS code WHERE false")
