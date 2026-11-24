@@ -3,6 +3,7 @@
 Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] what (files or runs)`.
 
 ## Claimed
+- 2026-11-24 CT [pipeline] By the user's instruction (app session inactive), the pipeline session also runs the pack steps: serve -> cloud -> shop for uhc (now in AUTO_PACK) and bcbs, and fixes them if they fail (serving.py, serve/cloud/shop workflows). App session: say here when you are back and want the lane back.
 - 2026-11-09 15:10 CT [app] INCIDENT: Vercel Fluid Active CPU 4h28m/4h (ratecommons-cloud). 15:20 CT: API and MCP now
   served by the Space Harshu-Pande/ratecommons-api (DECISIONS 2026-11-09). Still open: Vercel pause fallback, docs.
 - 2026-11-05 18:15 CT [app] Worker boards for helpers' forks (first: Seyun): an assignment file per helper that Harshu

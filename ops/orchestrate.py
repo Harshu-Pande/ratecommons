@@ -33,7 +33,7 @@ MAX_WAVES_IN_FLIGHT = 3
 # takes the next two waves (24 shards, map.yml max-parallel 24) beside one reduce (max-parallel 14)
 MAP_WAVES_PER_RUN = 2
 # payers whose serving pack (serve.yml) and cloud pack (cloud.yml) are built automatically once merged
-AUTO_PACK = ["bcbs", "anthem"]
+AUTO_PACK = ["bcbs", "anthem", "uhc"]  # uhc: added 2026-11-24 (the pipeline session runs the packs while the app session is idle)
 # payers whose reduced/ wave outputs are deleted once their merge is published (storage decision 2026-10-30;
 # not bcbs: more Blue companies are merged into it). A later merge of these needs the waves reduced again.
 DROP_REDUCED = {"aetna", "anthem", "uhc"}  # uhc: merged 2026-11-10 from 7 parts
