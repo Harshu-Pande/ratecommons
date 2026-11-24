@@ -25,6 +25,15 @@ Newest first. One entry per lesson: what we saw, what we changed.
   hospital_vs_insurer prices the insurer's percent-of-charges rows with the hospital's own gross charge: Barnes-Jewish
   70553, Aetna 61.4% x $4,629 = $2,842 vs the hospital file's $2,361 median (0.83).
 
+## 2026-11-24: a part whose waves were dropped after the merge counts as done (the pipeline stood still 2 weeks)
+- After the UHC merge, clean() dropped UHC's reduced output (dropped.json), parts included. The chain then found
+  `uhc 2026-10 part=1 1-12` not done (no part folder) and dispatched it; merge_inputs refused (dropped.json), the run
+  failed three times, and the orchestrator stopped every payer from 2026-11-10 16:53 UTC, with BCBS waves 6-8
+  (BSCA, BCBS AZ) mapped and waiting. Nobody looked for two weeks (sessions paused).
+- part_done now also holds when every wave of the part's range is in dropped.json. Lesson: anything clean() deletes
+  must still read as done to the chain, or the chain redoes it; a stop "until someone looks" needs someone looking,
+  so the pipeline session's check-ins must not lapse while work is queued.
+
 ## 2026-11-10: UHC 2026-10 merged; undated file names take the plan's month; BSCA and BCBS AZ start
 - `reduce uhc 2026-10 all merge` (30 min from 7 parts) published 6,159 files, 2.59B rate facts, 78 GB. Against the
   plan: 6,763 files - 603 withdrawn (409) - 1 lost: `Oxford_eviCore_in-network-rates.json` has no date in its name,

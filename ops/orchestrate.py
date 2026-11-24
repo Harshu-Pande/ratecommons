@@ -87,10 +87,16 @@ def wave_done(payer, release, wave):
         unit_complete(paths, f"reduced/{release}/{payer}/wave-{wave}/")
 
 
-def part_done(payer, release, part):
+def part_done(payer, release, part, waves=None):
+    """The part is complete, or (waves=(a, b)) all its waves were dropped after the payer's published merge: UHC's
+    parts went with dropped.json on 2026-11-10 and the chain dispatched part 1 again, which failed three times and
+    stopped the orchestrator for two weeks."""
     from ticdata.reduce import unit_complete
 
-    return unit_complete(reduced_state(payer, release)[0], f"reduced/{release}/{payer}/part-{part}/")
+    paths, _, dropped = reduced_state(payer, release)
+    if waves and dropped and all(n in dropped for n in range(waves[0], waves[1] + 1)):
+        return True
+    return unit_complete(paths, f"reduced/{release}/{payer}/part-{part}/")
 
 
 def merge_done(payer, release, waves=None):
@@ -405,9 +411,9 @@ def main():
                 continue
         elif w[2].startswith("part="):  # merge waves a-b into reduced/<release>/<payer>/part-P, then clean() drops them
             part = w[2][5:]
-            if part_done(payer, release, part):
-                continue
             a, b = map(int, w[3].split("-"))
+            if part_done(payer, release, part, (a, b)):
+                continue
             if not all(wave_done(payer, release, str(x)) for x in range(a, b + 1)):
                 print(f"{payer} part {part} waits for waves {w[3]}")
                 blocked.add(payer)

@@ -613,7 +613,7 @@ def test_chain_dispatches_a_part_once_its_waves_are_reduced(monkeypatch):
     for step in ("clean", "start_maps", "packs"):
         monkeypatch.setattr(o, step, lambda w: None)
     monkeypatch.setattr(o, "wave_done", lambda p, r, w: w in ("1", "2"))
-    monkeypatch.setattr(o, "part_done", lambda p, r, part: False)
+    monkeypatch.setattr(o, "part_done", lambda p, r, part, waves=None: False)
     monkeypatch.setattr(o.subprocess, "check_call", lambda cmd: calls.append(cmd))
     monkeypatch.setattr("builtins.open", lambda *a, **k: __import__("io").StringIO("\n".join(" ".join(w) for w in waves)))
     o.main()
@@ -688,3 +688,12 @@ def test_a_shard_whose_files_were_all_withdrawn_counts_as_mapped(tmp_path, monke
                       f"{pre}shard-997-00/metas.json": "[]", f"{pre}shard-997-status.json": '{"failed": []}'})
     fb.install(monkeypatch, o)
     assert o.mapped_shards("uhc", "2026-10") == {997, 999}  # 998 still lacks c.json.gz, which was not withdrawn
+
+
+def test_a_part_whose_waves_were_dropped_after_the_merge_is_done(monkeypatch):
+    o = _orchestrate()
+    pre = "reduced/2026-10/uhc/"
+    fb = _FakeBucket({f"{pre}dropped.json": json.dumps({"waves": {str(n): 72 for n in range(1, 13)}})})
+    fb.install(monkeypatch, o)
+    assert o.part_done("uhc", "2026-10", "1", (1, 12)) and not o.part_done("uhc", "2026-10", "1")
+    assert not o.part_done("uhc", "2026-10", "2", (13, 24))

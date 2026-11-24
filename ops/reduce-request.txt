@@ -15,3 +15,5 @@ bcbs 2026-10 dims wave=4 28-33
 uhc 2026-10 facts wave=18 204-215
 # UHC wave 22 facts again after sub-slicing the multi-block step (out of memory)
 uhc 2026-10 facts wave=22 252-263
+# resume after the two-week stop (dropped UHC parts were re-dispatched): BCBS wave 6 (BSCA, BCBS AZ)
+bcbs 2026-10 all wave=6 46-57
