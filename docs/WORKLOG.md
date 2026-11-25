@@ -137,6 +137,7 @@ Newest first in each section. One line per item: `YYYY-MM-DD HH:MM CT [session] 
   `max-parallel` toward 40 concurrent jobs.
 
 ## Done
+- 2026-11-25 08:15 CT [pipeline] Final CareCompass rebuild (shop all, with the re-merged bcbs) done 12:24 UTC. All queued work is finished; no pipeline check-ins scheduled.
 - 2026-11-25 03:15 CT [pipeline] Live on the query server (harshu-pande-ratecommons-api.hf.space /api/status): uhc pack
   built 2026-11-25 02:28 UTC (full October release; 59 product networks, 20 with every code), bcbs pack 07:35 UTC
   (1,272 networks, with BSCA/AZ). cloud uhc, cloud bcbs, shop all (UHC) done; final shop all for bcbs started 09:10 UTC.
